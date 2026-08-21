@@ -1,0 +1,51 @@
+services:
+  db:
+    build: ./db
+    environment:
+      POSTGRES_USER: tap
+      POSTGRES_PASSWORD: tap
+      POSTGRES_DB: tap
+    volumes:
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tap -d tap"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  tap-api:
+    build:
+      context: .
+      dockerfile: services/tap-api/Dockerfile
+    environment:
+      TAP_DATABASE_URL: postgresql://tap:tap@db:5432/tap
+      TAP_BASE_URL: http://localhost:8080/tap
+      TAP_RESULTS_DIR: /results
+    volumes:
+      - results:/results
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  tap-executor:
+    build:
+      context: .
+      dockerfile: services/tap-executor/Dockerfile
+    environment:
+      TAP_DATABASE_URL: postgresql://tap:tap@db:5432/tap
+      TAP_BASE_URL: http://localhost:8080/tap
+      TAP_RESULTS_DIR: /results
+    volumes:
+      - results:/results
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  results:
