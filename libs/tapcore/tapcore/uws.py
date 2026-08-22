@@ -23,7 +23,7 @@ ALL_PHASES = ACTIVE_PHASES | FINAL_PHASES
 JOB_COLUMNS = (
     "job_id, phase, run_id, owner_id, quote, creation_time, start_time, end_time, "
     "execution_duration, destruction, parameters, query_sql, error_type, "
-    "error_message, result_mime, result_size"
+    "error_message, result_mime, result_size, backend_pid"
 )
 
 
@@ -90,7 +90,12 @@ def get_job(conn, job_id: str) -> dict:
     return _row_to_job(row)
 
 
-def list_jobs(conn, phases: list[str] | None = None, last: int | None = None) -> list[dict]:
+def list_jobs(
+    conn,
+    phases: list[str] | None = None,
+    last: int | None = None,
+    after: datetime.datetime | None = None,
+) -> list[dict]:
     sql = f"SELECT {JOB_COLUMNS} FROM uws.jobs"
     args: list = []
     if phases:
@@ -98,6 +103,9 @@ def list_jobs(conn, phases: list[str] | None = None, last: int | None = None) ->
         args.append(phases)
     else:
         sql += " WHERE phase <> 'ARCHIVED'"
+    if after is not None:  # UWS 1.1 AFTER: jobs created later than the instant
+        sql += " AND creation_time > %s"
+        args.append(after)
     sql += " ORDER BY creation_time DESC"
     if last:
         sql += " LIMIT %s"
@@ -113,6 +121,25 @@ def update_job(conn, job_id: str, **fields) -> None:
     cur = conn.execute(f"UPDATE uws.jobs SET {sets} WHERE job_id = %s", (*values, job_id))
     if cur.rowcount == 0:
         raise NotFoundError(f"job {job_id} not found")
+
+
+def abort_job(conn, job: dict) -> None:
+    """Move an active job to ABORTED and cancel its running statement.
+
+    The executor records the PostgreSQL backend PID while the query runs;
+    pg_cancel_backend() interrupts that statement, and the executor treats
+    the resulting cancellation as an abort rather than an error.
+    """
+    if job["phase"] in FINAL_PHASES:
+        return
+    update_job(
+        conn,
+        job["job_id"],
+        phase="ABORTED",
+        end_time=datetime.datetime.now(datetime.UTC),
+    )
+    if job["backend_pid"]:
+        conn.execute("SELECT pg_cancel_backend(%s)", (job["backend_pid"],))
 
 
 def delete_job(conn, job_id: str) -> None:

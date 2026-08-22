@@ -91,6 +91,10 @@ def execute_job(job: dict) -> None:
                     "SELECT set_config('statement_timeout', %s, true)",
                     (str(timeout_ms),),
                 )
+            # publish this backend's PID so ABORT can pg_cancel_backend() it
+            pid = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
+            with pool().connection() as side:
+                uws.update_job(side, job_id, backend_pid=pid)
             conn.execute(f"SET LOCAL ROLE {settings.query_role}")
             with conn.cursor(name=f"tap_job_{job_id}") as cur:
                 cur.itersize = 5000
@@ -113,12 +117,18 @@ def execute_job(job: dict) -> None:
                 end_time=_now(),
                 result_mime=mime,
                 result_size=result_size,
+                backend_pid=None,
             )
         log.info("job %s completed (%d rows, %s)", job_id, limiter.count, limiter.status)
     except Exception as exc:
-        log.exception("job %s failed", job_id)
         shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
         with pool().connection() as conn:
+            current = uws.get_job(conn, job_id)
+            if current["phase"] == "ABORTED":
+                # ABORT cancelled our statement mid-run: not an error
+                log.info("job %s aborted while executing", job_id)
+                return
+            log.exception("job %s failed", job_id)
             uws.update_job(
                 conn,
                 job_id,
@@ -126,6 +136,7 @@ def execute_job(job: dict) -> None:
                 end_time=_now(),
                 error_type="fatal",
                 error_message=str(exc)[:4000],
+                backend_pid=None,
             )
 
 
@@ -139,9 +150,25 @@ def cleanup_expired() -> None:
         log.info("destroyed expired job %s", job_id)
 
 
+def _ensure_backend_pid_column(attempts: int = 30, delay_s: float = 2.0) -> None:
+    """Forward-migrate uws.jobs for deployments that predate ABORT support;
+    also what CLAIM_SQL needs, so retry until the database is reachable."""
+    for attempt in range(1, attempts + 1):
+        try:
+            with pool().connection() as conn:
+                conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS backend_pid integer")
+            return
+        except Exception as exc:
+            if attempt == attempts:
+                raise
+            log.warning("uws.jobs migration attempt %d failed (%s), retrying", attempt, exc)
+            time.sleep(delay_s)
+
+
 def main() -> None:
     log.info("tap-executor started (results dir: %s)", settings.results_dir)
     os.makedirs(settings.results_dir, exist_ok=True)
+    _ensure_backend_pid_column()
     last_cleanup = 0.0
     while True:
         job = claim_job()

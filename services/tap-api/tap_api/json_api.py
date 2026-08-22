@@ -13,9 +13,11 @@ observatory data product metadata is instantly queryable via both this
 API and TAP/ADQL.
 """
 
+import asyncio
 import datetime
 import os
 import shutil
+import time
 
 from fastapi import APIRouter, Response
 from fastapi.responses import FileResponse, StreamingResponse
@@ -142,22 +144,40 @@ async def create_job(body: JobRequest):
 
 
 @router.get("/jobs")
-async def list_jobs(phase: str | None = None, last: int | None = None):
+async def list_jobs(phase: str | None = None, last: int | None = None, after: str | None = None):
     if last is not None and last < 1:
         raise UsageError("last must be a positive integer")
     phases = [p.strip().upper() for p in phase.split(",")] if phase else None
     for item in phases or []:
         if item not in uws.ALL_PHASES:
             raise UsageError(f"unknown phase {item}")
+    since = None
+    if after is not None:
+        try:
+            since = datetime.datetime.fromisoformat(after.replace("Z", "+00:00"))
+        except ValueError:
+            raise UsageError("after must be an ISO-8601 timestamp") from None
     with pool().connection() as conn:
-        jobs = uws.list_jobs(conn, phases, last)
+        jobs = uws.list_jobs(conn, phases, last, since)
     return {"jobs": [_job_json(j) for j in jobs]}
 
 
 @router.get("/jobs/{job_id}")
-async def get_job(job_id: str):
+async def get_job(job_id: str, wait: int | None = None):
+    """Job status; ``wait`` blocks (UWS 1.1 semantics, capped at the server
+    maximum) until the phase changes or the time expires."""
     with pool().connection() as conn:
-        return _job_json(uws.get_job(conn, job_id))
+        job = uws.get_job(conn, job_id)
+    if wait and job["phase"] in uws.ACTIVE_PHASES:
+        from .uws_api import WAIT_POLL_S
+
+        reference = job["phase"]
+        deadline = time.monotonic() + min(wait, settings.wait_max_s)
+        while job["phase"] == reference and time.monotonic() < deadline:
+            await asyncio.sleep(min(WAIT_POLL_S, max(0.0, deadline - time.monotonic())))
+            with pool().connection() as conn:
+                job = uws.get_job(conn, job_id)
+    return _job_json(job)
 
 
 class PhaseRequest(BaseModel):
@@ -172,10 +192,7 @@ async def post_phase(job_id: str, body: PhaseRequest):
         if phase == "RUN":
             _queue(conn, job)
         elif phase == "ABORT":
-            if job["phase"] not in uws.FINAL_PHASES:
-                uws.update_job(
-                    conn, job_id, phase="ABORTED", end_time=datetime.datetime.now(datetime.UTC)
-                )
+            uws.abort_job(conn, job)
         else:
             raise UsageError("phase must be RUN or ABORT")
         return _job_json(uws.get_job(conn, job_id))

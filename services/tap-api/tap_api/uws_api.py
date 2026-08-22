@@ -1,8 +1,10 @@
 """UWS 1.1 REST resources under {base}/async."""
 
+import asyncio
 import datetime
 import os
 import shutil
+import time
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
@@ -38,6 +40,52 @@ def _queue(conn, job: dict) -> None:
     uws.update_job(conn, job["job_id"], phase="QUEUED", query_sql=prepared["sql"])
 
 
+WAIT_POLL_S = 1.0
+
+
+def _parse_wait(request: Request) -> tuple[int, str | None]:
+    """UWS 1.1 blocking parameters: WAIT seconds (-1 = server maximum) and
+    the optional PHASE the client believes the job is in."""
+    raw = request.query_params.get("WAIT")
+    if raw is None:
+        return 0, None
+    try:
+        wait = int(raw)
+    except ValueError:
+        raise UsageError("WAIT must be an integer number of seconds or -1") from None
+    if wait < -1:
+        raise UsageError("WAIT must be >= -1")
+    if wait == -1:
+        wait = settings.wait_max_s
+    phase = request.query_params.get("PHASE")
+    if phase is not None:
+        phase = phase.upper()
+        if phase not in uws.ALL_PHASES:
+            raise UsageError(f"unknown PHASE {phase}")
+    return min(wait, settings.wait_max_s), phase
+
+
+async def _get_job_waiting(job_id: str, request: Request) -> dict:
+    """Fetch the job, blocking per UWS 1.1 WAIT semantics.
+
+    Blocks while the job is in an active phase and its phase equals the
+    reference phase (the PHASE parameter, or the phase first observed),
+    until the phase changes or the wait time expires.
+    """
+    wait_s, expected = _parse_wait(request)
+    with pool().connection() as conn:
+        job = uws.get_job(conn, job_id)
+    if wait_s <= 0 or job["phase"] in uws.FINAL_PHASES:
+        return job
+    reference = expected or job["phase"]
+    deadline = time.monotonic() + wait_s
+    while job["phase"] == reference and time.monotonic() < deadline:
+        await asyncio.sleep(min(WAIT_POLL_S, max(0.0, deadline - time.monotonic())))
+        with pool().connection() as conn:
+            job = uws.get_job(conn, job_id)
+    return job
+
+
 @router.get("")
 async def job_list(request: Request):
     phases = [p.upper() for p in request.query_params.getlist("PHASE")]
@@ -52,8 +100,14 @@ async def job_list(request: Request):
             raise UsageError("LAST must be a positive integer") from None
         if last < 1:
             raise UsageError("LAST must be a positive integer")
+    after = request.query_params.get("AFTER")
+    if after is not None:
+        try:
+            after = datetime.datetime.fromisoformat(after.replace("Z", "+00:00"))
+        except ValueError:
+            raise UsageError("AFTER must be an ISO-8601 timestamp") from None
     with pool().connection() as conn:
-        jobs = uws.list_jobs(conn, phases or None, last)
+        jobs = uws.list_jobs(conn, phases or None, last, after)
     return Response(uws.joblist_xml(jobs), media_type=XML)
 
 
@@ -74,9 +128,8 @@ async def create_job(request: Request):
 
 
 @router.get("/{job_id}")
-async def job_summary(job_id: str):
-    with pool().connection() as conn:
-        job = uws.get_job(conn, job_id)
+async def job_summary(job_id: str, request: Request):
+    job = await _get_job_waiting(job_id, request)
     return Response(uws.job_xml(job), media_type=XML)
 
 
@@ -98,9 +151,8 @@ async def delete_job(job_id: str):
 
 
 @router.get("/{job_id}/phase")
-async def get_phase(job_id: str):
-    with pool().connection() as conn:
-        job = uws.get_job(conn, job_id)
+async def get_phase(job_id: str, request: Request):
+    job = await _get_job_waiting(job_id, request)
     return PlainTextResponse(job["phase"])
 
 
@@ -113,13 +165,7 @@ async def post_phase(job_id: str, request: Request):
         if phase == "RUN":
             _queue(conn, job)
         elif phase == "ABORT":
-            if job["phase"] not in uws.FINAL_PHASES:
-                uws.update_job(
-                    conn,
-                    job_id,
-                    phase="ABORTED",
-                    end_time=datetime.datetime.now(datetime.UTC),
-                )
+            uws.abort_job(conn, job)
         else:
             raise UsageError("PHASE must be RUN or ABORT")
     return RedirectResponse(_job_url(job_id), status_code=303)

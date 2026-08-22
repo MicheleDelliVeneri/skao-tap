@@ -33,6 +33,7 @@ class Settings:
     upload_max_bytes: int = field(
         default_factory=lambda: int(os.getenv("TAP_UPLOAD_MAX_BYTES", str(32 * 1024 * 1024)))
     )
+    wait_max_s: int = field(default_factory=lambda: int(os.getenv("TAP_WAIT_MAX", "60")))
 
 
 settings = Settings()
