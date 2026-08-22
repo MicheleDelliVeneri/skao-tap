@@ -1,0 +1,81 @@
+# JSON API (`/api/v1`)
+
+The IVOA TAP endpoints speak the XML the VO standards mandate (VOTable,
+UWS, VOSI) so TOPCAT, PyVO and astroquery work out of the box. For
+machine-to-machine integration the service also exposes a JSON interface at
+`/api/v1`, documented by the live OpenAPI spec at `/openapi.json` (Swagger
+UI at `/docs`). Both interfaces share one engine: the same ADQL translator,
+TAP_SCHEMA publication checks, MAXREC limits and UWS job store.
+
+## Queries
+
+```
+POST /api/v1/query
+{"query": "SELECT TOP 5 * FROM ska.continuum_sources", "maxrec": 100}
+```
+
+returns `{"status": "OK|OVERFLOW", "metadata": [...], "data": [[...], ...]}`.
+Errors come back as JSON (`{"error": "UsageError", "message": ...}`) with
+the same HTTP status codes as the DALI VOTable errors on `/tap`.
+
+## Jobs (asynchronous)
+
+A JSON facade over the same UWS job store used by `/tap/async` — a job
+created here is visible there and vice versa:
+
+| Method & path | Purpose |
+|---|---|
+| `POST /api/v1/jobs` `{query, lang?, maxrec?, format?, run?}` | Create (and with `run: true` queue) a job; the query is validated up front |
+| `GET /api/v1/jobs?phase=COMPLETED,ERROR&last=10` | List jobs |
+| `GET /api/v1/jobs/{id}` | Job document (phase, timing, parameters, result/error) |
+| `POST /api/v1/jobs/{id}/phase` `{"phase": "RUN"\|"ABORT"}` | Start or abort |
+| `GET /api/v1/jobs/{id}/result` | Fetch the result file |
+| `DELETE /api/v1/jobs/{id}` | Destroy the job |
+
+## Metadata
+
+`GET /api/v1/tables` returns TAP_SCHEMA as JSON (schemas, tables, columns
+with units/UCDs) — the machine-friendly twin of VOSI `/tap/tables`.
+
+## SRC ingestion notifications
+
+The service consumes [ska-src-mm-notification](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification)
+documents (`Project → Observation → SchedulingBlock → ExecutionBlock →
+DataProduct → Artifact`):
+
+| Method & path | Purpose |
+|---|---|
+| `POST /api/v1/notifications` | Validate (with the library's pydantic models) and store a notification; idempotent upsert |
+| `GET /api/v1/notifications` | Project-level summary of ingested metadata |
+| `GET /api/v1/notifications/{project_id}` | Reconstruct the full nested document |
+
+Invalid payloads are rejected with HTTP 422 and pydantic's structured
+error list — including the library's cross-field rules (`em_min <= em_max`,
+image products requiring `s_ra/s_dec/s_fov`, ...).
+
+### Model-driven database schema
+
+The `srcnet.*` tables that store notifications are **generated from the
+notification pydantic models at startup** (`tap_api/schema_gen.py`):
+
+- each `list[Model]` level becomes a child table with a composite primary
+  key following the `*_id` identity chain and a cascading foreign key;
+- pydantic types map to PostgreSQL types; `Ge/Gt/Le/Lt` constraints and
+  enums become `CHECK` constraints, so the database enforces the same
+  invariants the library validates;
+- every generated table (and key) is registered in `TAP_SCHEMA`, making the
+  ingested metadata immediately queryable through TAP/ADQL and the JSON
+  query endpoint, and visible in VOSI `/tap/tables`:
+
+```sql
+SELECT p.product_id, a.artifact_id, a.access_url
+FROM srcnet.data_products AS p
+JOIN srcnet.artifacts AS a
+  ON  p.project_id = a.project_id
+  AND p.eb_id      = a.eb_id
+  AND p.product_id = a.product_id
+WHERE p.dataproduct_type = 'cube'
+```
+
+Upgrading the library to a schema version with new fields adds the new
+columns/tables on the next startup (existing columns are never dropped).

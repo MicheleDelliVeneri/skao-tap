@@ -134,6 +134,18 @@ All via environment variables (see `tapcore/config.py`): `TAP_DATABASE_URL`,
 `TAP_HARD_MAXREC`, `TAP_SYNC_TIMEOUT`, `TAP_ASYNC_EXEC_DURATION`,
 `TAP_JOB_RETENTION`.
 
+## JSON API for machine-to-machine use
+
+Alongside the standards-mandated XML of TAP, a JSON interface lives at
+`/api/v1` (OpenAPI at `/openapi.json`): synchronous queries
+(`POST /api/v1/query`), a JSON job facade over the same UWS store
+(`/api/v1/jobs`), TAP_SCHEMA as JSON (`/api/v1/tables`), and **SRC
+ingestion notifications** (`POST /api/v1/notifications`) validated with the
+[ska-src-mm-notification](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification)
+pydantic models. The `srcnet.*` tables storing notifications are generated
+automatically from those models at startup and registered in TAP_SCHEMA, so
+ingested metadata is immediately ADQL-queryable. See `docs/json-api.md`.
+
 ## Development
 
 The repo is a [uv](https://docs.astral.sh/uv/) workspace

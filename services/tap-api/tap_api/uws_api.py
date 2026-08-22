@@ -43,8 +43,15 @@ async def job_list(request: Request):
         if phase not in uws.ALL_PHASES:
             raise UsageError(f"unknown PHASE {phase}")
     last = request.query_params.get("LAST")
+    if last is not None:
+        try:
+            last = int(last)
+        except ValueError:
+            raise UsageError("LAST must be a positive integer") from None
+        if last < 1:
+            raise UsageError("LAST must be a positive integer")
     with pool().connection() as conn:
-        jobs = uws.list_jobs(conn, phases or None, int(last) if last else None)
+        jobs = uws.list_jobs(conn, phases or None, last)
     return Response(uws.joblist_xml(jobs), media_type=XML)
 
 
@@ -79,7 +86,7 @@ async def job_action(job_id: str, request: Request):
 async def delete_job(job_id: str):
     with pool().connection() as conn:
         uws.delete_job(conn, job_id)
-    shutil.rmtree(os.path.join(settings.results_dir, job_id), ignore_errors=True)
+    shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
     return RedirectResponse(f"{settings.base_url}/async", status_code=303)
 
 
@@ -200,7 +207,7 @@ async def get_result(job_id: str):
         job = uws.get_job(conn, job_id)
     if job["phase"] != "COMPLETED":
         raise NotFoundError(f"job {job_id} has no result (phase {job['phase']})")
-    result_dir = os.path.join(settings.results_dir, job_id)
+    result_dir = uws.job_results_dir(job_id)
     for name in os.listdir(result_dir) if os.path.isdir(result_dir) else []:
         if name.startswith("result."):
             return FileResponse(

@@ -43,6 +43,22 @@ Key values (see `values.yaml` for the full list):
 The in-chart PostgreSQL mounts the same `db/init` SQL (copied into the chart
 at `files/db-init/`; CI verifies both copies stay in sync).
 
+## Container hardening
+
+All three images run as non-root users (`tap`, uid 10001 for the services;
+`postgres`, uid 999 for the database) and work with a read-only root
+filesystem. The Helm chart sets matching pod/container security contexts
+(`runAsNonRoot`, dropped capabilities, seccomp `RuntimeDefault`,
+`readOnlyRootFilesystem`) with `emptyDir` mounts for `/tmp` and, for
+PostgreSQL, `/var/run/postgresql`. The Trivy job in CI enforces this —
+it fails on any CRITICAL/HIGH vulnerability, leaked secret, or
+misconfiguration.
+
+!!! note "Upgrading an existing Compose deployment"
+    Volumes created by older root-based images keep root ownership; if the
+    database or executor fails with permission errors after upgrading,
+    recreate the volumes once with `docker compose down -v`.
+
 ## Configuration
 
 All services read environment variables (see `tapcore/config.py`):

@@ -77,7 +77,7 @@ def execute_job(job: dict) -> None:
             status = "OVERFLOW"
         body = serialize(names, rows, fmt_key, status)
 
-        result_dir = os.path.join(settings.results_dir, job_id)
+        result_dir = uws.job_results_dir(job_id)
         os.makedirs(result_dir, exist_ok=True)
         result_path = os.path.join(result_dir, f"result.{ext}")
         with open(result_path, "wb") as fh:
@@ -116,7 +116,7 @@ def cleanup_expired() -> None:
             "DELETE FROM uws.jobs WHERE destruction < now() RETURNING job_id"
         ).fetchall()
     for (job_id,) in rows:
-        shutil.rmtree(os.path.join(settings.results_dir, job_id), ignore_errors=True)
+        shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
         log.info("destroyed expired job %s", job_id)
 
 

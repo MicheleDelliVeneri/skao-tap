@@ -26,5 +26,6 @@ nav:
   - Overview: index.md
   - Architecture: architecture.md
   - API reference: api.md
+  - JSON API: json-api.md
   - Deployment: deployment.md
   - Development: development.md

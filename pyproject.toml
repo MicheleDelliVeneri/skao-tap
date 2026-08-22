@@ -27,6 +27,7 @@ dev = [
     "ruff>=0.8",
     "pytest>=8.0",
     "pytest-timeout>=2.3",
+    "pytest-cov>=6.0",
     "httpx>=0.27",
     "pyvo>=1.5",
     "requests>=2.31",
@@ -67,3 +68,11 @@ markers = [
 ]
 addopts = "-ra"
 timeout = 120
+
+[tool.coverage.run]
+source_pkgs = ["tapcore", "tap_api", "tap_executor"]
+parallel = true
+relative_files = true
+
+[tool.coverage.paths]
+sources = ["libs/tapcore/tapcore", "services/tap-api/tap_api", "services/tap-executor/tap_executor"]

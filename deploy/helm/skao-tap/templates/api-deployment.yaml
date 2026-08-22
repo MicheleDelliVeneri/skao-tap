@@ -17,10 +17,14 @@ spec:
         {{- include "skao-tap.labels" . | nindent 8 }}
         app.kubernetes.io/component: tap-api
     spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: tap-api
           image: "{{ .Values.image.registry }}/tap-api:{{ include "skao-tap.imageTag" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.tapApi.port }}
@@ -32,6 +36,8 @@ spec:
           volumeMounts:
             - name: results
               mountPath: /results
+            - name: tmp
+              mountPath: /tmp
           readinessProbe:
             httpGet:
               path: /tap/availability
@@ -50,3 +56,5 @@ spec:
         - name: results
           persistentVolumeClaim:
             claimName: {{ include "skao-tap.fullname" . }}-results
+        - name: tmp
+          emptyDir: {}

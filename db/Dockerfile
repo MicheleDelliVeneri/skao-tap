@@ -5,3 +5,7 @@ FROM postgres:16
 RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-16-pgsphere \
     && rm -rf /var/lib/apt/lists/*
+
+# Run as the postgres user (uid 999) instead of root; the official image
+# supports this when the data directory is writable by that user.
+USER postgres
