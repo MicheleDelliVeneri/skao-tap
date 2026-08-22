@@ -17,3 +17,30 @@ data:
   TAP_WAIT_MAX: {{ .Values.config.waitMaxSeconds | int64 | quote }}
   TAP_MODEL_PLUGINS: {{ .Values.config.modelPlugins | quote }}
   TAP_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  {{- /* authn/authz; disabled by default, see values.yaml */}}
+  TAP_AUTH_ENABLED: {{ .Values.auth.enabled | quote }}
+  {{- if .Values.auth.enabled }}
+  TAP_AUTH_PLUGIN: {{ .Values.auth.plugin | quote }}
+  TAP_IAM_ISSUER: {{ required "auth.iam.issuer is required when auth.enabled=true (tokens are always verified against the IAM)" .Values.auth.iam.issuer | quote }}
+  {{- if not (or .Values.auth.iam.audience .Values.auth.iam.allowAnyAudience) }}
+  {{- fail "auth.iam.audience is required when auth.enabled=true: without it, a token issued to any other client of the same IAM is accepted here. Set auth.iam.allowAnyAudience=true to accept that risk deliberately." }}
+  {{- end }}
+  TAP_IAM_AUDIENCE: {{ .Values.auth.iam.audience | quote }}
+  TAP_IAM_ALLOW_ANY_AUDIENCE: {{ .Values.auth.iam.allowAnyAudience | quote }}
+  TAP_IAM_GROUP_CLAIMS: {{ .Values.auth.iam.groupClaims | quote }}
+  TAP_IAM_WELL_KNOWN_URL: {{ .Values.auth.iam.wellKnownUrl | quote }}
+  TAP_IAM_JWKS_CACHE: {{ .Values.auth.iam.jwksCacheSeconds | int64 | quote }}
+  {{- if eq .Values.auth.plugin "iam-groups" }}
+  {{- if not .Values.auth.roles }}
+  {{- fail "auth.plugin=iam-groups needs auth.roles: every gated operation must name the groups or scopes that grant it (or set anyVerifiedToken), otherwise nothing is granted. See docs/auth.md." }}
+  {{- end }}
+  {{- end }}
+  {{- /* camelCase in values, snake_case in the policy the service parses */}}
+  TAP_AUTH_ROLES: {{ .Values.auth.roles | toJson | replace "\"anyVerifiedToken\"" "\"any_verified_token\"" | quote }}
+  {{- if eq .Values.auth.plugin "permissions-api" }}
+  TAP_PERMISSIONS_API_URL: {{ required "auth.permissionsApi.url is required when auth.plugin=permissions-api" .Values.auth.permissionsApi.url | quote }}
+  TAP_PERMISSIONS_SERVICE_NAME: {{ .Values.auth.permissionsApi.serviceName | quote }}
+  TAP_PERMISSIONS_SERVICE_VERSION: {{ .Values.auth.permissionsApi.serviceVersion | quote }}
+  TAP_PERMISSIONS_TIMEOUT: {{ .Values.auth.permissionsApi.timeoutSeconds | int64 | quote }}
+  {{- end }}
+  {{- end }}

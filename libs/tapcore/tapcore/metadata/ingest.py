@@ -256,8 +256,13 @@ def fetch_document(conn, plugin: MetadataPlugin, root_id: str) -> dict | None:
     return docs[0] if docs else None
 
 
-def delete_document(conn, plugin: MetadataPlugin, root_id: str) -> bool:
-    """Delete one root document and all descendants through FK cascades."""
+def delete_document(conn, plugin: MetadataPlugin, root_id: str, actor: str | None = None) -> bool:
+    """Delete one root document and all descendants through FK cascades.
+
+    ``actor`` is the authenticated subject responsible, recorded in the audit
+    line so a cascading deletion can be traced to a person rather than only
+    to a point in time.
+    """
     root = plugin.tables[0]
     result = conn.execute(
         f"DELETE FROM {root.qualified} WHERE {root.id_column} = %s",
@@ -269,9 +274,10 @@ def delete_document(conn, plugin: MetadataPlugin, root_id: str) -> bool:
         # comes from the request path, so it is quoted and stripped of the
         # newlines that would let a caller forge extra log records.
         log.info(
-            "deleted %s %s (cascading to %d descendant table(s))",
+            "deleted %s %s by %s (cascading to %d descendant table(s))",
             root.qualified,
             _log_safe(root_id),
+            _log_safe(actor) if actor else "an unauthenticated caller",
             len(plugin.tables) - 1,
         )
     return deleted

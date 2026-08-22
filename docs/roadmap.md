@@ -50,17 +50,16 @@ decides what the bearer of a token may do.
   creation, job mutation and job deletion. Anonymous read-only querying
   stays possible where a deployment's policy allows it, so plain VO
   clients keep working.
-- **Token exchange for downstream calls**: where the service has to act on
-  a user's behalf against another SRCNet service, exchange the incoming
-  token through the Permissions API (`type=exchange` policies) for one
-  carrying the target audience, instead of forwarding the original.
-- **Job ownership**: fill UWS `ownerId` from the validated token subject,
-  scope the job list and job resources to the owner, and keep anonymous
-  jobs working when a deployment runs unauthenticated. Groundwork for
-  per-user schemas and quotas.
-- **Deletion becomes attributable**: the audit record written on
-  `DELETE /api/v1/<mount>/{root_id}` gains the authenticated subject, so
-  cascading deletions can be traced to a user.
+- **Token exchange for downstream calls**: not required — this service calls
+  no other SRCNet service on a user's behalf. If that changes, exchange the
+  incoming token through the Permissions API (`type=exchange` policies) for
+  one carrying the target audience rather than forwarding the original.
+- ~~**Job ownership**~~ *(done)*: UWS `ownerId` comes from the validated
+  token subject, and the job list and job resources are scoped to the owner;
+  anonymous jobs stay ownerless and world-visible, as they were. Groundwork
+  for per-user schemas and quotas, which remain open.
+- ~~**Deletion becomes attributable**~~ *(done)*: the audit record written on
+  `DELETE /api/v1/<mount>/{root_id}` names the authenticated subject.
 - **Graceful degradation**: a deployment with no IAM issuer configured
   behaves exactly as today (fully anonymous), so local development and the
   demo notebook are unaffected.

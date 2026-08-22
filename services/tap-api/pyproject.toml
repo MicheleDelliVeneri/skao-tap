@@ -30,6 +30,12 @@ rev = "cfb341ec307ce35f463065455b11317dc1a0ead9"
 odp = "tap_api.plugins.odp:PLUGIN"
 software = "tap_api.plugins.software:PLUGIN"
 
+# Authorisation plugins shipped by this service; a site can register its own
+# in the same group and select it with TAP_AUTH_PLUGIN (see tapcore.auth).
+[project.entry-points."skao_tap.auth"]
+iam-groups = "tap_api.auth_plugins.iam_groups:IAMGroupsPlugin"
+permissions-api = "tap_api.auth_plugins.permissions_api:PermissionsApiPlugin"
+
 [tool.uv.sources]
 tapcore = { workspace = true }
 

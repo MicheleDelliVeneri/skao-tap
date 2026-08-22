@@ -25,3 +25,18 @@ class NotFoundError(TAPError):
 
 class ServiceError(TAPError):
     http_status = 500
+
+
+class AuthenticationError(TAPError):
+    """No usable credential: missing, malformed, expired or unverifiable token.
+
+    Rendered with a ``WWW-Authenticate: Bearer`` challenge, as RFC 6750 asks.
+    """
+
+    http_status = 401
+
+
+class AuthorizationError(TAPError):
+    """The caller is authenticated but not permitted to perform the operation."""
+
+    http_status = 403

@@ -140,6 +140,34 @@ jobs:
             --set postgresql.tuning.shared_buffers=512MB \
             --set postgresql.tuning.max_connections=100 \
             | grep -qE "kind: (PodDisruptionBudget|VerticalPodAutoscaler|CronJob)"
+      - name: Template with authentication enabled
+        run: |
+          helm template skao-tap deploy/helm/skao-tap \
+            --set auth.enabled=true \
+            --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
+            --set auth.iam.audience=science-metadata \
+            --set 'auth.roles.metadata\.delete.groups={/ska/oper}' \
+            | grep -q 'TAP_AUTH_ROLES'
+          helm template skao-tap deploy/helm/skao-tap \
+            --set auth.enabled=true \
+            --set auth.plugin=permissions-api \
+            --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
+            --set auth.iam.audience=science-metadata \
+            --set auth.permissionsApi.url=https://permissions.srcnet.skao.int/api/v1 \
+            | grep -q 'TAP_PERMISSIONS_API_URL'
+      # Each of these is a way to end up with auth "on" but nothing enforced.
+      - name: Unsafe authentication configurations are refused
+        run: |
+          refuses() {
+            if helm template skao-tap deploy/helm/skao-tap "$@" >/dev/null 2>&1; then
+              echo "::error::chart rendered an unsafe auth config: $*"
+              exit 1
+            fi
+          }
+          refuses --set auth.enabled=true
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
+                  --set auth.iam.audience=science-metadata
 
   helm-e2e:
     name: Helm chart e2e (kind)

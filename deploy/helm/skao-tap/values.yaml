@@ -95,6 +95,67 @@ backup:
     limits:
       memory: 1Gi
 
+# -- Authentication and authorisation.
+#
+# Disabled by default: a deployment with no IAM behaves exactly as it did
+# before auth existed, which is what local development, the demo notebook and
+# the component tests rely on. Enabling it gates the mutating metadata
+# endpoints; querying (including POST /tap/sync, which is how VO clients send
+# ADQL) stays anonymous so standard tooling keeps working.
+#
+# Whatever the plugin, bearer tokens are always verified by this service
+# against the IAM's JWKS before any authorisation decision is taken.
+auth:
+  enabled: false
+  # -- Which authorisation plugin decides. Shipped: "iam-groups" (local
+  # decision from IAM groups/scopes, configured under `roles` below) and
+  # "permissions-api" (delegate to the SKA SRC Permissions API). A site can
+  # install its own in the skao_tap.auth entry-point group and name it here.
+  plugin: iam-groups
+  iam:
+    # -- Token issuer, e.g. https://ska-iam.stfc.ac.uk. Required when enabled.
+    issuer: ""
+    # -- Expected token audience. Required when enabled: one IAM issues
+    # tokens to many services, so without this check a token minted for any
+    # other client of the same issuer is accepted here as its bearer's
+    # credential. Set allowAnyAudience to deliberately accept that.
+    audience: ""
+    allowAnyAudience: false
+    # -- Claims read as IAM group membership. Adding entitlement claims
+    # (entitlements, eduperson_entitlement) means attributes asserted by a
+    # federated home IdP are matched against the policy groups below.
+    groupClaims: "groups,wlcg.groups"
+    # -- Override the discovery URL if it is not <issuer>/.well-known/openid-configuration.
+    wellKnownUrl: ""
+    # -- How long the discovery document and signing keys are cached.
+    jwksCacheSeconds: 300
+  # -- Used when plugin=permissions-api. The service name must match a route
+  # policy published by the Permissions API ("science-metadata" is registered).
+  permissionsApi:
+    url: ""          # e.g. https://permissions.srcnet.skao.int/api/v1
+    serviceName: science-metadata
+    serviceVersion: "1"
+    timeoutSeconds: 10
+  # -- Used when plugin=iam-groups: what each gated operation requires. A
+  # principal is allowed when its verified token carries any of the listed
+  # groups or any of the listed scopes.
+  #
+  # Every grant is explicit: an operation omitted here, or listed with
+  # neither groups nor scopes, is DENIED — an unfinished policy grants
+  # nothing. Accepting any verified token has to be written down with
+  # anyVerifiedToken. The chart refuses to render plugin=iam-groups with an
+  # empty mapping, so enabling auth without a policy fails at deploy time.
+  #
+  #   roles:
+  #     metadata.ingest:
+  #       groups: ["/ska/science-metadata/oper"]
+  #     metadata.amend:
+  #       anyVerifiedToken: true
+  #     metadata.delete:
+  #       groups: ["/ska/science-metadata/admin"]
+  #       scopes: ["science-metadata:admin"]
+  roles: {}
+
 # -- TAP service tuning (mapped to TAP_* environment variables).
 config:
   defaultMaxrec: 10000

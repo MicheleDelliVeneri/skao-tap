@@ -1,0 +1,163 @@
+"""Request-level authentication and authorisation wiring.
+
+One dependency factory, ``require(operation)``, guards the mutating metadata
+endpoints. Reads and queries stay open — TAP clients issue queries as POSTs,
+so gating them would lock standard VO tooling out of an authenticated
+deployment — but a token presented on any request is still verified and
+attached to ``request.state.principal``, so ownership and audit records get a
+subject when one is available.
+"""
+
+import logging
+
+from fastapi import Request
+from starlette.concurrency import run_in_threadpool
+from tapcore.auth import (
+    ANONYMOUS,
+    Principal,
+    active_auth_plugin,
+    clear_job_viewer,
+    set_job_viewer,
+    verifier,
+)
+from tapcore.config import settings
+from tapcore.errors import AuthenticationError, AuthorizationError
+
+log = logging.getLogger("tap_api")
+
+# None is a legitimate resolved value (auth disabled), so "not resolved yet"
+# needs a sentinel of its own rather than a second flag
+_UNRESOLVED = object()
+_PLUGIN: object = _UNRESOLVED
+
+
+def plugin():
+    """The active authorisation plugin, resolved once."""
+    global _PLUGIN
+    if _PLUGIN is _UNRESOLVED:
+        resolved = active_auth_plugin()
+        if resolved is None:
+            log.warning(
+                "authentication is DISABLED: every endpoint, including metadata"
+                " ingest, amendment and deletion, is open to anonymous callers"
+            )
+        else:
+            log.info("authorisation plugin: %s", resolved.describe())
+        # assigned only after a successful resolve, so a misconfiguration
+        # keeps raising instead of being cached as "auth off"
+        _PLUGIN = resolved
+    return _PLUGIN
+
+
+def reset_plugin() -> None:
+    """Forget the resolved plugin (configuration changed; used by tests)."""
+    global _PLUGIN
+    _PLUGIN = _UNRESOLVED
+
+
+def _bearer(request: Request) -> str | None:
+    header = request.headers.get("authorization")
+    if not header:
+        return None
+    scheme, _, credential = header.partition(" ")
+    if scheme.lower() != "bearer" or not credential.strip():
+        raise AuthenticationError("Authorization header must be 'Bearer <token>'")
+    return credential.strip()
+
+
+def principal_of(request: Request) -> Principal:
+    """Verify any token on the request and cache the principal on it.
+
+    A malformed or unverifiable token is always an error, even where no token
+    was required: silently treating it as anonymous would hide a broken client
+    or an expired credential behind a working-looking request.
+    """
+    cached = getattr(request.state, "principal", None)
+    if cached is not None:
+        return cached
+    token = _bearer(request)
+    resolved = ANONYMOUS if token is None else verifier().verify(token)
+    request.state.principal = resolved
+    return resolved
+
+
+async def attach_principal(request: Request) -> None:
+    """App-wide dependency: verify any credential the request carries, and
+    put the resulting identity in scope for the request.
+
+    Registered on every route, not just the gated ones. An endpoint that
+    needs no token still must not accept a forged or expired one — silently
+    treating an unverifiable credential as "anonymous" would let a broken or
+    tampered-with client look like it is working.
+
+    Async, with the verification itself pushed to a threadpool: fetching the
+    IAM's discovery document or JWKS must not block the event loop, but the
+    job viewer has to be set in the request's own task, because a context
+    variable set inside a threadpool would not propagate back out of it.
+    """
+    # Set unconditionally, both branches. A context variable is only
+    # guaranteed to be isolated per task, and not every ASGI server (nor the
+    # test client) gives each request a fresh one — leaving it untouched
+    # could let one request be judged against the previous request's
+    # identity, which is the worst possible failure for this variable.
+    if plugin() is None:
+        clear_job_viewer()  # no ownership enforcement: behave as before
+        return
+    who = await run_in_threadpool(principal_of, request)
+    set_job_viewer(who.subject)
+
+
+def require(operation: str):
+    """A FastAPI dependency gating one operation behind the active plugin.
+
+    A plugin may call out over the network (the permissions-api one does),
+    so the decision runs in a threadpool rather than on the event loop.
+    """
+
+    async def dependency(request: Request) -> Principal:
+        active = plugin()
+        if active is None:  # auth disabled: behave exactly as before
+            return ANONYMOUS
+        who = await run_in_threadpool(principal_of, request)
+        if who.is_anonymous:
+            raise AuthenticationError(f"{operation} requires a bearer token")
+        context = {
+            "operation": operation,
+            "method": request.method,
+            "route": request.scope["route"].path,
+            "path_params": dict(request.path_params),
+        }
+        allowed = await run_in_threadpool(active.authorize, who, operation, context)
+        if not allowed:
+            log.info("denied %s to subject %s", operation, who.subject)
+            raise AuthorizationError(f"not permitted to perform {operation}")
+        return who
+
+    dependency.__name__ = f"require_{operation.replace('.', '_')}"
+    return dependency
+
+
+def owner_of(request: Request) -> str | None:
+    """The subject to record as a new job's owner, or None when anonymous.
+
+    Jobs created without a token stay ownerless, so they behave as they
+    always have; only a job created by an identified caller becomes private
+    to that caller.
+    """
+    if plugin() is None:
+        return None
+    who = getattr(request.state, "principal", None)
+    return who.subject if who is not None else None
+
+
+def auth_summary() -> dict:
+    """What this deployment enforces, for the service's own metadata."""
+    active = plugin()
+    if active is None:
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        "plugin": active.name,
+        "issuer": settings.iam_issuer,
+        "audience": settings.iam_audience or None,
+    }
