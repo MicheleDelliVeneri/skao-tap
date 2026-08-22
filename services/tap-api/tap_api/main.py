@@ -29,6 +29,15 @@ from .queries.params import gather_params
 from .queries.query import prepare_query, run_sync
 from .queries.uploads import gather_upload_files, parse_uploads, resolve_upload_sources
 
+# uvicorn only configures its own loggers, so without this the service's own
+# records (schema bootstrap, legacy-table warnings, the metadata deletion
+# audit trail) never reach a handler above WARNING. The executor does the
+# same; package 8 of the roadmap replaces both with ska-src-logging.
+logging.basicConfig(
+    level=settings.log_level.upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+
 log = logging.getLogger("tap-api")
 
 

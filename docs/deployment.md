@@ -73,3 +73,5 @@ All services read environment variables (see `tapcore/config.py`):
 | `TAP_SYNC_TIMEOUT` | `30` | Sync query timeout (s) |
 | `TAP_ASYNC_EXEC_DURATION` | `600` | Default async `executionDuration` (s) |
 | `TAP_JOB_RETENTION` | `604800` | Default job lifetime before destruction (s) |
+| `TAP_MODEL_PLUGINS` | `all` | Metadata domains to activate (`all` or a comma-separated subset) |
+| `TAP_LOG_LEVEL` | `INFO` | Level for the services' own records (bootstrap, legacy-table warnings, deletion audit trail); uvicorn's access log is separate |
