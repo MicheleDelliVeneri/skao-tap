@@ -43,8 +43,15 @@ async def job_list(request: Request):
         if phase not in uws.ALL_PHASES:
             raise UsageError(f"unknown PHASE {phase}")
     last = request.query_params.get("LAST")
+    if last is not None:
+        try:
+            last = int(last)
+        except ValueError:
+            raise UsageError("LAST must be a positive integer") from None
+        if last < 1:
+            raise UsageError("LAST must be a positive integer")
     with pool().connection() as conn:
-        jobs = uws.list_jobs(conn, phases or None, int(last) if last else None)
+        jobs = uws.list_jobs(conn, phases or None, last)
     return Response(uws.joblist_xml(jobs), media_type=XML)
 
 

@@ -171,6 +171,15 @@ def test_json_job_lifecycle(tap_service):
     assert httpx.get(url).status_code == 404
 
 
+def test_job_list_rejects_non_positive_last(tap_service):
+    response = httpx.get(f"{_api(tap_service)}/jobs", params={"last": 0})
+    assert response.status_code == 400
+    assert response.json()["error"] == "UsageError"
+    uws_response = httpx.get(f"{tap_service}/async", params={"LAST": "0"})
+    assert uws_response.status_code == 400
+    assert httpx.get(f"{tap_service}/async", params={"LAST": "1"}).status_code == 200
+
+
 def test_json_job_invalid_query_rejected_at_creation(tap_service):
     response = httpx.post(f"{_api(tap_service)}/jobs", json={"query": "SELEC nonsense"})
     assert response.status_code == 400

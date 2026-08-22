@@ -132,6 +132,8 @@ async def create_job(body: JobRequest):
 
 @router.get("/jobs")
 async def list_jobs(phase: str | None = None, last: int | None = None):
+    if last is not None and last < 1:
+        raise UsageError("last must be a positive integer")
     phases = [p.strip().upper() for p in phase.split(",")] if phase else None
     for item in phases or []:
         if item not in uws.ALL_PHASES:
@@ -249,15 +251,16 @@ async def ingest(notification: SRCIngestionNotification):
 
 @router.get("/notifications")
 async def list_notifications():
+    tables = {t.name: t.qualified for t in TABLES}
     with pool().connection() as conn:
         rows = conn.execute(
             f"""
             SELECT p.project_id, p.project_title, p.data_rights,
-                   (SELECT count(*) FROM srcnet.data_products d
+                   (SELECT count(*) FROM {tables["data_products"]} d
                      WHERE d.project_id = p.project_id),
-                   (SELECT count(*) FROM srcnet.artifacts a
+                   (SELECT count(*) FROM {tables["artifacts"]} a
                      WHERE a.project_id = p.project_id)
-            FROM {TABLES[0].qualified} p
+            FROM {tables["projects"]} p
             ORDER BY p.project_id
             """
         ).fetchall()
