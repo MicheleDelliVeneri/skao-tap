@@ -79,7 +79,7 @@ class FakeConnection:
         pass
 
     def execute(self, sql, params=None):
-        return self._db.execute(sql, params)
+        return self._db.run(sql, params)
 
 
 class FakePool:
@@ -164,7 +164,7 @@ class FakeDB:
 
     # -- SQL routing --------------------------------------------------------
 
-    def execute(self, sql, params=None):
+    def run(self, sql, params=None):
         text = sql.strip()
         self.statements.append(text)
         head = text.upper()

@@ -54,6 +54,20 @@ uv run --group docs mkdocs serve   # live preview
 uv run --group docs mkdocs build --strict
 ```
 
+Every MkDocs build runs `scripts/generate_model_schema_docs.py` as a hook.
+It loads the installed metadata plugins and regenerates
+`docs/model-schemas.md` directly from their pydantic models, keeping the
+published table/column reference aligned with the service's generated SQL
+and `TAP_SCHEMA` metadata. Run the script directly to refresh the checked-in
+page without building the full site.
+
+The PyVO notebook in `demo/srcnet_metadata_tap.ipynb` can be launched with:
+
+```bash
+docker compose up --build -d
+uv run --group dev --with jupyter jupyter lab demo/srcnet_metadata_tap.ipynb
+```
+
 ## CI/CD
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every push/PR:

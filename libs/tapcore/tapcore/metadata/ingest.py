@@ -8,6 +8,8 @@ levels changes the database schema and the TAP_SCHEMA registration
 automatically (existing tables are migrated forward at startup).
 """
 
+# pyright: reportGeneralTypeIssues=false, reportMissingImports=false
+
 import datetime
 import json
 import logging
@@ -42,7 +44,11 @@ def _column_value(value):
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, (list, dict)):
-        return Jsonb(json.loads(json.dumps(value, default=_json_fallback)))
+        try:
+            json_value = json.loads(json.dumps(value, default=_json_fallback))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("metadata value is not JSON serializable") from exc
+        return Jsonb(json_value)
     return value
 
 
@@ -100,7 +106,7 @@ def ingest_document(conn, plugin: MetadataPlugin, document: BaseModel) -> dict[s
             row[col.name] = _resolve_path(instance, col.path)
         for child in tables:
             if child.parent is table:
-                children.append((child, getattr(instance, child.name, []) or []))
+                children.append((child, getattr(instance, child.field_name, []) or []))
         _upsert(conn, table, row)
         counts[table.qualified] = counts.get(table.qualified, 0) + 1
         next_chain = dict(key_chain)
@@ -149,7 +155,7 @@ def amend_rows(
             # FieldInfo.metadata, not in the annotation — re-attach them
             annotation = info.annotation
             if info.metadata:
-                annotation = typing.Annotated[annotation, *info.metadata]
+                annotation = typing.Annotated[annotation, *info.metadata]  # pyright: ignore
             try:
                 values[column] = TypeAdapter(annotation).validate_python(value)
             except ValidationError as exc:
@@ -203,7 +209,7 @@ def fetch_document(conn, plugin: MetadataPlugin, root_id: str) -> dict | None:
             child_chain[table.id_column] = doc[table.id_column]
             for child in tables:
                 if child.parent is table:
-                    doc[child.name] = load(child, child_chain)
+                    doc[child.field_name] = load(child, child_chain)
             # drop inherited key columns and nulls for a clean document
             for key in list(doc):
                 if (key in key_chain) or doc[key] is None:
@@ -213,6 +219,16 @@ def fetch_document(conn, plugin: MetadataPlugin, root_id: str) -> dict | None:
 
     docs = load(tables[0], {tables[0].id_column: root_id})
     return docs[0] if docs else None
+
+
+def delete_document(conn, plugin: MetadataPlugin, root_id: str) -> bool:
+    """Delete one root document and all descendants through FK cascades."""
+    root = plugin.tables[0]
+    result = conn.execute(
+        f"DELETE FROM {root.qualified} WHERE {root.id_column} = %s",
+        (root_id,),
+    )
+    return result.rowcount == 1
 
 
 def list_documents(conn, plugin: MetadataPlugin) -> list[dict]:
@@ -232,6 +248,6 @@ def list_documents(conn, plugin: MetadataPlugin) -> list[dict]:
         doc = {k: v for k, v in row[0].items() if v is not None}
         doc = _unflatten(doc, root)
         for table, count in zip(descendants, row[1:], strict=True):
-            doc[table.name] = count
+            doc[table.field_name] = count
         summaries.append(doc)
     return summaries

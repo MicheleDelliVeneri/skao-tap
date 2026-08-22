@@ -1,6 +1,8 @@
 """Unit tests for the metadata plugin system (tapcore.metadata.plugins) and the
 built-in software discovery domain."""
 
+# pyright: reportMissingImports=false
+
 import datetime
 
 import pytest
@@ -44,7 +46,8 @@ def test_builtin_plugins_are_discovered_via_entry_points():
     plugins = discovered_plugins()
     assert plugins["odp"].sql_schema == "srcnet"
     assert plugins["odp"].mount == "notifications"
-    assert plugins["software"].sql_schema == "software"
+    assert plugins["software"].sql_schema == "srcnet"
+    assert plugins["software"].mount == "software"
 
 
 def test_selection_all_and_subset(plugin_selection):
@@ -63,9 +66,14 @@ def test_identity_overrides_and_flattening():
     from ska_src_sdm import Software
 
     tables = build_tables(
-        Software, "software", "software", {"Software": "uri", "Artifact": "location"}
+        Software,
+        "srcnet",
+        "software",
+        {"Software": "uri", "Artifact": "location"},
+        child_prefix="software_",
     )
     root, artifacts = tables
+    assert [t.qualified for t in tables] == ["srcnet.software", "srcnet.software_artifacts"]
     assert root.pk_columns == ["uri"]
     assert artifacts.pk_columns == ["uri", "location"]
     by_name = {c.name: c for c in root.columns}
@@ -97,7 +105,7 @@ def test_software_ingest_list_fetch_amend(client, fake_db):
     body = response.json()
     assert body["status"] == "ingested"
     assert body["uri"] == SOFTWARE_PAYLOAD["uri"]
-    assert body["rows"] == {"software.software": 1, "software.artifacts": 1}
+    assert body["rows"] == {"srcnet.software": 1, "srcnet.software_artifacts": 1}
 
     listing = client.get("/api/v1/software").json()
     (entry,) = listing["software"]
@@ -137,11 +145,66 @@ def test_software_validation_rejects_bad_payload(client):
 
 
 def test_unknown_software_document_is_404(client):
-    assert client.get("/api/v1/software/ska:nope:0.0.1").status_code == 404
+    url = "/api/v1/software/ska:nope:0.0.1"
+    assert client.get(url).status_code == 404
+    assert client.delete(url).status_code == 404
+
+
+def test_openapi_documents_metadata_delete(client):
+    spec = client.get("/openapi.json").json()
+    path = spec["paths"]["/api/v1/software/{root_id}"]
+    assert "delete" in path
+
+
+def test_delete_document_targets_the_plugin_root():
+    from tap_api.plugins.software import PLUGIN
+    from tapcore.metadata import ingest
+
+    class Result:
+        rowcount = 1
+
+    class Connection:
+        def __init__(self):
+            self.statement = None
+            self.params = None
+
+        def execute(self, statement, params):
+            self.statement = statement
+            self.params = params
+            return Result()
+
+    conn = Connection()
+    assert ingest.delete_document(conn, PLUGIN, "ska:demo:1.0.0")
+    assert conn.statement == "DELETE FROM srcnet.software WHERE uri = %s"
+    assert conn.params == ("ska:demo:1.0.0",)
 
 
 def test_ingested_datetime_roundtrip(client, fake_db):
     client.post("/api/v1/software", json=SOFTWARE_PAYLOAD)
-    stored = next(iter(fake_db.srcnet["software.software"].values()))
+    stored = next(iter(fake_db.srcnet["srcnet.software"].values()))
     assert isinstance(stored["release_date"], datetime.datetime)
     assert stored["release_date"].year == 2026
+
+
+def test_colliding_table_names_are_rejected(plugin_selection, monkeypatch):
+    """Two active domains must never generate the same qualified table."""
+    from ska_src_sdm import Software
+    from tapcore.metadata import plugins as plugins_module
+    from tapcore.metadata.plugins import MetadataPlugin
+
+    clash = MetadataPlugin(
+        name="clash",
+        model=Software,
+        sql_schema="srcnet",
+        root_table="software",  # same as the built-in software plugin
+        description="clashing domain",
+        mount="clash",
+        id_fields={"Software": "uri", "Artifact": "location"},
+        child_table_prefix="software_",
+    )
+    combined = {**plugins_module.discovered_plugins(), "clash": clash}
+    monkeypatch.setattr(plugins_module, "discovered_plugins", lambda: combined)
+    for selection in ("all", "software,clash"):
+        plugin_selection(selection)
+        with pytest.raises(ValueError, match=r"both generate srcnet\.software"):
+            active_plugins()

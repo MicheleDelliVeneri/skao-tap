@@ -29,7 +29,7 @@ A JSON facade over the same UWS job store used by `/tap/async` — a job
 created here is visible there and vice versa:
 
 | Method & path | Purpose |
-|---|---|
+| --- | --- |
 | `POST /api/v1/jobs` `{query, lang?, maxrec?, format?, run?}` | Create (and with `run: true` queue) a job; the query is validated up front |
 | `GET /api/v1/jobs?phase=COMPLETED,ERROR&last=10` | List jobs |
 | `GET /api/v1/jobs/{id}` | Job document (phase, timing, parameters, result/error) |
@@ -53,20 +53,21 @@ no changes to this codebase. `TAP_MODEL_PLUGINS` (Helm:
 `config.modelPlugins`) selects what a deployment activates: `all`, or a
 comma-separated subset for dedicated per-model systems.
 
-| Plugin | Model package | SQL schema | Mount |
-|---|---|---|---|
-| `odp` | [ska-src-mm-notification](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification) (`Project → … → DataProduct → Artifact`) | `srcnet` | `/api/v1/notifications` |
-| `software` | [ska-src-sdm](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model) (`Software → Artifact`, embedded discovery/resources/provenance) | `software` | `/api/v1/software` |
+| Plugin | Model package | Tables | Mount |
+| --- | --- | --- | --- |
+| `odp` | [ska-src-mm-notification](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification) (`Project → … → DataProduct → Artifact`) | `srcnet.projects` … `srcnet.artifacts` | `/api/v1/notifications` |
+| `software` | [ska-src-sdm](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model) (`Software → Artifact`, embedded discovery/resources/provenance) | `srcnet.software`, `srcnet.software_artifacts` | `/api/v1/software` |
 
 Every active plugin serves (shown for `odp`; identically for
 `/api/v1/software/{uri}` etc.):
 
 | Method & path | Purpose |
-|---|---|
+| --- | --- |
 | `POST /api/v1/notifications` | Validate (with the plugin's pydantic models) and store a document; idempotent upsert |
 | `GET /api/v1/notifications` | Root-level summary of ingested metadata, with per-table row counts |
 | `GET /api/v1/notifications/{project_id}` | Reconstruct the full nested document |
 | `PATCH /api/v1/notifications/{project_id}` | Amend already-ingested rows: `{"table", "match"?, "values"}` |
+| `DELETE /api/v1/notifications/{project_id}` | Delete the document and cascade to all generated child rows |
 
 Invalid payloads are rejected with HTTP 422 and pydantic's structured
 error list — including the library's cross-field rules (`em_min <= em_max`,
@@ -92,7 +93,9 @@ value in `values` is validated against the corresponding pydantic model
 field, so amendments obey the same constraints as ingestion. Key columns
 cannot be changed. The response reports the number of rows updated.
 Re-`POST`ing a full notification remains the way to amend everything at
-once (idempotent upsert).
+once (idempotent upsert). `DELETE /api/v1/notifications/{project_id}` removes
+the root document; the generated foreign keys cascade the deletion through
+observations, scheduling/execution blocks, data products, and artifacts.
 
 ### Model-driven database schema
 

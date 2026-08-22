@@ -17,9 +17,7 @@ PLUGIN = MetadataPlugin(
     model=SRCIngestionNotification,
     sql_schema="srcnet",
     root_table="projects",
-    description=(
-        "SKA SRC ingestion metadata, generated from the ska-src-mm-notification data model"
-    ),
+    description="SKA SRC metadata, generated from the SRC data models",
     mount="notifications",
 )
 

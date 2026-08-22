@@ -15,8 +15,11 @@ discovery domain (tap_api.plugins.software) ship built in; third-party model
 packages register through the skao_tap.models entry-point group.
 """
 
+# pyright: reportGeneralTypeIssues=false, reportMissingImports=false
+
 import asyncio
 import datetime
+import logging
 import os
 import shutil
 import time
@@ -34,6 +37,7 @@ from tapcore.metadata.plugins import MetadataPlugin, active_plugins
 from ..queries.query import prepare_query, run_sync
 
 router = APIRouter(prefix="/api/v1", tags=["json-api"])
+log = logging.getLogger("tap_api")
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +92,7 @@ async def sync_query(body: QueryRequest):
 def _iso(dt: datetime.datetime | None) -> str | None:
     if dt is None:
         return None
-    return dt.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")  # pyright: ignore
 
 
 def _api_base() -> str:
@@ -209,7 +213,10 @@ async def post_phase(job_id: str, body: PhaseRequest):
 async def delete_job(job_id: str):
     with pool().connection() as conn:
         uws.delete_job(conn, job_id)
-    shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
+    try:
+        shutil.rmtree(uws.job_results_dir(job_id))
+    except OSError:
+        log.warning("failed to remove result files for job %s", job_id, exc_info=True)
     return Response(status_code=204)
 
 
@@ -220,7 +227,11 @@ async def get_result(job_id: str):
     if job["phase"] != "COMPLETED":
         raise NotFoundError(f"job {job_id} has no result (phase {job['phase']})")
     result_dir = uws.job_results_dir(job_id)
-    for name in os.listdir(result_dir) if os.path.isdir(result_dir) else []:
+    try:
+        result_names = os.listdir(result_dir) if os.path.isdir(result_dir) else []
+    except OSError:
+        result_names = []
+    for name in result_names:
         if name.startswith("result."):
             return FileResponse(
                 os.path.join(result_dir, name),
@@ -322,6 +333,15 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
         if document is None:
             raise NotFoundError(f"{resource} {root_id} not found")
         return document
+
+    @domain.delete("/{root_id}")
+    async def delete_endpoint(root_id: str):
+        """Delete a document; generated foreign keys cascade to every child row."""
+        with pool().connection() as conn:
+            deleted = ingest.delete_document(conn, plugin, root_id)
+        if not deleted:
+            raise NotFoundError(f"{resource} {root_id} not found")
+        return {"status": "deleted", id_column: root_id}
 
     @domain.patch("/{root_id}")
     async def amend_endpoint(root_id: str, body: AmendRequest):

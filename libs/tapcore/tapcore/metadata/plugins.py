@@ -20,6 +20,8 @@ activates every discovered plugin (one combined archive), a comma-separated
 list activates a subset (down to one system per model).
 """
 
+# pyright: reportMissingImports=false
+
 import logging
 from dataclasses import dataclass, field
 from functools import cache
@@ -48,13 +50,20 @@ class MetadataPlugin:
     # identity-field overrides per model class name, for hierarchies whose
     # levels have no required '*_id' string field
     id_fields: dict[str, str] = field(default_factory=dict)
+    # prepended to child table names; domains sharing a SQL schema use it to
+    # keep generic level names (e.g. "artifacts") distinct
+    child_table_prefix: str = ""
 
     @property
     def tables(self) -> list[TableSpec]:
         cached = _TABLES_CACHE.get(self.name)
         if cached is None:
             cached = build_tables(
-                self.model, self.sql_schema, self.root_table, self.id_fields or None
+                self.model,
+                self.sql_schema,
+                self.root_table,
+                self.id_fields or None,
+                self.child_table_prefix,
             )
             _TABLES_CACHE[self.name] = cached
         return cached
@@ -88,15 +97,32 @@ def active_plugins() -> list[MetadataPlugin]:
     available = discovered_plugins()
     selection = settings.model_plugins.strip()
     if selection.lower() == "all":
-        return list(available.values())
-    active = []
-    for name in (part.strip() for part in selection.split(",")):
-        if not name:
-            continue
-        if name not in available:
-            known = ", ".join(sorted(available)) or "none"
-            raise LookupError(
-                f"TAP_MODEL_PLUGINS selects unknown plugin {name!r} (installed: {known})"
-            )
-        active.append(available[name])
+        active = list(available.values())
+    else:
+        active = []
+        for name in (part.strip() for part in selection.split(",")):
+            if not name:
+                continue
+            if name not in available:
+                known = ", ".join(sorted(available)) or "none"
+                raise LookupError(
+                    f"TAP_MODEL_PLUGINS selects unknown plugin {name!r} (installed: {known})"
+                )
+            active.append(available[name])
+    _check_table_collisions(active)
     return active
+
+
+def _check_table_collisions(plugins: list[MetadataPlugin]) -> None:
+    """Two active domains must never generate the same qualified table."""
+    owners: dict[str, str] = {}
+    for plugin in plugins:
+        for table in plugin.tables:
+            other = owners.get(table.qualified)
+            if other is not None:
+                raise ValueError(
+                    f"metadata plugins {other!r} and {plugin.name!r} both generate"
+                    f" {table.qualified}; set a distinct child_table_prefix,"
+                    " root_table or sql_schema"
+                )
+            owners[table.qualified] = plugin.name
