@@ -66,6 +66,36 @@ postgresql:
 externalDatabase:
   url: ""
 
+# -- Pod/container hardening applied to tap-api and tap-executor (uid 10001
+# matches the image user). Postgres gets its own contexts below.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+postgresqlSecurityContext:
+  pod:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  container:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+
 ingress:
   enabled: false
   className: ""

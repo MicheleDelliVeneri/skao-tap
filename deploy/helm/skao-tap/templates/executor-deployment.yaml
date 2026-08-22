@@ -17,10 +17,14 @@ spec:
         {{- include "skao-tap.labels" . | nindent 8 }}
         app.kubernetes.io/component: tap-executor
     spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: tap-executor
           image: "{{ .Values.image.registry }}/tap-executor:{{ include "skao-tap.imageTag" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           envFrom:
             - configMapRef:
                 name: {{ include "skao-tap.fullname" . }}-config
@@ -29,9 +33,13 @@ spec:
           volumeMounts:
             - name: results
               mountPath: /results
+            - name: tmp
+              mountPath: /tmp
           resources:
             {{- toYaml .Values.tapExecutor.resources | nindent 12 }}
       volumes:
         - name: results
           persistentVolumeClaim:
             claimName: {{ include "skao-tap.fullname" . }}-results
+        - name: tmp
+          emptyDir: {}

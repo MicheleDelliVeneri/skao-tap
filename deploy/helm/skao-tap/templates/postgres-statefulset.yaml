@@ -19,10 +19,14 @@ spec:
         {{- include "skao-tap.labels" . | nindent 8 }}
         app.kubernetes.io/component: postgres
     spec:
+      securityContext:
+        {{- toYaml .Values.postgresqlSecurityContext.pod | nindent 8 }}
       containers:
         - name: postgres
           image: "{{ .Values.postgresql.image | default (printf "%s/tap-db:%s" .Values.image.registry (include "skao-tap.imageTag" .)) }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.postgresqlSecurityContext.container | nindent 12 }}
           ports:
             - name: postgres
               containerPort: 5432
@@ -38,6 +42,10 @@ spec:
             - name: db-init
               mountPath: /docker-entrypoint-initdb.d
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: pg-run
+              mountPath: /var/run/postgresql
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", {{ .Values.postgresql.username | quote }}]
@@ -49,6 +57,10 @@ spec:
         - name: db-init
           configMap:
             name: {{ include "skao-tap.fullname" . }}-db-init
+        - name: tmp
+          emptyDir: {}
+        - name: pg-run
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: data
