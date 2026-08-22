@@ -11,6 +11,7 @@ import datetime
 import logging
 import os
 import shutil
+import threading
 import time
 
 from tapcore import uws
@@ -47,6 +48,50 @@ RETURNING {uws.JOB_COLUMNS}
 
 def _now():
     return datetime.datetime.now(datetime.UTC)
+
+
+class _AbortWatchdog:
+    """Cancels this job's executing backend when the job turns ABORTED (or
+    is deleted), regardless of when the abort arrives.
+
+    The API's pg_cancel_backend() on ABORT is immediate but can miss: the
+    abort may land before the backend PID is published, or between two
+    statements (a cancel on an idle backend is a silent no-op). This
+    watchdog closes those windows from the executor's side: it re-checks
+    the job phase twice a second for the whole execution and keeps
+    cancelling the backend until the statement actually stops.
+    """
+
+    POLL_S = 0.5
+
+    def __init__(self, job_id: str, backend_pid: int):
+        self._job_id = job_id
+        self._pid = backend_pid
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+    def _run(self):
+        while not self._stop.wait(self.POLL_S):
+            try:
+                with pool().connection() as conn:
+                    row = conn.execute(
+                        "SELECT phase FROM uws.jobs WHERE job_id = %s", (self._job_id,)
+                    ).fetchone()
+                    if row is not None and row[0] != "ABORTED":
+                        continue
+                    # aborted (or deleted): interrupt the running statement,
+                    # and keep doing so until execution ends
+                    conn.execute("SELECT pg_cancel_backend(%s)", (self._pid,))
+            except Exception:  # never let monitoring kill the execution path
+                log.exception("abort watchdog check failed for job %s", self._job_id)
 
 
 def claim_job() -> dict | None:
@@ -95,8 +140,17 @@ def execute_job(job: dict) -> None:
             pid = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
             with pool().connection() as side:
                 uws.update_job(side, job_id, backend_pid=pid)
+                # an ABORT that arrived before the PID was published could
+                # not cancel anything: honor it before starting the query
+                if uws.get_job(side, job_id)["phase"] == "ABORTED":
+                    shutil.rmtree(result_dir, ignore_errors=True)
+                    log.info("job %s aborted before execution", job_id)
+                    return
             conn.execute(f"SET LOCAL ROLE {settings.query_role}")
-            with conn.cursor(name=f"tap_job_{job_id}") as cur:
+            with (
+                _AbortWatchdog(job_id, pid),
+                conn.cursor(name=f"tap_job_{job_id}") as cur,
+            ):
                 cur.itersize = 5000
                 cur.execute(sql)
                 columns = columns_from_cursor(cur.description, tap_meta)

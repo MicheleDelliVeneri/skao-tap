@@ -18,6 +18,19 @@ _TABLES = ", ".join(f"ska.continuum_sources AS t{i}" for i in range(10))
 SLOW_QUERY = f"SELECT COUNT(*) AS n FROM {_TABLES}"
 
 
+FINAL_PHASES = ("COMPLETED", "ERROR", "ABORTED")
+
+
+def _wait_final(job_url: str, timeout_s: int = 60) -> str:
+    """Loop WAIT until a final phase: per UWS 1.1 a WAIT request returns on
+    any phase *change* (e.g. QUEUED -> EXECUTING), so clients iterate."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        phase = httpx.get(f"{job_url}/phase", params={"WAIT": "20"}, timeout=30).text
+        if phase in FINAL_PHASES or time.monotonic() > deadline:
+            return phase
+
+
 def _create(tap_service, query, run=True):
     data = {"QUERY": query, "LANG": "ADQL"}
     if run:
@@ -29,10 +42,7 @@ def _create(tap_service, query, run=True):
 
 def test_wait_blocks_until_completion(tap_service):
     job_url = _create(tap_service, QUICK_QUERY)
-    started = time.monotonic()
-    phase = httpx.get(f"{job_url}/phase", params={"WAIT": "20"}, timeout=30).text
-    assert phase in ("COMPLETED", "ERROR")
-    assert phase == "COMPLETED"
+    assert _wait_final(job_url) == "COMPLETED"
     # a further WAIT on the final phase returns immediately
     started = time.monotonic()
     assert httpx.get(f"{job_url}/phase", params={"WAIT": "20"}, timeout=30).text == "COMPLETED"
@@ -84,7 +94,7 @@ def test_abort_cancels_running_query(tap_service, database_url):
     )
     assert response.status_code == 303
 
-    phase = httpx.get(f"{job_url}/phase", params={"WAIT": "10"}, timeout=30).text
+    phase = _wait_final(job_url, timeout_s=10)
     assert phase == "ABORTED"
     assert time.monotonic() - aborted_at < 15  # cancelled, not run to completion
 
@@ -94,6 +104,7 @@ def test_abort_cancels_running_query(tap_service, database_url):
             active = conn.execute(
                 "SELECT pid, state, left(query, 60) FROM pg_stat_activity"
                 " WHERE state = 'active' AND query ILIKE '%%tap_job_%%'"
+                " AND pid <> pg_backend_pid()"
             ).fetchall()
             if not active:
                 break
@@ -109,10 +120,45 @@ def test_abort_cancels_running_query(tap_service, database_url):
     assert result.status_code == 404
 
 
+def test_abort_immediately_after_run(tap_service, database_url):
+    """Abort racing the executor's PID publication: even if the cancel from
+    the API has nothing to hit yet, the executor must notice ABORTED and
+    never run the scan to completion."""
+    import psycopg
+
+    job_url = _create(tap_service, SLOW_QUERY)  # PHASE=RUN, abort right away
+    response = httpx.post(
+        f"{job_url}/phase", data={"PHASE": "ABORT"}, timeout=10, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert httpx.get(f"{job_url}/phase", timeout=10).text == "ABORTED"
+
+    with psycopg.connect(database_url) as conn:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            active = conn.execute(
+                "SELECT pid FROM pg_stat_activity WHERE state = 'active'"
+                " AND query ILIKE '%%tap_job_%%' AND pid <> pg_backend_pid()"
+            ).fetchall()
+            if not active:
+                break
+            time.sleep(0.5)
+        assert not active, f"backend still executing after immediate abort: {active}"
+
+    time.sleep(2)
+    summary = httpx.get(job_url, timeout=10)
+    assert "<uws:phase>ABORTED</uws:phase>" in summary.text
+    assert httpx.get(f"{job_url}/results/result", timeout=10).status_code == 404
+
+
 def test_json_api_wait_after_and_abort(tap_service):
     api = tap_service.rsplit("/tap", 1)[0] + "/api/v1"
     job = httpx.post(f"{api}/jobs", json={"query": QUICK_QUERY, "run": True}, timeout=30).json()
-    done = httpx.get(f"{api}/jobs/{job['job_id']}", params={"wait": 20}, timeout=30).json()
+    deadline = time.monotonic() + 60
+    while True:
+        done = httpx.get(f"{api}/jobs/{job['job_id']}", params={"wait": 20}, timeout=30).json()
+        if done["phase"] in FINAL_PHASES or time.monotonic() > deadline:
+            break
     assert done["phase"] == "COMPLETED"
 
     slow = httpx.post(f"{api}/jobs", json={"query": SLOW_QUERY, "run": True}, timeout=30).json()
