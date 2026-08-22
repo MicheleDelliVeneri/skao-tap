@@ -5,19 +5,15 @@ issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
 Delivered and no longer tracked here: package 1 (typed, streaming result
-pipeline with Parquet/Arrow output) and package 2 (TAP table upload:
+pipeline with Parquet/Arrow output), package 2 (TAP table upload:
 inline multipart and http(s) `UPLOAD` on /sync and /async, per-query
 `TAP_UPLOAD` temp tables, `uploadMethods`/`uploadLimit` in capabilities,
-configurable limits).
+configurable limits), and package 3 (UWS completeness: `WAIT` blocking
+requests on the job and phase resources, `AFTER` job-list filtering, and
+real `ABORT` that cancels the executing statement via the backend PID and
+`pg_cancel_backend()`).
 
-## Package 3 — UWS completeness — *current*
-
-- `WAIT` blocking requests (UWS 1.1) on the job and phase resources.
-- `AFTER` filtering in the job list.
-- Real `ABORT`: store the executing backend PID in `uws.jobs` and cancel
-  the running statement with `pg_cancel_backend()`.
-
-## Package 4 — Identity and registry
+## Package 4 — Identity and registry — *current*
 
 - Authentication and job ownership (`ownerId`), per-user visibility of the
   job list; groundwork for per-user schemas and quotas.
