@@ -282,6 +282,8 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
     domain = APIRouter(prefix=f"/{plugin.mount}", tags=[f"metadata:{plugin.name}"])
     root = plugin.tables[0]
     id_column = root.id_column
+    # "projects" -> "project", for readable 404 messages
+    resource = root.name[:-1] if root.name.endswith("s") else root.name
 
     async def ingest_endpoint(document):
         with pool().connection() as conn:
@@ -318,9 +320,7 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
         with pool().connection() as conn:
             document = ingest.fetch_document(conn, plugin, root_id)
         if document is None:
-            raise NotFoundError(
-                f"{root.name[:-1] if root.name.endswith('s') else root.name} {root_id} not found"
-            )
+            raise NotFoundError(f"{resource} {root_id} not found")
         return document
 
     @domain.patch("/{root_id}")
@@ -333,7 +333,7 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
         """
         with pool().connection() as conn, conn.transaction():
             if ingest.fetch_document(conn, plugin, root_id) is None:
-                raise NotFoundError(f"{root_id} not found")
+                raise NotFoundError(f"{resource} {root_id} not found")
             updated = ingest.amend_rows(
                 conn, plugin, root_id, body.table, dict(body.match), dict(body.values)
             )
