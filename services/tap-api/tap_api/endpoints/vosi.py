@@ -102,9 +102,12 @@ def tables_xml() -> str:
 
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
-        '<vosi:tableset xmlns:vosi="http://www.ivoa.net/xml/VOSITables/v1.0"'
-        ' xmlns:vod="http://www.ivoa.net/xml/VODataService/v1.1"'
-        ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
+        # parenthesized so the continuation reads as one tag, not a missing comma
+        (
+            '<vosi:tableset xmlns:vosi="http://www.ivoa.net/xml/VOSITables/v1.0"'
+            ' xmlns:vod="http://www.ivoa.net/xml/VODataService/v1.1"'
+            ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        ),
     ]
     for schema_name, schema_desc in schemas:
         parts.append("  <schema>")
