@@ -35,6 +35,7 @@ class Settings:
     )
     wait_max_s: int = field(default_factory=lambda: int(os.getenv("TAP_WAIT_MAX", "60")))
     model_plugins: str = field(default_factory=lambda: os.getenv("TAP_MODEL_PLUGINS", "all"))
+    log_level: str = field(default_factory=lambda: os.getenv("TAP_LOG_LEVEL", "INFO"))
 
 
 settings = Settings()
