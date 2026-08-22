@@ -82,6 +82,8 @@ backup:
   enabled: false
   schedule: "0 2 * * *"
   # -- Keep dumps at least this many days; align with config.jobRetentionSeconds.
+  # The prune is clamped at one day, so 0 behaves the same as 1 — the CronJob
+  # never deletes the archive it has just written.
   retentionDays: 7
   deadlineSeconds: 1800
   storage: 10Gi

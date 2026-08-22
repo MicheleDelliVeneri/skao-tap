@@ -56,7 +56,11 @@ cooperate instead of colliding. Give each service more than one replica and
 switch the results volume to `ReadWriteMany`:
 
 ```bash
-helm upgrade skao-tap deploy/helm/skao-tap   --set tapApi.replicas=3   --set tapExecutor.replicas=2   --set "results.accessModes={ReadWriteMany}"   --set results.storageClass=<an RWX-capable class>
+helm upgrade skao-tap deploy/helm/skao-tap \
+  --set tapApi.replicas=3 \
+  --set tapExecutor.replicas=2 \
+  --set "results.accessModes={ReadWriteMany}" \
+  --set results.storageClass=<an RWX-capable class>
 ```
 
 With `scheduling.spreadReplicas` (on by default) the chart adds preferred
@@ -108,7 +112,9 @@ postgres-operator), load `db/init/*.sql` into it once, and point the chart
 at it:
 
 ```bash
-helm upgrade skao-tap deploy/helm/skao-tap   --set postgresql.enabled=false   --set externalDatabase.url=postgresql://tap:…@tap-db-rw:5432/tap
+helm upgrade skao-tap deploy/helm/skao-tap \
+  --set postgresql.enabled=false \
+  --set externalDatabase.url=postgresql://tap:…@tap-db-rw:5432/tap
 ```
 
 The services only need the one DSN, so failover handled by the operator is
@@ -127,7 +133,11 @@ archives of the whole database to a dedicated PVC and prunes them after
 `backup.retentionDays`:
 
 ```bash
-helm upgrade skao-tap deploy/helm/skao-tap   --set backup.enabled=true   --set backup.schedule="0 2 * * *"   --set backup.retentionDays=7   --set backup.storage=10Gi
+helm upgrade skao-tap deploy/helm/skao-tap \
+  --set backup.enabled=true \
+  --set backup.schedule="0 2 * * *" \
+  --set backup.retentionDays=7 \
+  --set backup.storage=10Gi
 ```
 
 It dumps through `TAP_DATABASE_URL`, so it covers the in-chart PostgreSQL
@@ -135,11 +145,46 @@ and an external database alike. Keep `retentionDays` at or above
 `config.jobRetentionSeconds` (default 7 days), or restored deployments will
 be missing jobs their clients still consider alive.
 
-To restore, stop the services, restore into a fresh database, and restart:
+To restore, stop the services so nothing writes during the restore, run
+`pg_restore` from a pod with the backup PVC mounted, then scale back up:
 
 ```bash
 kubectl scale deploy skao-tap-tap-api skao-tap-tap-executor --replicas=0
-kubectl run pg-restore --rm -it --image=<tap-db image>   --overrides='{"spec":{"containers":[{"name":"pg-restore","image":"<tap-db image>","stdin":true,"tty":true,"env":[{"name":"TAP_DATABASE_URL","valueFrom":{"secretKeyRef":{"name":"skao-tap-db","key":"TAP_DATABASE_URL"}}}],"volumeMounts":[{"name":"backups","mountPath":"/backups"}]}],"volumes":[{"name":"backups","persistentVolumeClaim":{"claimName":"skao-tap-db-backups"}}]}}'   -- sh -c 'pg_restore --clean --if-exists -d "$TAP_DATABASE_URL" /backups/skao-tap-<stamp>.dump'
+
+kubectl apply -f - <<'YAML'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pg-restore
+spec:
+  restartPolicy: Never
+  containers:
+    - name: pg-restore
+      image: <the tap-db image>
+      command: ["sh", "-ec"]
+      args:
+        # or name a specific archive instead of the most recent one
+        - |
+          archive=$(ls -t /backups/skao-tap-*.dump | head -1)
+          echo "restoring ${archive}"
+          pg_restore --clean --if-exists -d "$TAP_DATABASE_URL" "${archive}"
+      env:
+        - name: TAP_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: skao-tap-db      # <release>-db
+              key: TAP_DATABASE_URL
+      volumeMounts:
+        - name: backups
+          mountPath: /backups
+  volumes:
+    - name: backups
+      persistentVolumeClaim:
+        claimName: skao-tap-db-backups   # <release>-db-backups
+YAML
+
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-restore --timeout=10m
+kubectl logs pg-restore && kubectl delete pod pg-restore
 kubectl scale deploy skao-tap-tap-api --replicas=1
 kubectl scale deploy skao-tap-tap-executor --replicas=1
 ```
