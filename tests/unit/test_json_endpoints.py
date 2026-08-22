@@ -1,7 +1,5 @@
 """Unit tests for the /api/v1 JSON facade (tap_api.endpoints.json_api) on the fake pool."""
 
-# pyright: reportMissingImports=false
-
 import os
 
 from ska_src_mm_notification.models.schemas.srcnet_ingestion import SRC_INGESTION_EXAMPLE
@@ -105,8 +103,10 @@ def test_delete_job_warns_on_unexpected_cleanup_error(client, monkeypatch, caplo
     monkeypatch.setattr(json_api.shutil, "rmtree", fail_cleanup)
     deleted = client.delete(f"/api/v1/jobs/{job_id}")
     assert deleted.status_code == 204
-    assert "failed to remove result files for a deleted job" in caplog.text
-    assert job_id not in caplog.text
+    # the id is server-generated and format-checked, so it is logged along
+    # with the traceback: an unattributable warning is not actionable
+    assert f"failed to remove result files for job {job_id}" in caplog.text
+    assert "PermissionError" in caplog.text
 
 
 def test_job_result_download(client, fake_db, results_dir):

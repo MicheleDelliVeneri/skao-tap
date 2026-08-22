@@ -20,8 +20,6 @@ activates every discovered plugin (one combined archive), a comma-separated
 list activates a subset (down to one system per model).
 """
 
-# pyright: reportMissingImports=false
-
 import logging
 from dataclasses import dataclass, field
 from functools import cache
@@ -53,6 +51,9 @@ class MetadataPlugin:
     # prepended to child table names; domains sharing a SQL schema use it to
     # keep generic level names (e.g. "artifacts") distinct
     child_table_prefix: str = ""
+    # qualified tables this domain used before a rename; startup warns while
+    # they still exist, because the API neither reads nor deletes them
+    legacy_tables: tuple[str, ...] = ()
 
     @property
     def tables(self) -> list[TableSpec]:
@@ -118,7 +119,12 @@ def active_plugins() -> list[MetadataPlugin]:
 
 
 def _check_table_collisions(plugins: list[MetadataPlugin]) -> None:
-    """Two active domains must never generate the same qualified table."""
+    """Two active domains must never generate the same qualified table.
+
+    Uncached on purpose: ``active_plugins`` is called at import/startup time
+    only, and the per-plugin ``tables`` are already memoized, so re-running
+    the check keeps the settings-driven selection re-readable at no cost.
+    """
     owners: dict[str, str] = {}
     for plugin in plugins:
         for table in plugin.tables:

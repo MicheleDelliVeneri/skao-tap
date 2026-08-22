@@ -4,8 +4,6 @@ Implements the TAP 1.1 endpoint set: /sync, /async (UWS 1.1), and the VOSI
 resources /capabilities, /availability, /tables, plus DALI /examples.
 """
 
-# pyright: reportMissingImports=false
-
 import logging
 import time
 from contextlib import asynccontextmanager

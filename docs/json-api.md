@@ -93,9 +93,18 @@ value in `values` is validated against the corresponding pydantic model
 field, so amendments obey the same constraints as ingestion. Key columns
 cannot be changed. The response reports the number of rows updated.
 Re-`POST`ing a full notification remains the way to amend everything at
-once (idempotent upsert). `DELETE /api/v1/notifications/{project_id}` removes
-the root document; the generated foreign keys cascade the deletion through
-observations, scheduling/execution blocks, data products, and artifacts.
+once (idempotent upsert).
+
+`DELETE /api/v1/notifications/{project_id}` removes the root document; the
+generated foreign keys cascade the deletion through observations,
+scheduling/execution blocks, data products, and artifacts. It answers `200`
+with `{"status": "deleted", "<id column>": "..."}` — the same
+report-what-happened shape as `POST` and `PATCH` — and `404` if the document
+is not there, so deleting twice is *not* idempotent (unlike
+`DELETE /api/v1/jobs/{id}`, which follows UWS and answers `204`). Each
+deletion is logged by the service. There is no authentication layer yet:
+until one is wired in, deployments must not expose the API to untrusted
+networks.
 
 ### Model-driven database schema
 

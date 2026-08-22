@@ -9,8 +9,6 @@ objects (discovery, resources, provenance, ...) are flattened into
 prefixed columns by the shared schema generator.
 """
 
-# pyright: reportMissingImports=false
-
 from ska_src_sdm import Software
 from tapcore.metadata.plugins import MetadataPlugin
 
@@ -25,4 +23,8 @@ PLUGIN = MetadataPlugin(
     # shares the srcnet schema with the other domains: srcnet.software,
     # srcnet.software_artifacts (ODP already owns srcnet.artifacts)
     child_table_prefix="software_",
+    # pre-0.2 layout, before the move into the shared srcnet schema; a
+    # deployment upgraded across that move keeps these tables (and their
+    # rows) until scripts/migrate_legacy_tables.sql is run
+    legacy_tables=("software.software", "software.artifacts"),
 )

@@ -6,10 +6,6 @@ layer, the UWS job lifecycle, and the executor can be exercised without a
 PostgreSQL server.
 """
 
-# pyright: reportGeneralTypeIssues=false, reportMissingImports=false
-# pyright: reportArgumentType=false, reportAttributeAccessIssue=false
-# pyright: reportOptionalMemberAccess=false
-
 import contextlib
 import datetime
 import json

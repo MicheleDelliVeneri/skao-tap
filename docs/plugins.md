@@ -40,7 +40,10 @@ automatically generated column reference is available on the
   `/tap/tables`.
 - **Automatic migration** — a newer model release that adds fields gains
   the columns at startup (`ADD COLUMN IF NOT EXISTS`, nullable); nothing
-  is ever dropped.
+  is ever dropped. Renames are the exception: additive DDL cannot move
+  rows, so a domain that changes schema or table name declares the old
+  names in `legacy_tables` and startup warns until the one-off
+  [migration](development.md#upgrading-an-existing-deployment) is run.
 - **A JSON endpoint set** under `/api/v1/<mount>`: `POST` (validate and
   upsert), `GET` (root summary with per-table counts), `GET /{id}`
   (nested document), `PATCH /{id}` (amend stored rows), and `DELETE /{id}`
@@ -85,6 +88,9 @@ PLUGIN = MetadataPlugin(
     # optional: prefix for child tables, so generic level names stay unique
     # within the shared schema (srcnet.things_parts, not srcnet.parts)
     child_table_prefix="things_",
+    # optional: qualified tables this domain used before a rename; startup
+    # warns while they still hold rows the API no longer serves or deletes
+    legacy_tables=("mydomain.things",),
 )
 ```
 

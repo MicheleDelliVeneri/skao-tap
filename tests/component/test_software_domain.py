@@ -2,8 +2,6 @@
 the ska-src-sdm model, TAP/ADQL queryability of the generated software
 schema, document roundtrip with flattened nested objects, amendments, and deletion."""
 
-# pyright: reportMissingImports=false
-
 import httpx
 import pytest
 from ska_src_sdm import Software

@@ -1,8 +1,6 @@
 """Unit tests for the metadata plugin system (tapcore.metadata.plugins) and the
 built-in software discovery domain."""
 
-# pyright: reportMissingImports=false
-
 import datetime
 
 import pytest
@@ -173,6 +171,82 @@ def test_software_delete_document(client, fake_db):
     assert deleted.json() == {"status": "deleted", "uri": SOFTWARE_PAYLOAD["uri"]}
     assert not fake_db.srcnet["srcnet.software"]
     assert not fake_db.srcnet["srcnet.software_artifacts"]
+
+
+def test_delete_is_audited(client, caplog):
+    """Deletion is destructive and cascades: it must leave a log record."""
+    import logging
+
+    client.post("/api/v1/software", json=SOFTWARE_PAYLOAD)
+    with caplog.at_level(logging.INFO, logger="tapcore"):
+        deleted = client.delete(f"/api/v1/software/{SOFTWARE_PAYLOAD['uri']}")
+    assert deleted.status_code == 200
+    assert f"deleted srcnet.software '{SOFTWARE_PAYLOAD['uri']}'" in caplog.text
+    assert "cascading to 1 descendant table(s)" in caplog.text
+
+
+def test_delete_audit_log_cannot_be_forged_through_the_id(caplog):
+    """The id comes from the request path: no newline may reach the log."""
+    import logging
+
+    from tap_api.plugins.software import PLUGIN
+    from tapcore.metadata import ingest
+
+    class Conn:
+        def execute(self, statement, params):
+            return type("Result", (), {"rowcount": 1})()
+
+    forged = "nope\nINFO:tapcore:deleted everything"
+    with caplog.at_level(logging.INFO, logger="tapcore"):
+        assert ingest.delete_document(Conn(), PLUGIN, forged)
+    assert "deleted everything" in caplog.text  # only as part of the quoted id
+    assert len(caplog.records) == 1
+    assert "\n" not in caplog.records[0].getMessage()
+
+
+def test_log_safe_flattens_and_caps_caller_text():
+    from tapcore.metadata.ingest import _log_safe
+
+    assert _log_safe("ska:demo:1.0.0") == "'ska:demo:1.0.0'"
+    assert _log_safe("two\nlines\tand  spaces") == "'two lines and spaces'"
+    assert _log_safe("x" * 300).endswith("...'")
+
+
+def test_legacy_tables_are_reported_until_migrated(caplog):
+    """A pre-rename table still holding rows is warned about at startup."""
+    import logging
+
+    from tap_api.plugins.software import PLUGIN
+    from tapcore.metadata import ingest
+
+    assert PLUGIN.legacy_tables == ("software.software", "software.artifacts")
+
+    class Conn:
+        def __init__(self, present):
+            self._present = present
+
+        def execute(self, statement, params=None):
+            assert statement == "SELECT to_regclass(%s)"
+            name = params[0]
+            return _Row((name,) if name in self._present else (None,))
+
+    class _Row:
+        def __init__(self, row):
+            self._row = row
+
+        def fetchone(self):
+            return self._row
+
+    with caplog.at_level(logging.WARNING, logger="tapcore"):
+        ingest._warn_legacy_tables(Conn({"software.artifacts"}), PLUGIN)
+    assert "legacy table software.artifacts still exists" in caplog.text
+    assert "software.software still exists" not in caplog.text
+    assert "srcnet.software" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="tapcore"):
+        ingest._warn_legacy_tables(Conn(set()), PLUGIN)
+    assert caplog.text == ""
 
 
 def test_delete_document_targets_the_plugin_root():

@@ -15,8 +15,6 @@ discovery domain (tap_api.plugins.software) ship built in; third-party model
 packages register through the skao_tap.models entry-point group.
 """
 
-# pyright: reportGeneralTypeIssues=false, reportMissingImports=false
-
 import asyncio
 import datetime
 import logging
@@ -215,10 +213,12 @@ async def delete_job(job_id: str):
         uws.delete_job(conn, job_id)
     try:
         shutil.rmtree(uws.job_results_dir(job_id))
-    except OSError as exc:
-        if isinstance(exc, FileNotFoundError):
-            return Response(status_code=204)
-        log.warning("failed to remove result files for a deleted job")
+    except FileNotFoundError:
+        pass  # nothing was ever written for this job
+    except OSError:
+        # the job row is gone either way; keep the traceback (the id is
+        # server-generated and format-checked, so it is safe to log)
+        log.warning("failed to remove result files for job %s", job_id, exc_info=True)
     return Response(status_code=204)
 
 

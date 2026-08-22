@@ -16,4 +16,7 @@ uv run --group dev --with jupyter jupyter lab demo/srcnet_metadata_tap.ipynb
 
 The notebook defaults to `http://localhost:8080/tap`. Set the `TAP_URL`
 environment variable before starting Jupyter to target another deployment.
-Re-running it is safe: both ingest endpoints upsert by model identity.
+Re-running it is safe: both ingest endpoints upsert by model identity. The
+run leaves the ingested project and software record in place for further
+exploration; the last cell removes them, and every row they cascade to, once
+`CLEANUP` is set to `True`.

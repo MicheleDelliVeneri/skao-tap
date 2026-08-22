@@ -5,8 +5,6 @@ reflects the versions of the data-model packages installed in that build.
 It can also be run directly when the checked-in page needs refreshing.
 """
 
-# pyright: reportMissingImports=false
-
 from collections.abc import Iterable
 from pathlib import Path
 
