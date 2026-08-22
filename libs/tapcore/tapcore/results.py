@@ -6,9 +6,10 @@ tables the query touches. Serializers are generators of byte chunks fed
 from a server-side cursor, so result sets are never fully materialized:
 VOTable (TABLEDATA), CSV, TSV, JSON, Parquet, and an Arrow IPC stream.
 
-DALI overflow is detected by fetching one row past MAXREC; formats that
-carry a status report OK/OVERFLOW (the VOTable trailing INFO, the JSON
-status field, Parquet/Arrow custom metadata).
+DALI overflow is detected by fetching one row past MAXREC and reported in
+the formats that can carry a status: a trailing INFO in VOTable, the JSON
+status field, and Parquet file metadata. The Arrow IPC *stream* format has
+no end-of-stream metadata slot, so it carries per-field metadata only.
 """
 
 import csv
@@ -76,10 +77,14 @@ def tap_schema_metadata(conn, tables: Iterable[str]) -> dict[str, dict]:
         ([n.lower() for n in names],),
     ).fetchall()
     meta: dict[str, dict] = {}
+    conflicted: set[str] = set()
     for name, unit, ucd, description in rows:
         entry = {"unit": unit, "ucd": ucd, "description": description}
-        if name in meta and (meta[name]["unit"], meta[name]["ucd"]) != (unit, ucd):
+        if name in conflicted:
+            continue
+        if name in meta and meta[name] != entry:
             meta[name] = {"unit": None, "ucd": None, "description": None}
+            conflicted.add(name)
         else:
             meta.setdefault(name, entry)
     return meta

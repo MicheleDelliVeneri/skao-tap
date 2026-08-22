@@ -41,3 +41,21 @@ def test_columns_from_cursor_attaches_tap_metadata():
     assert col == ColumnMeta(
         "ra", kind="float64", unit="deg", ucd="pos.eq.ra", description="Right ascension"
     )
+
+
+def test_tap_schema_metadata_conflicting_descriptions(tap_conn=None):
+    """Same unit/UCD but different descriptions across touched tables must
+    also be treated as ambiguous (exercised via the pure merge logic)."""
+    from unittest.mock import MagicMock
+
+    from tapcore.results import tap_schema_metadata
+
+    conn = MagicMock()
+    conn.execute.return_value.fetchall.return_value = [
+        ("ra", "deg", "pos.eq.ra", "Right ascension"),
+        ("ra", "deg", "pos.eq.ra", "RA of artifact centre"),
+        ("dec", "deg", "pos.eq.dec", "Declination"),
+    ]
+    meta = tap_schema_metadata(conn, ["t.a", "t.b"])
+    assert meta["ra"] == {"unit": None, "ucd": None, "description": None}
+    assert meta["dec"]["description"] == "Declination"
