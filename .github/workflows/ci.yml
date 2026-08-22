@@ -38,7 +38,7 @@ jobs:
       - name: Upload coverage to Codecov
         # skip on forked PRs, where secrets (CODECOV_TOKEN) are unavailable
         if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: coverage.xml
           flags: unit
@@ -71,7 +71,7 @@ jobs:
       - name: Upload coverage to Codecov
         # skip on forked PRs, where secrets (CODECOV_TOKEN) are unavailable
         if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: coverage.xml
           flags: component
