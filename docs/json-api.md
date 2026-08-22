@@ -45,7 +45,8 @@ with units/UCDs) — the machine-friendly twin of VOSI `/tap/tables`.
 ## Metadata-domain plugins
 
 Metadata domains are **plugins**: each binds an upstream pydantic model
-package to a SQL schema and a mount point, and gets the same endpoint set.
+package to a SQL schema and a mount point, and gets the same endpoint set
+(full guide: [Metadata plugins](plugins.md)).
 Two ship built in, and third-party model packages register through the
 `skao_tap.models` entry-point group — installed alongside the services,
 no changes to this codebase. `TAP_MODEL_PLUGINS` (Helm:

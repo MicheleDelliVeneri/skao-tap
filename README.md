@@ -3,9 +3,10 @@
 [![CI](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml)
 [![Security](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/security.yml)
 [![Docs](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/docs.yml)
+[![Documentation](https://img.shields.io/badge/docs-github.io-blue)](https://micheledelliveneri.github.io/skao-tap/)
 [![codecov](https://codecov.io/gh/MicheleDelliVeneri/skao-tap/branch/main/graph/badge.svg)](https://codecov.io/gh/MicheleDelliVeneri/skao-tap)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.14%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 A draft **IVOA TAP 1.1** (Table Access Protocol) server in Python, built as
@@ -147,12 +148,26 @@ All via environment variables (see `tapcore/config.py`): `TAP_DATABASE_URL`,
 Alongside the standards-mandated XML of TAP, a JSON interface lives at
 `/api/v1` (OpenAPI at `/openapi.json`): synchronous queries
 (`POST /api/v1/query`), a JSON job facade over the same UWS store
-(`/api/v1/jobs`), TAP_SCHEMA as JSON (`/api/v1/tables`), and **SRC
-ingestion notifications** (`POST /api/v1/notifications`) validated with the
-[ska-src-mm-notification](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification)
-pydantic models. The `srcnet.*` tables storing notifications are generated
-automatically from those models at startup and registered in TAP_SCHEMA, so
-ingested metadata is immediately ADQL-queryable. See `docs/json-api.md`.
+(`/api/v1/jobs`), TAP_SCHEMA as JSON (`/api/v1/tables`), and the metadata
+domains described below. See `docs/json-api.md`.
+
+## Metadata plugins
+
+Metadata domains are **plugins**: each binds a pydantic data model package
+to a SQL schema and a JSON mount point, and the shared machinery generates
+the tables, registers them in TAP_SCHEMA (so the metadata is queryable
+through ordinary ADQL), migrates them when the model gains fields, and
+serves ingest/fetch/amend endpoints. Two ship built in — **observatory
+data products** ([ska-src-mm-notification](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification),
+`srcnet` schema, `POST /api/v1/notifications`) and **software discovery**
+([ska-src-sdm](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model),
+`software` schema, `POST /api/v1/software`).
+
+Third-party model packages register through the `skao_tap.models`
+entry-point group — installed alongside the services, no changes here —
+and `TAP_MODEL_PLUGINS` selects which plugins a deployment activates
+(`all`, or a subset for dedicated per-model systems). See
+[`docs/plugins.md`](docs/plugins.md).
 
 ## Development
 

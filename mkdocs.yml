@@ -27,6 +27,7 @@ nav:
   - Architecture: architecture.md
   - API reference: api.md
   - JSON API: json-api.md
+  - Metadata plugins: plugins.md
   - Deployment: deployment.md
   - Development: development.md
   - Roadmap: roadmap.md

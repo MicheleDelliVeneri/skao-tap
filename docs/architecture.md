@@ -31,9 +31,27 @@
 | `tap-api` | `services/tap-api` | All TAP/UWS/VOSI HTTP endpoints |
 | `tap-executor` | `services/tap-executor` | Asynchronous (UWS) query execution; replicas can run concurrently |
 
-Shared code lives in the **`tapcore`** package (`libs/tapcore`):
-configuration, DB pool, ADQL translation, VOTable/CSV/TSV/JSON
-serialization, the UWS job model and its XML rendering.
+Shared code lives in the **`tapcore`** package (`libs/tapcore`), grouped
+by role: the flat core (configuration, DB pool, errors, the UWS job model
+and its XML rendering), `query/` (ADQL translation, typed streaming
+serialization to VOTable/CSV/TSV/JSON/Parquet/Arrow, table uploads), and
+`metadata/` (the metadata-plugin framework). `tap_api` mirrors that
+split: `plugins/` (domain definitions), `endpoints/` (HTTP routers) and
+`queries/` (parameter handling and query execution).
+
+## Metadata plugins
+
+Alongside the science tables it serves, the service publishes **metadata
+domains** defined by pydantic data models — observatory data products
+(ska-src-mm-notification) and software discovery (ska-src-sdm) ship built
+in. Each domain is a plugin binding a model hierarchy to a SQL schema and
+a JSON mount point; the shared machinery generates the tables, registers
+them in TAP_SCHEMA (so the metadata is queryable through ordinary ADQL),
+migrates them when the model gains fields, and serves ingest/fetch/amend
+endpoints. Plugins are discovered through the `skao_tap.models`
+entry-point group — third-party model packages need only be installed —
+and `TAP_MODEL_PLUGINS` selects which ones a deployment activates. See
+[Metadata plugins](plugins.md).
 
 ## Query lifecycle
 
