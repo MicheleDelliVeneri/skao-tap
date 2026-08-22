@@ -110,6 +110,31 @@ class _AbortWatchdog:
                 log.exception("abort watchdog check failed for job %s", self._job_id)
 
 
+def _reap_backend(pid: int | None) -> None:
+    """After an abort or error, make sure this job's executing backend is
+    really gone. Once the executor abandons its connection nothing else
+    stops the server side: PostgreSQL only notices a lost client on the
+    next send, so an orphaned backend can keep scanning for minutes."""
+    if not pid:
+        return
+    try:
+        with pool().connection() as conn:
+            for attempt in range(8):
+                row = conn.execute(
+                    "SELECT state FROM pg_stat_activity WHERE pid = %s", (pid,)
+                ).fetchone()
+                if row is None or row[0] != "active":
+                    return
+                if attempt < 4:
+                    conn.execute("SELECT pg_cancel_backend(%s)", (pid,))
+                else:
+                    log.warning("backend %d survived cancels; terminating", pid)
+                    conn.execute("SELECT pg_terminate_backend(%s)", (pid,))
+                time.sleep(0.5)
+    except Exception:
+        log.exception("failed to reap backend %s", pid)
+
+
 def claim_job() -> dict | None:
     with pool().connection() as conn:
         row = conn.execute(CLAIM_SQL).fetchone()
@@ -121,6 +146,7 @@ def claim_job() -> dict | None:
 def execute_job(job: dict) -> None:
     job_id = job["job_id"]
     params = job["parameters"] or {}
+    backend_pid = None
     log.info("executing job %s", job_id)
     try:
         maxrec = min(int(params.get("MAXREC", settings.default_maxrec)), settings.hard_maxrec)
@@ -153,7 +179,7 @@ def execute_job(job: dict) -> None:
                     (str(timeout_ms),),
                 )
             # publish this backend's PID so ABORT can pg_cancel_backend() it
-            pid = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
+            backend_pid = pid = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
             with pool().connection() as side:
                 uws.update_job(side, job_id, backend_pid=pid)
                 # an ABORT that arrived before the PID was published could
@@ -192,6 +218,7 @@ def execute_job(job: dict) -> None:
         log.info("job %s completed (%d rows, %s)", job_id, limiter.count, limiter.status)
     except Exception as exc:
         shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
+        _reap_backend(backend_pid)
         with pool().connection() as conn:
             current = uws.get_job(conn, job_id)
             if current["phase"] != "ABORTED":
