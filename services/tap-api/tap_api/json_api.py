@@ -26,7 +26,7 @@ from tapcore.db import pool
 from tapcore.errors import NotFoundError, UsageError
 
 from .query import prepare_query, run_sync
-from .srcnet import TABLES, fetch_notification, ingest_notification
+from .srcnet import TABLES, amend_rows, fetch_notification, ingest_notification
 
 router = APIRouter(prefix="/api/v1", tags=["json-api"])
 
@@ -295,3 +295,39 @@ async def get_notification(project_id: str):
     if document is None:
         raise NotFoundError(f"project {project_id} not found")
     return document
+
+
+class AmendRequest(BaseModel):
+    table: str = Field(
+        description="Target table: projects, observations, scheduling_blocks,"
+        " execution_blocks, data_products, or artifacts"
+    )
+    match: dict[str, str | int | float | bool] = Field(
+        default_factory=dict,
+        description="Column equality filters selecting the rows to amend"
+        " (empty = every row of the project in that table)",
+    )
+    values: dict = Field(
+        description="Columns to set; each value is validated against the"
+        " corresponding pydantic model field"
+    )
+
+
+@router.patch("/notifications/{project_id}")
+async def amend_notification(project_id: str, body: AmendRequest):
+    """Amend already-ingested rows — e.g. backfill a column added by a
+    newer data-model release — without re-sending the whole notification.
+
+    The update is validated field-by-field with the ska-src-mm-notification
+    models and always scoped to the given project.
+    """
+    with pool().connection() as conn, conn.transaction():
+        if fetch_notification(conn, project_id) is None:
+            raise NotFoundError(f"project {project_id} not found")
+        updated = amend_rows(conn, project_id, body.table, dict(body.match), dict(body.values))
+    return {
+        "status": "amended",
+        "project_id": project_id,
+        "table": body.table,
+        "updated": updated,
+    }

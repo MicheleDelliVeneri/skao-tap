@@ -140,3 +140,69 @@ def test_notification_validation_and_missing(client):
     invalid = client.post("/api/v1/notifications", json=bad)
     assert invalid.status_code == 422
     assert client.get("/api/v1/notifications/nope").status_code == 404
+
+
+def _amend(client, project_id, **body):
+    return client.patch(f"/api/v1/notifications/{project_id}", json=body)
+
+
+def test_amend_backfills_a_column_across_rows(client):
+    project_id = SRC_INGESTION_EXAMPLE["project_id"]
+    client.post("/api/v1/notifications", json=SRC_INGESTION_EXAMPLE)
+    response = _amend(client, project_id, table="data_products", values={"beam_pa": 12.5})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "amended"
+    assert body["updated"] >= 1
+    document = client.get(f"/api/v1/notifications/{project_id}").json()
+    products = document["observations"][0]["scheduling_blocks"][0]["execution_blocks"][0][
+        "data_products"
+    ]
+    assert all(p["beam_pa"] == 12.5 for p in products)
+
+
+def test_amend_with_match_targets_specific_rows(client):
+    project_id = SRC_INGESTION_EXAMPLE["project_id"]
+    client.post("/api/v1/notifications", json=SRC_INGESTION_EXAMPLE)
+    example_product = SRC_INGESTION_EXAMPLE["observations"][0]["scheduling_blocks"][0][
+        "execution_blocks"
+    ][0]["data_products"][0]
+    response = _amend(
+        client,
+        project_id,
+        table="data_products",
+        match={"product_id": example_product["product_id"]},
+        values={"num_antennas": 64},
+    )
+    assert response.json()["updated"] == 1
+    missed = _amend(
+        client,
+        project_id,
+        table="data_products",
+        match={"product_id": "no-such-product"},
+        values={"num_antennas": 64},
+    )
+    assert missed.json()["updated"] == 0
+
+
+def test_amend_validates_against_the_model(client):
+    project_id = SRC_INGESTION_EXAMPLE["project_id"]
+    client.post("/api/v1/notifications", json=SRC_INGESTION_EXAMPLE)
+    # beam_pa is constrained to [-180, 180] by the pydantic model
+    bad_value = _amend(client, project_id, table="data_products", values={"beam_pa": 999.0})
+    assert bad_value.status_code == 400
+    assert "beam_pa" in bad_value.json()["message"]
+    bad_column = _amend(client, project_id, table="data_products", values={"nope": 1})
+    assert bad_column.status_code == 400
+    bad_table = _amend(client, project_id, table="starships", values={"beam_pa": 1.0})
+    assert bad_table.status_code == 400
+    key_column = _amend(client, project_id, table="data_products", values={"product_id": "hijack"})
+    assert key_column.status_code == 400
+    assert "key column" in key_column.json()["message"]
+    empty = _amend(client, project_id, table="data_products", values={})
+    assert empty.status_code == 400
+
+
+def test_amend_unknown_project_is_404(client):
+    response = _amend(client, "ghost", table="data_products", values={"beam_pa": 1.0})
+    assert response.status_code == 404

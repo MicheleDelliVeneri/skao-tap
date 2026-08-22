@@ -422,3 +422,47 @@ def test_schema_evolution_adds_new_model_columns_without_data_loss(tap_service, 
         ).fetchall()
         assert len(restored) == before  # rows survived, column is back (NULL)
         assert all(value is None for (value,) in restored)
+
+
+def test_amend_backfills_new_column_on_real_database(tap_service):
+    """PATCH /notifications/{project}: backfill a column across rows and
+    verify via the document and ADQL; constraint violations are rejected."""
+    httpx.post(f"{_api(tap_service)}/notifications", json=SRC_INGESTION_EXAMPLE, timeout=30)
+    url = f"{_api(tap_service)}/notifications/project12314"
+
+    response = httpx.patch(
+        url, json={"table": "data_products", "values": {"beam_pa": 42.0}}, timeout=30
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["updated"] >= 1
+
+    sync = httpx.post(
+        f"{tap_service}/sync",
+        data={
+            "QUERY": (
+                "SELECT DISTINCT beam_pa FROM srcnet.data_products"
+                " WHERE project_id = 'project12314'"
+            ),
+            "LANG": "ADQL",
+            "RESPONSEFORMAT": "csv",
+        },
+        timeout=30,
+    )
+    assert sync.text.strip().splitlines()[1:] == ["42.0"]
+
+    # the pydantic constraint (beam_pa in [-180, 180]) still guards amendments
+    rejected = httpx.patch(
+        url, json={"table": "data_products", "values": {"beam_pa": 999.0}}, timeout=30
+    )
+    assert rejected.status_code == 400
+    # and the database CHECK would catch anything that slipped through
+    scoped = httpx.patch(
+        url,
+        json={
+            "table": "data_products",
+            "match": {"product_id": "nope"},
+            "values": {"beam_pa": 1.0},
+        },
+        timeout=30,
+    )
+    assert scoped.json()["updated"] == 0

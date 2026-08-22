@@ -53,10 +53,33 @@ DataProduct → Artifact`):
 | `POST /api/v1/notifications` | Validate (with the library's pydantic models) and store a notification; idempotent upsert |
 | `GET /api/v1/notifications` | Project-level summary of ingested metadata |
 | `GET /api/v1/notifications/{project_id}` | Reconstruct the full nested document |
+| `PATCH /api/v1/notifications/{project_id}` | Amend already-ingested rows: `{"table", "match"?, "values"}` |
 
 Invalid payloads are rejected with HTTP 422 and pydantic's structured
 error list — including the library's cross-field rules (`em_min <= em_max`,
 image products requiring `s_ra/s_dec/s_fov`, ...).
+
+### Amending ingested metadata
+
+When a data-model release adds a field, existing tables gain the column
+automatically at startup (nullable) — `PATCH` then backfills it, or fixes
+any stored value, without re-sending whole notifications:
+
+```json
+PATCH /api/v1/notifications/project12314
+{"table": "data_products",
+ "match": {"product_id": "SKAO-19571257111"},
+ "values": {"beam_pa": 42.0}}
+```
+
+`table` is one of `projects`, `observations`, `scheduling_blocks`,
+`execution_blocks`, `data_products`, `artifacts`; `match` narrows the rows
+by column equality (omit it to update every row of the project); each
+value in `values` is validated against the corresponding pydantic model
+field, so amendments obey the same constraints as ingestion. Key columns
+cannot be changed. The response reports the number of rows updated.
+Re-`POST`ing a full notification remains the way to amend everything at
+once (idempotent upsert).
 
 ### Model-driven database schema
 
