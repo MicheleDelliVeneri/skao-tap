@@ -1,20 +1,12 @@
-"""Result-set serialization: VOTable (via astropy), CSV, TSV, JSON.
+"""RESPONSEFORMAT handling and DALI error documents.
 
-TAP/DALI require VOTable as the default output format, with an INFO element
-named QUERY_STATUS carrying OK / ERROR / OVERFLOW.
+Result serialization itself lives in tapcore.results (typed, streaming).
+The convenience serialize() here materializes a stream for small payloads.
 """
 
-import csv
-import datetime
-import io
-import json
-from decimal import Decimal
 from xml.sax.saxutils import escape
 
-import numpy as np
-from astropy.io.votable import from_table
-from astropy.io.votable.tree import Info
-from astropy.table import MaskedColumn, Table
+from .results import ColumnMeta, RowLimiter, stream
 
 # RESPONSEFORMAT aliases -> (canonical key, mime type, file extension)
 FORMATS = {
@@ -27,6 +19,14 @@ FORMATS = {
     "text/tab-separated-values": ("tsv", "text/tab-separated-values", "tsv"),
     "json": ("json", "application/json", "json"),
     "application/json": ("json", "application/json", "json"),
+    "parquet": ("parquet", "application/vnd.apache.parquet", "parquet"),
+    "application/vnd.apache.parquet": ("parquet", "application/vnd.apache.parquet", "parquet"),
+    "arrow": ("arrow", "application/vnd.apache.arrow.stream", "arrows"),
+    "application/vnd.apache.arrow.stream": (
+        "arrow",
+        "application/vnd.apache.arrow.stream",
+        "arrows",
+    ),
 }
 
 DEFAULT_FORMAT = "votable"
@@ -41,67 +41,20 @@ def normalize_format(fmt: str | None) -> tuple[str, str, str]:
         raise ValueError(f"RESPONSEFORMAT={fmt} is not supported") from None
 
 
-def _convert(value):
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
-        return value.isoformat()
-    if isinstance(value, (bytes, memoryview)):
-        return bytes(value).hex()
-    if isinstance(value, (dict, list)):
-        return json.dumps(value)
-    return value
+def serialize(
+    columns: list[ColumnMeta] | list[str],
+    rows: list[tuple],
+    fmt_key: str,
+    maxrec: int | None = None,
+) -> bytes:
+    """Materialize a (small) result set in the given canonical format.
 
-
-def _masked_column(name: str, values: list) -> MaskedColumn:
-    converted = [_convert(v) for v in values]
-    mask = [v is None for v in converted]
-    present = [v for v in converted if v is not None]
-    if any(isinstance(v, str) for v in present):
-        converted = ["" if v is None else str(v) for v in converted]
-    elif any(isinstance(v, float) for v in present):
-        converted = [np.nan if v is None else float(v) for v in converted]
-    elif present and all(isinstance(v, bool) for v in present):
-        converted = [False if v is None else v for v in converted]
-    elif any(isinstance(v, int) for v in present):
-        converted = [0 if v is None else int(v) for v in converted]
-    else:  # all null
-        converted = ["" for _ in converted]
-    return MaskedColumn(converted, name=name, mask=mask)
-
-
-def serialize(names: list[str], rows: list[tuple], fmt_key: str, status: str = "OK") -> bytes:
-    """Serialize a result set in the given canonical format."""
-    if fmt_key == "votable":
-        return _to_votable(names, rows, status)
-    if fmt_key in ("csv", "tsv"):
-        out = io.StringIO()
-        writer = csv.writer(out, delimiter="," if fmt_key == "csv" else "\t")
-        writer.writerow(names)
-        for row in rows:
-            writer.writerow(["" if v is None else _convert(v) for v in row])
-        return out.getvalue().encode("utf-8")
-    if fmt_key == "json":
-        payload = {
-            "status": status,
-            "metadata": [{"name": n} for n in names],
-            "data": [[_convert(v) for v in row] for row in rows],
-        }
-        return json.dumps(payload).encode("utf-8")
-    raise ValueError(f"unknown format key {fmt_key}")
-
-
-def _to_votable(names: list[str], rows: list[tuple], status: str) -> bytes:
-    if rows:
-        table = Table([_masked_column(n, [r[i] for r in rows]) for i, n in enumerate(names)])
-    else:
-        table = Table([MaskedColumn([], name=n, dtype="U1") for n in names])
-    vot = from_table(table)
-    vot.resources[0].type = "results"
-    vot.resources[0].infos.append(Info(name="QUERY_STATUS", value=status))
-    buf = io.BytesIO()
-    vot.to_xml(buf)
-    return buf.getvalue()
+    Accepts plain column names for convenience; MAXREC defaults to the row
+    count, i.e. no overflow.
+    """
+    metas = [ColumnMeta(name=c) if isinstance(c, str) else c for c in columns]
+    limiter = RowLimiter(rows, len(rows) if maxrec is None else maxrec)
+    return b"".join(stream(metas, limiter, fmt_key))
 
 
 def error_votable(message: str) -> bytes:

@@ -45,6 +45,8 @@ def capabilities_xml() -> str:
     <outputFormat><mime>text/csv</mime><alias>csv</alias></outputFormat>
     <outputFormat><mime>text/tab-separated-values</mime><alias>tsv</alias></outputFormat>
     <outputFormat><mime>application/json</mime><alias>json</alias></outputFormat>
+    <outputFormat><mime>application/vnd.apache.parquet</mime><alias>parquet</alias></outputFormat>
+    <outputFormat><mime>application/vnd.apache.arrow.stream</mime><alias>arrow</alias></outputFormat>
     <retentionPeriod><default>{settings.job_retention_s}</default></retentionPeriod>
     <executionDuration><default>{settings.default_exec_duration_s}</default></executionDuration>
     <outputLimit>

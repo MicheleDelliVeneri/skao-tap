@@ -14,10 +14,11 @@ import shutil
 import time
 
 from tapcore import uws
-from tapcore.adql import apply_maxrec
+from tapcore.adql import apply_maxrec, touched_tables
 from tapcore.config import settings
 from tapcore.db import pool
-from tapcore.votable import normalize_format, serialize
+from tapcore.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
+from tapcore.votable import normalize_format
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("tap-executor")
@@ -59,7 +60,15 @@ def execute_job(job: dict) -> None:
         fmt_key, mime, ext = normalize_format(params.get("RESPONSEFORMAT") or params.get("FORMAT"))
         sql = apply_maxrec(job["query_sql"], maxrec)
 
+        result_dir = uws.job_results_dir(job_id)
+        os.makedirs(result_dir, exist_ok=True)
+        result_path = os.path.join(result_dir, f"result.{ext}")
+
+        # stream from a server-side cursor straight into the result file, so
+        # large result sets are never materialized in memory
+        result_size = 0
         with pool().connection() as conn, conn.transaction():
+            tap_meta = tap_schema_metadata(conn, touched_tables(job["query_sql"]))
             timeout_ms = int(job["execution_duration"]) * 1000
             if timeout_ms > 0:
                 conn.execute(
@@ -67,21 +76,14 @@ def execute_job(job: dict) -> None:
                     (str(timeout_ms),),
                 )
             conn.execute(f"SET LOCAL ROLE {settings.query_role}")
-            cur = conn.execute(sql)
-            names = [d.name for d in cur.description]
-            rows = cur.fetchall()
-
-        status = "OK"
-        if len(rows) > maxrec:
-            rows = rows[:maxrec]
-            status = "OVERFLOW"
-        body = serialize(names, rows, fmt_key, status)
-
-        result_dir = uws.job_results_dir(job_id)
-        os.makedirs(result_dir, exist_ok=True)
-        result_path = os.path.join(result_dir, f"result.{ext}")
-        with open(result_path, "wb") as fh:
-            fh.write(body)
+            with conn.cursor(name=f"tap_job_{job_id}") as cur:
+                cur.itersize = 5000
+                cur.execute(sql)
+                columns = columns_from_cursor(cur.description, tap_meta)
+                limiter = RowLimiter(cur, maxrec)
+                with open(result_path, "wb") as fh:
+                    for chunk in stream(columns, limiter, fmt_key):
+                        result_size += fh.write(chunk)
 
         with pool().connection() as conn:
             current = uws.get_job(conn, job_id)
@@ -94,11 +96,12 @@ def execute_job(job: dict) -> None:
                 phase="COMPLETED",
                 end_time=_now(),
                 result_mime=mime,
-                result_size=len(body),
+                result_size=result_size,
             )
-        log.info("job %s completed (%d rows, %s)", job_id, len(rows), status)
+        log.info("job %s completed (%d rows, %s)", job_id, limiter.count, limiter.status)
     except Exception as exc:
         log.exception("job %s failed", job_id)
+        shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
         with pool().connection() as conn:
             uws.update_job(
                 conn,

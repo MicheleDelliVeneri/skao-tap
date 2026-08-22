@@ -186,16 +186,18 @@ PVC (use a ReadWriteMany storage class for multi-node clusters). See
 
 ## Known limitations of this draft
 
+Follow-up work is tracked as numbered packages in `docs/roadmap.md`.
+
 - **No table upload** (`UPLOAD` is rejected with a UsageFault and not
-  declared in capabilities). TAP-mandated inline/HTTP upload is the first
-  candidate for a follow-up.
-- **No authentication** — all jobs are anonymous; `ownerId` is nil.
-- Result sets are fully materialized in memory before serialization
-  (fine for catalogue-scale drafts; switch to server-side cursors +
-  streaming serialization for large tables).
+  declared in capabilities) — package 2.
 - UWS `WAIT` (blocking requests, 1.1) and job list `AFTER` filtering are
   not implemented; `ABORT` marks the job but does not cancel the running
-  backend statement.
-- VOTable columns are typed by value inspection, not yet from
-  `TAP_SCHEMA.columns` (so units/UCDs are not propagated into results).
-- Registry registration (VOResource records) is out of scope here.
+  backend statement — package 3.
+- **No authentication** — all jobs are anonymous; `ownerId` is nil — and
+  registry registration (VOResource records) is not done — package 4.
+
+Resolved by package 1: results now stream from server-side cursors (never
+fully materialized), columns are typed from the cursor and carry
+units/UCDs/descriptions from `TAP_SCHEMA.columns`, and **Parquet** and
+**Arrow IPC** are available via `RESPONSEFORMAT=parquet|arrow` alongside
+VOTable/CSV/TSV/JSON.
