@@ -8,8 +8,9 @@ import secrets
 import time
 from xml.etree import ElementTree as ET
 
+from .auth.context import current_job_viewer
 from .config import settings
-from .errors import NotFoundError
+from .errors import AuthorizationError, NotFoundError
 
 JOB_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
@@ -88,7 +89,23 @@ def get_job(conn, job_id: str) -> dict:
     ).fetchone()
     if row is None:
         raise NotFoundError(f"job {job_id} not found")
-    return _row_to_job(row)
+    job = _row_to_job(row)
+    _check_ownership(job)
+    return job
+
+
+def _check_ownership(job: dict) -> None:
+    """Refuse a job that belongs to somebody else.
+
+    Enforced here rather than at each endpoint: every route that can reach a
+    job — the UWS resources and their sub-resources, the JSON facade, the
+    result download — goes through this function or one of the mutators
+    below, so a newly added resource is covered by construction.
+    """
+    viewer = current_job_viewer()
+    if viewer is None or viewer.may_see(job.get("owner_id")):
+        return
+    raise AuthorizationError(f"job {job['job_id']} belongs to another user")
 
 
 def list_jobs(
@@ -107,6 +124,11 @@ def list_jobs(
     if after is not None:  # UWS 1.1 AFTER: jobs created later than the instant
         sql += " AND creation_time > %s"
         args.append(after)
+    viewer = current_job_viewer()
+    if viewer is not None:
+        # own jobs, plus the ownerless ones anonymous callers create
+        sql += " AND (owner_id IS NULL OR owner_id = %s)"
+        args.append(viewer.subject)
     sql += " ORDER BY creation_time DESC"
     if last:
         sql += " LIMIT %s"
@@ -117,6 +139,7 @@ def list_jobs(
 def update_job(conn, job_id: str, **fields) -> None:
     if not fields:
         return
+    _check_owner_of(conn, job_id)
     sets = ", ".join(f"{k} = %s" for k in fields)
     values = [json.dumps(v) if k == "parameters" else v for k, v in fields.items()]
     cur = conn.execute(f"UPDATE uws.jobs SET {sets} WHERE job_id = %s", (*values, job_id))
@@ -174,9 +197,20 @@ def abort_job(conn, job: dict) -> None:
 
 
 def delete_job(conn, job_id: str) -> None:
+    _check_owner_of(conn, job_id)
     cur = conn.execute("DELETE FROM uws.jobs WHERE job_id = %s", (job_id,))
     if cur.rowcount == 0:
         raise NotFoundError(f"job {job_id} not found")
+
+
+def _check_owner_of(conn, job_id: str) -> None:
+    """Ownership check for the mutators, which do not read the row first."""
+    if current_job_viewer() is None:
+        return
+    row = conn.execute("SELECT owner_id FROM uws.jobs WHERE job_id = %s", (job_id,)).fetchone()
+    if row is None:
+        return  # the mutator reports the missing job itself
+    _check_ownership({"job_id": job_id, "owner_id": row[0]})
 
 
 # ---------------------------------------------------------------------------

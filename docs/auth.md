@@ -197,9 +197,39 @@ reached.
 | Mutating call, valid token with the role | 200 | 200 |
 | Any call, unverifiable token | ignored | `401` |
 
+## Job ownership
+
+When auth is enabled, a job created by an identified caller records that
+caller's subject as its UWS `ownerId`, and becomes private to them:
+
+| | Owned by you | Owned by someone else | Created anonymously |
+| --- | --- | --- | --- |
+| Appears in the job list | yes | no | yes |
+| Readable, abortable, deletable | yes | `403` | yes |
+
+A job created without a token stays ownerless and behaves exactly as it
+always has — there is no identity to protect it with, and querying is
+anonymous by design. Jobs are only private once someone has claimed them.
+
+Ownership is enforced in the job store rather than at each endpoint, so it
+holds for every route that can reach a job: the UWS resources and all their
+sub-resources (`/phase`, `/parameters`, `/results`, …), the JSON facade, and
+the result download. The executor, which has no request and must see every
+job, is unaffected.
+
+One consequence worth knowing: `POST /tap/async` answers `303` pointing at
+the job, and an HTTP client only replays its `Authorization` header on a
+redirect within the same origin. Set `tapApi.baseUrl` to the URL clients
+actually reach the service on, or a redirect-following client will arrive at
+its own job unauthenticated and get `403`.
+
+Deletions name the subject responsible:
+
+```
+INFO tapcore deleted srcnet.software 'ska:demo:1.0.0' by 'a4f1…' (cascading to 1 descendant table(s))
+```
+
 ## Not covered yet
 
-Job ownership (`ownerId`), per-user job visibility and token exchange for
-downstream SRCNet calls remain open — see package 4 in the
-[roadmap](roadmap.md). Deletion audit records currently name the deleted
-document but not the subject that deleted it.
+Token exchange for downstream SRCNet calls, and per-user database schemas or
+quotas — see package 4 in the [roadmap](roadmap.md).

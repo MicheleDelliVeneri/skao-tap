@@ -15,6 +15,7 @@ from tapcore.errors import NotFoundError, UsageError
 from tapcore.query.upload import save_upload_sources
 from tapcore.query.votable import error_votable
 
+from ..auth import owner_of
 from ..queries.params import gather_params
 from ..queries.query import prepare_query
 from ..queries.uploads import gather_upload_files, parse_uploads, resolve_upload_sources
@@ -119,7 +120,7 @@ async def create_job(request: Request):
     sources = resolve_upload_sources(params.get("UPLOAD"), files)
     parse_uploads(sources)  # reject malformed uploads before storing the job
     with pool().connection() as conn:
-        job = uws.create_job(conn, params)
+        job = uws.create_job(conn, params, owner_id=owner_of(request))
         if sources:
             save_upload_sources(job["job_id"], sources)
         if phase and phase.upper() == "RUN":

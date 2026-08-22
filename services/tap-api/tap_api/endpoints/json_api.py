@@ -22,7 +22,7 @@ import os
 import shutil
 import time
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from tapcore import uws
@@ -32,7 +32,7 @@ from tapcore.errors import NotFoundError, UsageError
 from tapcore.metadata import ingest
 from tapcore.metadata.plugins import MetadataPlugin, active_plugins
 
-from ..auth import auth_summary, require
+from ..auth import auth_summary, owner_of, require
 from ..queries.query import prepare_query, run_sync
 
 router = APIRouter(prefix="/api/v1", tags=["json-api"])
@@ -152,13 +152,13 @@ def _queue(conn, job: dict) -> None:
 
 
 @router.post("/jobs", status_code=201)
-async def create_job(body: JobRequest):
+async def create_job(body: JobRequest, request: Request):
     params = _tap_params(body, fmt=body.format)
     if body.run_id:
         params["RUNID"] = body.run_id
     prepare_query(params)  # validate before storing, unlike lenient UWS XML flow
     with pool().connection() as conn:
-        job = uws.create_job(conn, params)
+        job = uws.create_job(conn, params, owner_id=owner_of(request))
         if body.run:
             _queue(conn, job)
         return _job_json(uws.get_job(conn, job["job_id"]))
@@ -359,10 +359,10 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
         return document
 
     @domain.delete("/{root_id}", dependencies=[Depends(require("metadata.delete"))])
-    async def delete_endpoint(root_id: str):
+    async def delete_endpoint(root_id: str, request: Request):
         """Delete a document; generated foreign keys cascade to every child row."""
         with pool().connection() as conn:
-            deleted = ingest.delete_document(conn, plugin, root_id)
+            deleted = ingest.delete_document(conn, plugin, root_id, actor=owner_of(request))
         if not deleted:
             raise NotFoundError(f"{resource} {root_id} not found")
         return {"status": "deleted", id_column: root_id}

@@ -340,3 +340,38 @@ def test_a_failed_plugin_resolve_is_not_cached_as_auth_off(auth_settings):
     for _ in range(2):
         with pytest.raises(LookupError):
             api_auth.plugin()
+
+
+class _DeletingConn:
+    def execute(self, statement, params):
+        return type("Result", (), {"rowcount": 1})()
+
+
+def test_deletion_audit_names_the_subject(caplog):
+    """A cascading deletion must be traceable to a person, not just a time."""
+    import logging
+
+    from tap_api.plugins.software import PLUGIN
+    from tapcore.metadata import ingest
+
+    with caplog.at_level(logging.INFO, logger="tapcore"):
+        ingest.delete_document(_DeletingConn(), PLUGIN, "ska:demo:1.0.0", actor="alice")
+    assert "by 'alice'" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="tapcore"):
+        ingest.delete_document(_DeletingConn(), PLUGIN, "ska:demo:1.0.0")
+    assert "by an unauthenticated caller" in caplog.text
+
+
+def test_deletion_audit_subject_cannot_forge_records(caplog):
+    import logging
+
+    from tap_api.plugins.software import PLUGIN
+    from tapcore.metadata import ingest
+
+    forged = "x\nINFO:tapcore:deleted everything"
+    with caplog.at_level(logging.INFO, logger="tapcore"):
+        ingest.delete_document(_DeletingConn(), PLUGIN, "ska:demo:1", actor=forged)
+    assert len(caplog.records) == 1
+    assert "\n" not in caplog.records[0].getMessage()

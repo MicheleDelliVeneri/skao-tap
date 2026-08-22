@@ -237,6 +237,10 @@ class FakeDB:
             job["start_time"] = datetime.datetime.now(datetime.UTC)
             return FakeResult([_job_row(job)])
 
+        if text.startswith("SELECT owner_id FROM uws.jobs WHERE job_id"):
+            job = self.jobs.get(params[0])
+            return FakeResult([(job["owner_id"],)] if job else [])
+
         if head.startswith("SELECT") and "FROM uws.jobs WHERE job_id" in text:
             job = self.jobs.get(params[0])
             return FakeResult([_job_row(job)] if job else [])
@@ -250,6 +254,10 @@ class FakeDB:
                 jobs = [j for j in self.jobs.values() if j["phase"] != "ARCHIVED"]
             if "creation_time >" in text:
                 jobs = [j for j in jobs if j["creation_time"] > params[index]]
+                index += 1
+            if "owner_id IS NULL OR owner_id =" in text:  # ownership filter
+                subject = params[index]
+                jobs = [j for j in jobs if j["owner_id"] is None or j["owner_id"] == subject]
                 index += 1
             jobs.sort(key=lambda j: j["creation_time"], reverse=True)
             if "LIMIT" in text:

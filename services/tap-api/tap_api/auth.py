@@ -11,7 +11,15 @@ subject when one is available.
 import logging
 
 from fastapi import Request
-from tapcore.auth import ANONYMOUS, Principal, active_auth_plugin, verifier
+from starlette.concurrency import run_in_threadpool
+from tapcore.auth import (
+    ANONYMOUS,
+    Principal,
+    active_auth_plugin,
+    clear_job_viewer,
+    set_job_viewer,
+    verifier,
+)
 from tapcore.config import settings
 from tapcore.errors import AuthenticationError, AuthorizationError
 
@@ -73,36 +81,44 @@ def principal_of(request: Request) -> Principal:
     return resolved
 
 
-def attach_principal(request: Request) -> None:
-    """App-wide dependency: verify any credential the request carries.
-
-    Declared sync on purpose: verification may have to fetch the IAM's
-    discovery document or JWKS, and FastAPI runs sync dependencies in a
-    threadpool instead of blocking the event loop.
+async def attach_principal(request: Request) -> None:
+    """App-wide dependency: verify any credential the request carries, and
+    put the resulting identity in scope for the request.
 
     Registered on every route, not just the gated ones. An endpoint that
     needs no token still must not accept a forged or expired one — silently
     treating an unverifiable credential as "anonymous" would let a broken or
     tampered-with client look like it is working.
+
+    Async, with the verification itself pushed to a threadpool: fetching the
+    IAM's discovery document or JWKS must not block the event loop, but the
+    job viewer has to be set in the request's own task, because a context
+    variable set inside a threadpool would not propagate back out of it.
     """
+    # Set unconditionally, both branches. A context variable is only
+    # guaranteed to be isolated per task, and not every ASGI server (nor the
+    # test client) gives each request a fresh one — leaving it untouched
+    # could let one request be judged against the previous request's
+    # identity, which is the worst possible failure for this variable.
     if plugin() is None:
+        clear_job_viewer()  # no ownership enforcement: behave as before
         return
-    principal_of(request)
+    who = await run_in_threadpool(principal_of, request)
+    set_job_viewer(who.subject)
 
 
 def require(operation: str):
     """A FastAPI dependency gating one operation behind the active plugin.
 
-    The returned dependency is sync so FastAPI runs it in a threadpool: a
-    plugin may call out over the network (the permissions-api one does) and
-    must not block the event loop.
+    A plugin may call out over the network (the permissions-api one does),
+    so the decision runs in a threadpool rather than on the event loop.
     """
 
-    def dependency(request: Request) -> Principal:
+    async def dependency(request: Request) -> Principal:
         active = plugin()
         if active is None:  # auth disabled: behave exactly as before
             return ANONYMOUS
-        who = principal_of(request)
+        who = await run_in_threadpool(principal_of, request)
         if who.is_anonymous:
             raise AuthenticationError(f"{operation} requires a bearer token")
         context = {
@@ -111,13 +127,27 @@ def require(operation: str):
             "route": request.scope["route"].path,
             "path_params": dict(request.path_params),
         }
-        if not active.authorize(who, operation, context):
+        allowed = await run_in_threadpool(active.authorize, who, operation, context)
+        if not allowed:
             log.info("denied %s to subject %s", operation, who.subject)
             raise AuthorizationError(f"not permitted to perform {operation}")
         return who
 
     dependency.__name__ = f"require_{operation.replace('.', '_')}"
     return dependency
+
+
+def owner_of(request: Request) -> str | None:
+    """The subject to record as a new job's owner, or None when anonymous.
+
+    Jobs created without a token stay ownerless, so they behave as they
+    always have; only a job created by an identified caller becomes private
+    to that caller.
+    """
+    if plugin() is None:
+        return None
+    who = getattr(request.state, "principal", None)
+    return who.subject if who is not None else None
 
 
 def auth_summary() -> dict:
