@@ -78,55 +78,54 @@ def tap_service(database_url, tmp_path_factory):
     # session-fixture teardown output)
     logs_dir = REPO_ROOT / ".service-logs"
     logs_dir.mkdir(exist_ok=True)
-    # handles stay open for the subprocesses' lifetime; closed in `finally`
-    api_log = open(logs_dir / "tap-api.log", "wb")  # noqa: SIM115
-    executor_log = open(logs_dir / "tap-executor.log", "wb")  # noqa: SIM115
-    api = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "tap_api.main:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--log-level",
-            "warning",
-        ],
-        env=env,
-        cwd=REPO_ROOT,
-        stdout=api_log,
-        stderr=subprocess.STDOUT,
-    )
-    executor = subprocess.Popen(
-        [sys.executable, "-m", "tap_executor.worker"],
-        env=env,
-        cwd=REPO_ROOT,
-        stdout=executor_log,
-        stderr=subprocess.STDOUT,
-    )
-    try:
-        deadline = time.monotonic() + 30
-        while True:
-            try:
-                if httpx.get(f"{base_url}/availability", timeout=2).status_code == 200:
-                    break
-            except httpx.HTTPError:
-                pass
-            if time.monotonic() > deadline:
-                raise RuntimeError("tap-api did not become available")
-            if api.poll() is not None or executor.poll() is not None:
-                raise RuntimeError("a service process exited during startup")
-            time.sleep(0.3)
-        yield base_url
-    finally:
-        for proc in (api, executor):
-            proc.terminate()
-        for proc in (api, executor):
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-        for handle in (api_log, executor_log):
-            handle.close()
+    with (
+        open(logs_dir / "tap-api.log", "wb") as api_log,
+        open(logs_dir / "tap-executor.log", "wb") as executor_log,
+    ):
+        api = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "tap_api.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--log-level",
+                "warning",
+            ],
+            env=env,
+            cwd=REPO_ROOT,
+            stdout=api_log,
+            stderr=subprocess.STDOUT,
+        )
+        executor = subprocess.Popen(
+            [sys.executable, "-m", "tap_executor.worker"],
+            env=env,
+            cwd=REPO_ROOT,
+            stdout=executor_log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while True:
+                try:
+                    if httpx.get(f"{base_url}/availability", timeout=2).status_code == 200:
+                        break
+                except httpx.HTTPError:
+                    pass
+                if time.monotonic() > deadline:
+                    raise RuntimeError("tap-api did not become available")
+                if api.poll() is not None or executor.poll() is not None:
+                    raise RuntimeError("a service process exited during startup")
+                time.sleep(0.3)
+            yield base_url
+        finally:
+            for proc in (api, executor):
+                proc.terminate()
+            for proc in (api, executor):
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()

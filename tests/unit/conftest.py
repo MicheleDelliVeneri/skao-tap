@@ -183,20 +183,20 @@ class FakeDB:
         if head.startswith("SELECT PG_BACKEND_PID"):
             return FakeResult([(4242,)])
 
-        if head.startswith("SELECT PG_CANCEL_BACKEND"):
+        if "pg_cancel_backend" in text:
             self.cancelled.append(params[0])
             return FakeResult([(True,)])
 
-        if head.startswith("SELECT PG_TERMINATE_BACKEND"):
+        if "pg_terminate_backend" in text:
             self.terminated.append(params[0])
             return FakeResult([(True,)])
+
+        if "FROM pg_stat_activity" in text:
+            return FakeResult()  # cancelled backend no longer active
 
         if text.startswith("SELECT phase FROM uws.jobs"):
             job = self.jobs.get(params[0])
             return FakeResult([(job["phase"],)] if job else [])
-
-        if "FROM pg_stat_activity" in text:
-            return FakeResult()  # cancelled backend no longer active
 
         if text.startswith("SELECT table_name FROM tap_schema.tables"):
             return FakeResult(self.published)
@@ -257,13 +257,49 @@ class FakeDB:
             return FakeResult([_job_row(j) for j in jobs])
 
         if head.startswith("UPDATE UWS.JOBS SET"):
-            names = re.findall(r"(\w+) = %s", text.split("WHERE")[0])
-            job = self.jobs.get(params[-1])
-            if job is None:
-                return FakeResult(rowcount=0)
-            for name, value in zip(names, params[:-1], strict=True):
-                job[name] = json.loads(value) if name == "parameters" else value
-            return FakeResult(rowcount=1)
+            match = re.match(
+                r"UPDATE uws\.jobs SET (.*?) WHERE (.*?)(?: RETURNING (.*))?$", text, re.S
+            )
+            set_part, where_part, returning = match.groups()
+            remaining = list(params)
+            sets = {}
+            for assignment in re.split(r",\s*(?![^(]*\))", set_part):
+                name, _, rhs = assignment.partition("=")
+                name, rhs = name.strip(), rhs.strip()
+                if rhs == "%s":
+                    sets[name] = remaining.pop(0)
+                elif rhs.upper() == "NULL":
+                    sets[name] = None
+                else:
+                    sets[name] = rhs.strip("'")
+            conditions = []
+            for cond in re.split(r"\s+AND\s+", where_part.strip()):
+                name, _, rhs = cond.partition("=")
+                name, rhs = name.strip(), rhs.strip()
+                if rhs == "%s":
+                    conditions.append((name, "eq", remaining.pop(0)))
+                elif rhs.startswith("ANY(%s)"):
+                    conditions.append((name, "in", remaining.pop(0)))
+                else:
+                    conditions.append((name, "eq", rhs.strip("'")))
+            matched = [
+                j
+                for j in self.jobs.values()
+                if all(
+                    (j.get(n) in v) if op == "in" else (j.get(n) == v) for n, op, v in conditions
+                )
+            ]
+            for job in matched:
+                for name, value in sets.items():
+                    job[name] = (
+                        json.loads(value)
+                        if name == "parameters" and isinstance(value, str)
+                        else value
+                    )
+            if returning:
+                cols = [c.strip() for c in returning.split(",")]
+                return FakeResult([tuple(j[c] for c in cols) for j in matched])
+            return FakeResult(rowcount=len(matched))
 
         if head.startswith("DELETE FROM UWS.JOBS WHERE DESTRUCTION"):
             now = datetime.datetime.now(datetime.UTC)

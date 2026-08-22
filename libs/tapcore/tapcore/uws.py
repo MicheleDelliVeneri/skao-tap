@@ -128,38 +128,46 @@ CANCEL_RETRIES = 5
 CANCEL_RETRY_DELAY_S = 0.2
 
 
+def job_query_marker(job_id: str) -> str:
+    """SQL LIKE pattern identifying this job's executing statement (the
+    cursor is named after the job), used to validate a backend's identity
+    before signalling it — a stale or reused PID never gets cancelled."""
+    return f"%tap_job_{job_id}%"
+
+
 def abort_job(conn, job: dict) -> None:
     """Move an active job to ABORTED and cancel its running statement.
 
-    The executor records the PostgreSQL backend PID while the query runs.
-    The phase update is committed *before* pg_cancel_backend() fires, so
-    the executor's cancellation handler always observes ABORTED (an
-    uncommitted update would read as EXECUTING and be misfiled as an
-    error). The job is re-read first so a PID already cleared by a
-    finished execution is never cancelled — that connection is back in the
-    executor's pool. A cancel that lands between statements is a silent
-    no-op, so the statement is re-cancelled while the backend stays active.
+    The transition is a single conditional UPDATE, so a concurrent
+    completion or error can never be overwritten (and the PID used is the
+    one captured atomically by that transition, not a stale snapshot). The
+    update is committed *before* pg_cancel_backend() fires, so the
+    executor's cancellation handler always observes ABORTED. Cancels are
+    validated against pg_stat_activity — the backend must still be running
+    this job's cursor — so a finished or reused PID is never signalled; a
+    cancel that lands between statements is a silent no-op, hence the
+    retry while the statement stays active.
     """
-    job = get_job(conn, job["job_id"])
-    if job["phase"] in FINAL_PHASES:
-        return
-    update_job(
-        conn,
-        job["job_id"],
-        phase="ABORTED",
-        end_time=datetime.datetime.now(datetime.UTC),
-    )
+    row = conn.execute(
+        "UPDATE uws.jobs SET phase = 'ABORTED', end_time = %s"
+        " WHERE job_id = %s AND phase = ANY(%s) RETURNING backend_pid",
+        (datetime.datetime.now(datetime.UTC), job["job_id"], list(ACTIVE_PHASES)),
+    ).fetchone()
     conn.commit()  # make ABORTED visible before the executor is interrupted
-    pid = job["backend_pid"]
-    if not pid:
+    if row is None or not row[0]:  # already final, or no execution to stop
         return
+    pid = row[0]
+    marker = job_query_marker(job["job_id"])
     for _ in range(CANCEL_RETRIES):
-        conn.execute("SELECT pg_cancel_backend(%s)", (pid,))
+        conn.execute(
+            "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE pid = %s AND query LIKE %s",
+            (pid, marker),
+        )
         conn.commit()
         time.sleep(CANCEL_RETRY_DELAY_S)
         active = conn.execute(
-            "SELECT 1 FROM pg_stat_activity WHERE pid = %s AND state = 'active'",
-            (pid,),
+            "SELECT 1 FROM pg_stat_activity WHERE pid = %s AND state = 'active' AND query LIKE %s",
+            (pid, marker),
         ).fetchone()
         if active is None:
             return

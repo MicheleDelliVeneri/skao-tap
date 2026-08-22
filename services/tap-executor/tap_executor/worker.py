@@ -85,6 +85,7 @@ class _AbortWatchdog:
 
     def _run(self):
         cancels = 0
+        marker = uws.job_query_marker(self._job_id)
         while not self._stop.wait(self.POLL_S):
             try:
                 with pool().connection() as conn:
@@ -94,9 +95,15 @@ class _AbortWatchdog:
                     if row is not None and row[0] != "ABORTED":
                         continue
                     # aborted (or deleted): interrupt the running statement,
-                    # and keep doing so until execution ends
+                    # and keep doing so until execution ends. The signal is
+                    # sent only while the backend still runs this job's
+                    # cursor, so a reused PID is never hit.
                     if cancels < self.TERMINATE_AFTER_CANCELS:
-                        conn.execute("SELECT pg_cancel_backend(%s)", (self._pid,))
+                        conn.execute(
+                            "SELECT pg_cancel_backend(pid) FROM pg_stat_activity"
+                            " WHERE pid = %s AND query LIKE %s",
+                            (self._pid, marker),
+                        )
                         cancels += 1
                     else:
                         log.warning(
@@ -105,31 +112,47 @@ class _AbortWatchdog:
                             self._pid,
                             cancels,
                         )
-                        conn.execute("SELECT pg_terminate_backend(%s)", (self._pid,))
+                        conn.execute(
+                            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+                            " WHERE pid = %s AND query LIKE %s",
+                            (self._pid, marker),
+                        )
             except Exception:  # never let monitoring kill the execution path
                 log.exception("abort watchdog check failed for job %s", self._job_id)
 
 
-def _reap_backend(pid: int | None) -> None:
+def _reap_backend(job_id: str, pid: int | None) -> None:
     """After an abort or error, make sure this job's executing backend is
     really gone. Once the executor abandons its connection nothing else
     stops the server side: PostgreSQL only notices a lost client on the
-    next send, so an orphaned backend can keep scanning for minutes."""
+    next send, so an orphaned backend can keep scanning for minutes. All
+    checks and signals are scoped to the backend still running this job's
+    cursor, so a reused PID is never touched."""
     if not pid:
         return
+    marker = uws.job_query_marker(job_id)
     try:
         with pool().connection() as conn:
             for attempt in range(8):
                 row = conn.execute(
-                    "SELECT state FROM pg_stat_activity WHERE pid = %s", (pid,)
+                    "SELECT state FROM pg_stat_activity WHERE pid = %s AND query LIKE %s",
+                    (pid, marker),
                 ).fetchone()
                 if row is None or row[0] != "active":
                     return
                 if attempt < 4:
-                    conn.execute("SELECT pg_cancel_backend(%s)", (pid,))
+                    conn.execute(
+                        "SELECT pg_cancel_backend(pid) FROM pg_stat_activity"
+                        " WHERE pid = %s AND query LIKE %s",
+                        (pid, marker),
+                    )
                 else:
                     log.warning("backend %d survived cancels; terminating", pid)
-                    conn.execute("SELECT pg_terminate_backend(%s)", (pid,))
+                    conn.execute(
+                        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+                        " WHERE pid = %s AND query LIKE %s",
+                        (pid, marker),
+                    )
                 time.sleep(0.5)
     except Exception:
         log.exception("failed to reap backend %s", pid)
@@ -178,13 +201,17 @@ def execute_job(job: dict) -> None:
                     "SELECT set_config('statement_timeout', %s, true)",
                     (str(timeout_ms),),
                 )
-            # publish this backend's PID so ABORT can pg_cancel_backend() it
+            # publish this backend's PID so ABORT can pg_cancel_backend() it —
+            # conditionally, so an ABORT that already landed is honoured
+            # before the query starts and never gains a stale PID
             backend_pid = pid = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
             with pool().connection() as side:
-                uws.update_job(side, job_id, backend_pid=pid)
-                # an ABORT that arrived before the PID was published could
-                # not cancel anything: honor it before starting the query
-                if uws.get_job(side, job_id)["phase"] == "ABORTED":
+                published = side.execute(
+                    "UPDATE uws.jobs SET backend_pid = %s"
+                    " WHERE job_id = %s AND phase = 'EXECUTING'",
+                    (pid, job_id),
+                ).rowcount
+                if not published:
                     shutil.rmtree(result_dir, ignore_errors=True)
                     log.info("job %s aborted before execution", job_id)
                     return
@@ -206,23 +233,23 @@ def execute_job(job: dict) -> None:
                         result_size += fh.write(chunk)
 
         with pool().connection() as conn:
-            current = uws.get_job(conn, job_id)
-            if current["phase"] == "ABORTED":  # aborted while running
-                shutil.rmtree(result_dir, ignore_errors=True)
-                return
-            uws.update_job(
-                conn,
-                job_id,
-                phase="COMPLETED",
-                end_time=_now(),
-                result_mime=mime,
-                result_size=result_size,
-                backend_pid=None,
-            )
+            # atomic transition: an ABORT committed at any point (even
+            # between this statement and the stream ending) can never be
+            # overwritten with COMPLETED
+            completed = conn.execute(
+                "UPDATE uws.jobs SET phase = 'COMPLETED', end_time = %s,"
+                " result_mime = %s, result_size = %s, backend_pid = NULL"
+                " WHERE job_id = %s AND phase = 'EXECUTING'",
+                (_now(), mime, result_size, job_id),
+            ).rowcount
+        if not completed:  # aborted (or deleted) while running
+            shutil.rmtree(result_dir, ignore_errors=True)
+            log.info("job %s finished but was already finalized; discarding", job_id)
+            return
         log.info("job %s completed (%d rows, %s)", job_id, limiter.count, limiter.status)
     except Exception as exc:
         shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
-        _reap_backend(backend_pid)
+        _reap_backend(job_id, backend_pid)
         with pool().connection() as conn:
             current = uws.get_job(conn, job_id)
             if current["phase"] != "ABORTED":
@@ -234,16 +261,17 @@ def execute_job(job: dict) -> None:
                 # ABORT cancelled our statement mid-run: not an error
                 log.info("job %s aborted while executing", job_id)
                 return
-            log.exception("job %s failed", job_id)
-            uws.update_job(
-                conn,
-                job_id,
-                phase="ERROR",
-                end_time=_now(),
-                error_type="fatal",
-                error_message=str(exc)[:4000],
-                backend_pid=None,
-            )
+            # atomic: a racing ABORT wins, never overwritten with ERROR
+            errored = conn.execute(
+                "UPDATE uws.jobs SET phase = 'ERROR', end_time = %s,"
+                " error_type = 'fatal', error_message = %s, backend_pid = NULL"
+                " WHERE job_id = %s AND phase = 'EXECUTING'",
+                (_now(), str(exc)[:4000], job_id),
+            ).rowcount
+            if errored:
+                log.exception("job %s failed", job_id)
+            else:
+                log.info("job %s aborted while executing", job_id)
 
 
 def cleanup_expired() -> None:

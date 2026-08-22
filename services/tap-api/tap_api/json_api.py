@@ -165,7 +165,12 @@ async def list_jobs(phase: str | None = None, last: int | None = None, after: st
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str, wait: int | None = None):
     """Job status; ``wait`` blocks (UWS 1.1 semantics, capped at the server
-    maximum) until the phase changes or the time expires."""
+    maximum; ``-1`` means the maximum) until the phase changes or the time
+    expires."""
+    if wait is not None and wait < -1:
+        raise UsageError("wait must be >= -1")
+    if wait == -1:
+        wait = settings.wait_max_s
     with pool().connection() as conn:
         job = uws.get_job(conn, job_id)
     if wait and job["phase"] in uws.ACTIVE_PHASES:
