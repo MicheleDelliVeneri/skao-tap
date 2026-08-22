@@ -4,35 +4,65 @@ Implements the TAP 1.1 endpoint set: /sync, /async (UWS 1.1), and the VOSI
 resources /capabilities, /availability, /tables, plus DALI /examples.
 """
 
+import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from tapcore.config import settings
-from tapcore.db import close_pool
+from tapcore.db import close_pool, pool
 from tapcore.errors import TAPError
 from tapcore.votable import error_votable
 
 from . import vosi
+from .json_api import router as json_router
 from .params import gather_params
 from .query import prepare_query, run_sync
+from .srcnet import ensure_schema
 from .uws_api import router as uws_router
+
+log = logging.getLogger("tap-api")
+
+
+def _bootstrap_srcnet(attempts: int = 5, delay_s: float = 2.0) -> None:
+    """Create/refresh the srcnet tables generated from the notification models."""
+    for attempt in range(1, attempts + 1):
+        try:
+            with pool().connection() as conn, conn.transaction():
+                ensure_schema(conn)
+            return
+        except Exception as exc:
+            if attempt == attempts:
+                log.error("srcnet bootstrap failed after %d attempts: %s", attempts, exc)
+                return
+            log.warning("srcnet bootstrap attempt %d failed (%s), retrying", attempt, exc)
+            time.sleep(delay_s)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _bootstrap_srcnet()
     yield
     close_pool()
 
 
 app = FastAPI(title="SKAO TAP service", version="0.1.0", lifespan=lifespan)
 app.include_router(uws_router, prefix="/tap/async")
+app.include_router(json_router)
 
 VOTABLE_MIME = "application/x-votable+xml"
 
 
 @app.exception_handler(TAPError)
 async def tap_error_handler(request: Request, exc: TAPError):
+    # DALI mandates VOTable error documents on the TAP endpoints; the JSON
+    # API reports the same errors as JSON.
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {"error": type(exc).__name__, "message": exc.message},
+            status_code=exc.http_status,
+        )
     return Response(
         error_votable(exc.message), status_code=exc.http_status, media_type=VOTABLE_MIME
     )
