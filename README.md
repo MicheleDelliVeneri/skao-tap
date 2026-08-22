@@ -210,8 +210,12 @@ helm test skao-tap -n skao-tap       # in-cluster VOSI + sync smoke test
 The chart deploys `tap-api` (+ Service/optional Ingress), `tap-executor`
 (scale-out safe), an optional in-chart PostgreSQL 16 + pg_sphere
 StatefulSet initialized from the same `db/init` SQL, and a shared results
-PVC (use a ReadWriteMany storage class for multi-node clusters). See
-`docs/deployment.md`.
+PVC (use a ReadWriteMany storage class for multi-node clusters). Resilience
+and operations are chart values: default anti-affinity/zone spread and
+PodDisruptionBudgets for multi-replica services, opt-in
+VerticalPodAutoscalers, `postgresql.tuning` server arguments, and a
+scheduled `pg_dump` backup CronJob — with HA-PostgreSQL, PITR and restore
+procedures documented in `docs/deployment.md`.
 
 ## Known limitations of this draft
 

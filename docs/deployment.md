@@ -33,6 +33,11 @@ Key values (see `values.yaml` for the full list):
 | `postgresql.enabled` | `true` | Deploy the in-chart PostgreSQL + pg_sphere; disable to use an external DB via `externalDatabase.url` |
 | `results.storageClass` / `results.size` | `""` / `1Gi` | Shared results volume |
 | `ingress.enabled` | `false` | Optional ingress for the API |
+| `scheduling.spreadReplicas` | `true` | Soft anti-affinity + zone spread for multi-replica services |
+| `podDisruptionBudget.enabled` | `true` | PDBs for components with >1 replica |
+| `verticalAutoscaling.enabled` | `false` | VPA per service (recommendation mode first) |
+| `postgresql.tuning` | `{}` | postgresql.conf overrides as `-c` server arguments |
+| `backup.enabled` | `false` | Nightly `pg_dump` CronJob to a dedicated PVC |
 
 !!! warning "Results volume access mode"
     The results volume is shared between the API and the executor. With more
@@ -42,6 +47,165 @@ Key values (see `values.yaml` for the full list):
 
 The in-chart PostgreSQL mounts the same `db/init` SQL (copied into the chart
 at `files/db-init/`; CI verifies both copies stay in sync).
+
+## Scaling and resilience
+
+Both services are horizontally scalable: tap-api is stateless, and the
+executors claim jobs with `FOR UPDATE SKIP LOCKED`, so extra replicas
+cooperate instead of colliding. Give each service more than one replica and
+switch the results volume to `ReadWriteMany`:
+
+```bash
+helm upgrade skao-tap deploy/helm/skao-tap \
+  --set tapApi.replicas=3 \
+  --set tapExecutor.replicas=2 \
+  --set "results.accessModes={ReadWriteMany}" \
+  --set results.storageClass=<an RWX-capable class>
+```
+
+With `scheduling.spreadReplicas` (on by default) the chart adds preferred
+pod anti-affinity across nodes and a zone topology-spread constraint to each
+service — soft constraints (`ScheduleAnyway`), so single-node clusters such
+as kind schedule exactly as before. Per-component
+`affinity`/`topologySpreadConstraints`/`nodeSelector`/`tolerations` values
+override the defaults wholesale. Components with more than one replica also
+get a PodDisruptionBudget (`maxUnavailable: 1`), keeping the service up
+through node drains and cluster upgrades.
+
+### Vertical scaling
+
+`verticalAutoscaling.enabled=true` creates a VerticalPodAutoscaler per
+service (requires the [VPA
+CRDs](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler)
+in the cluster). It starts in recommendation mode — read the suggestions
+with `kubectl describe vpa` — and moves to live resizing with
+`verticalAutoscaling.updateMode=Auto` once the `minAllowed`/`maxAllowed`
+bounds are trusted.
+
+The in-chart PostgreSQL is sized through `postgresql.resources` plus
+`postgresql.tuning`, a map rendered as `-c key=value` server arguments:
+
+```yaml
+postgresql:
+  resources:
+    limits:
+      memory: 2Gi
+  tuning:
+    max_connections: 100
+    shared_buffers: 512MB
+    effective_cache_size: 1536MB
+    work_mem: 32MB          # per sort/hash node — large ADQL joins
+    maintenance_work_mem: 128MB
+```
+
+Watch connection counts (each API/executor replica holds a pool),
+`shared_buffers` hit rates, and temp-file spills from large ADQL sorts when
+right-sizing.
+
+### Highly available PostgreSQL
+
+The in-chart StatefulSet is a single instance — fine for development and
+small sites, not for HA. For automated failover run PostgreSQL under a
+streaming-replication operator such as
+[CloudNativePG](https://cloudnative-pg.io) (or Zalando's
+postgres-operator), load `db/init/*.sql` into it once, and point the chart
+at it:
+
+```bash
+helm upgrade skao-tap deploy/helm/skao-tap \
+  --set postgresql.enabled=false \
+  --set externalDatabase.url=postgresql://tap:…@tap-db-rw:5432/tap
+```
+
+The services only need the one DSN, so failover handled by the operator is
+transparent to them. An operator-managed database also brings WAL archiving
+and point-in-time recovery (below).
+
+## Backup and restore
+
+Two things hold state: the PostgreSQL database (UWS jobs, `TAP_SCHEMA`, all
+ingested metadata) and the results volume (query outputs).
+
+### Database
+
+`backup.enabled=true` adds a CronJob that writes `pg_dump --format=custom`
+archives of the whole database to a dedicated PVC and prunes them after
+`backup.retentionDays`:
+
+```bash
+helm upgrade skao-tap deploy/helm/skao-tap \
+  --set backup.enabled=true \
+  --set backup.schedule="0 2 * * *" \
+  --set backup.retentionDays=7 \
+  --set backup.storage=10Gi
+```
+
+It dumps through `TAP_DATABASE_URL`, so it covers the in-chart PostgreSQL
+and an external database alike. Keep `retentionDays` at or above
+`config.jobRetentionSeconds` (default 7 days), or restored deployments will
+be missing jobs their clients still consider alive.
+
+To restore, stop the services so nothing writes during the restore, run
+`pg_restore` from a pod with the backup PVC mounted, then scale back up:
+
+```bash
+kubectl scale deploy skao-tap-tap-api skao-tap-tap-executor --replicas=0
+
+kubectl apply -f - <<'YAML'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pg-restore
+spec:
+  restartPolicy: Never
+  containers:
+    - name: pg-restore
+      image: <the tap-db image>
+      command: ["sh", "-ec"]
+      args:
+        # or name a specific archive instead of the most recent one
+        - |
+          archive=$(ls -t /backups/skao-tap-*.dump | head -1)
+          echo "restoring ${archive}"
+          pg_restore --clean --if-exists -d "$TAP_DATABASE_URL" "${archive}"
+      env:
+        - name: TAP_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: skao-tap-db      # <release>-db
+              key: TAP_DATABASE_URL
+      volumeMounts:
+        - name: backups
+          mountPath: /backups
+  volumes:
+    - name: backups
+      persistentVolumeClaim:
+        claimName: skao-tap-db-backups   # <release>-db-backups
+YAML
+
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-restore --timeout=10m
+kubectl logs pg-restore && kubectl delete pod pg-restore
+kubectl scale deploy skao-tap-tap-api --replicas=1
+kubectl scale deploy skao-tap-tap-executor --replicas=1
+```
+
+Exercise the restore path regularly — an unrestored backup is a hope, not a
+strategy. `pg_dump` gives consistent snapshots but no point-in-time
+recovery; for PITR (base backups plus WAL archiving to object storage) run
+the database under CloudNativePG and use its `Backup`/`ScheduledBackup`
+resources, in which case `backup.enabled` here is redundant.
+
+### Results volume
+
+Job results are re-derivable (any job can be re-run) but re-deriving them
+costs compute, and result URLs are handed to clients. Snapshot the results
+PVC with the storage class's VolumeSnapshot support — or back it up to
+object storage with a tool such as Velero — on a cadence and retention
+aligned with `config.jobRetentionSeconds`: results older than the retention
+window are destroyed anyway, so keeping their backups any longer buys
+nothing. A restored results volume plus a database restored from the same
+window keeps job documents and their result files consistent; results
+missing for a restored job simply 404 and the job can be re-run.
 
 ## Container hardening
 

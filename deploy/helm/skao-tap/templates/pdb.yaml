@@ -1,0 +1,26 @@
+{{- /*
+PodDisruptionBudgets keep at least one pod of each service through voluntary
+disruptions (node drains, cluster upgrades). Only rendered for components
+with more than one replica: with a single replica a maxUnavailable=1 budget
+is a no-op and anything stricter would block drains outright.
+*/}}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- range $component, $replicas := dict "tap-api" (int .Values.tapApi.replicas) "tap-executor" (int .Values.tapExecutor.replicas) }}
+{{- if gt $replicas 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "skao-tap.fullname" $ }}-{{ $component }}
+  labels:
+    {{- include "skao-tap.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  maxUnavailable: {{ $.Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: {{ $component }}
+---
+{{- end }}
+{{- end }}
+{{- end }}
