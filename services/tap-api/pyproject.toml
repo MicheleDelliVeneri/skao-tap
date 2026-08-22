@@ -14,7 +14,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     # SKA SRC notification data models: drive the srcnet DB schema and
     # validate /api/v1/notifications payloads.
-    "ska-src-mm-notification>=0.1.6",
+    "ska-src-mm-notification>=0.1.7",
 ]
 
 [tool.uv.sources]

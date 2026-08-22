@@ -1095,7 +1095,7 @@ wheels = [
 
 [[package]]
 name = "ska-src-mm-notification"
-version = "0.1.6"
+version = "0.1.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "astropy" },
@@ -1103,9 +1103,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4a/03/9cba5a532e9b602368e2afdc1f0c48e01d4608a4b5021b1ae2778ac6d113/ska_src_mm_notification-0.1.6.tar.gz", hash = "sha256:6952ec7e43da92d1ae0c34cb0b33a897717461d56a451072144b046d70dfdf55", size = 38573, upload-time = "2026-08-22T09:11:23.596Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f7/6c/f79c2df167fd1f0f29ea083612cb956d8f3f07184ef7b60e09a3c132cfa1/ska_src_mm_notification-0.1.7.tar.gz", hash = "sha256:3e263963f3da033883b2ddb4801af88d1256d2dfcd1c25dac39d8b3e4cc93cf9", size = 38576, upload-time = "2026-08-22T09:31:56.659Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cf/5a/002c8680164b4c802563489ab117d2088c8f2d5b1327c1e9904bcdff9a03/ska_src_mm_notification-0.1.6-py3-none-any.whl", hash = "sha256:b2ee9da10e67511b545948db1de8b4831f4d253c97d8b846cee910455f0cb39a", size = 48272, upload-time = "2026-08-22T09:11:22.519Z" },
+    { url = "https://files.pythonhosted.org/packages/48/d5/7f77b4457b68de5f8fa91c1481183cc2e08de0ca46450faaae2021f91356/ska_src_mm_notification-0.1.7-py3-none-any.whl", hash = "sha256:701a9e808657006834a14f5e93dc067f9bd8f35e9bd688e2eb727841ef6b80fc", size = 48276, upload-time = "2026-08-22T09:31:55.629Z" },
 ]
 
 [[package]]
@@ -1183,7 +1183,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "ska-src-mm-notification", specifier = ">=0.1.6" },
+    { name = "ska-src-mm-notification", specifier = ">=0.1.7" },
     { name = "tapcore", editable = "libs/tapcore" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
 ]
