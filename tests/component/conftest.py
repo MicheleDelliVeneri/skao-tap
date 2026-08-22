@@ -114,7 +114,7 @@ def tap_service(database_url, tmp_path_factory):
                     if httpx.get(f"{base_url}/availability", timeout=2).status_code == 200:
                         break
                 except httpx.HTTPError:
-                    pass
+                    pass  # connection refused while the service boots: keep polling
                 if time.monotonic() > deadline:
                     raise RuntimeError("tap-api did not become available")
                 if api.poll() is not None or executor.poll() is not None:
