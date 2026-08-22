@@ -6,7 +6,6 @@ import shutil
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
-
 from tapcore import uws
 from tapcore.config import settings
 from tapcore.db import pool
@@ -26,7 +25,7 @@ def _job_url(job_id: str) -> str:
 
 
 def _iso(dt) -> str:
-    return dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _queue(conn, job: dict) -> None:
@@ -105,7 +104,7 @@ async def post_phase(job_id: str, request: Request):
                     conn,
                     job_id,
                     phase="ABORTED",
-                    end_time=datetime.datetime.now(datetime.timezone.utc),
+                    end_time=datetime.datetime.now(datetime.UTC),
                 )
         else:
             raise UsageError("PHASE must be RUN or ABORT")

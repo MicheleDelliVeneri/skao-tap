@@ -39,7 +39,7 @@ RETURNING {uws.JOB_COLUMNS}
 
 
 def _now():
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.UTC)
 
 
 def claim_job() -> dict | None:
@@ -55,26 +55,21 @@ def execute_job(job: dict) -> None:
     params = job["parameters"] or {}
     log.info("executing job %s", job_id)
     try:
-        maxrec = min(
-            int(params.get("MAXREC", settings.default_maxrec)), settings.hard_maxrec
-        )
-        fmt_key, mime, ext = normalize_format(
-            params.get("RESPONSEFORMAT") or params.get("FORMAT")
-        )
+        maxrec = min(int(params.get("MAXREC", settings.default_maxrec)), settings.hard_maxrec)
+        fmt_key, mime, ext = normalize_format(params.get("RESPONSEFORMAT") or params.get("FORMAT"))
         sql = apply_maxrec(job["query_sql"], maxrec)
 
-        with pool().connection() as conn:
-            with conn.transaction():
-                timeout_ms = int(job["execution_duration"]) * 1000
-                if timeout_ms > 0:
-                    conn.execute(
-                        "SELECT set_config('statement_timeout', %s, true)",
-                        (str(timeout_ms),),
-                    )
-                conn.execute(f"SET LOCAL ROLE {settings.query_role}")
-                cur = conn.execute(sql)
-                names = [d.name for d in cur.description]
-                rows = cur.fetchall()
+        with pool().connection() as conn, conn.transaction():
+            timeout_ms = int(job["execution_duration"]) * 1000
+            if timeout_ms > 0:
+                conn.execute(
+                    "SELECT set_config('statement_timeout', %s, true)",
+                    (str(timeout_ms),),
+                )
+            conn.execute(f"SET LOCAL ROLE {settings.query_role}")
+            cur = conn.execute(sql)
+            names = [d.name for d in cur.description]
+            rows = cur.fetchall()
 
         status = "OK"
         if len(rows) > maxrec:

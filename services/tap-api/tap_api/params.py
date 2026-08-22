@@ -2,7 +2,6 @@
 may arrive via query string (GET) or form body (POST)."""
 
 from fastapi import Request
-
 from tapcore.errors import UsageError
 
 
@@ -12,8 +11,7 @@ async def gather_params(request: Request) -> dict[str, str]:
         params[key.upper()] = value
     content_type = request.headers.get("content-type", "")
     if request.method == "POST" and (
-        "application/x-www-form-urlencoded" in content_type
-        or "multipart/form-data" in content_type
+        "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type
     ):
         form = await request.form()
         for key, value in form.multi_items():

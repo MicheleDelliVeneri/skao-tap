@@ -65,16 +65,15 @@ def _published_tables() -> set[str]:
 def run_sync(prepared: dict) -> tuple[bytes, str]:
     """Execute the prepared query and serialize the result."""
     sql = apply_maxrec(prepared["sql"], prepared["maxrec"])
-    with pool().connection() as conn:
-        with conn.transaction():
-            conn.execute(
-                "SELECT set_config('statement_timeout', %s, true)",
-                (str(settings.sync_timeout_s * 1000),),
-            )
-            conn.execute(f"SET LOCAL ROLE {settings.query_role}")
-            cur = conn.execute(sql)
-            names = [d.name for d in cur.description]
-            rows = cur.fetchall()
+    with pool().connection() as conn, conn.transaction():
+        conn.execute(
+            "SELECT set_config('statement_timeout', %s, true)",
+            (str(settings.sync_timeout_s * 1000),),
+        )
+        conn.execute(f"SET LOCAL ROLE {settings.query_role}")
+        cur = conn.execute(sql)
+        names = [d.name for d in cur.description]
+        rows = cur.fetchall()
     status = "OK"
     if len(rows) > prepared["maxrec"]:
         rows = rows[: prepared["maxrec"]]

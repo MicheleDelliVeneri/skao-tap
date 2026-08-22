@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "skao-tap.fullname" . }}-tap-api
+  labels:
+    {{- include "skao-tap.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tap-api
+spec:
+  replicas: {{ .Values.tapApi.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: tap-api
+  template:
+    metadata:
+      labels:
+        {{- include "skao-tap.labels" . | nindent 8 }}
+        app.kubernetes.io/component: tap-api
+    spec:
+      containers:
+        - name: tap-api
+          image: "{{ .Values.image.registry }}/tap-api:{{ include "skao-tap.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.tapApi.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "skao-tap.fullname" . }}-config
+            - secretRef:
+                name: {{ include "skao-tap.fullname" . }}-db
+          volumeMounts:
+            - name: results
+              mountPath: /results
+          readinessProbe:
+            httpGet:
+              path: /tap/availability
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /tap/availability
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.tapApi.resources | nindent 12 }}
+      volumes:
+        - name: results
+          persistentVolumeClaim:
+            claimName: {{ include "skao-tap.fullname" . }}-results

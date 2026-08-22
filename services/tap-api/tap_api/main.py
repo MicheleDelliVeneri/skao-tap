@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
-
 from tapcore.config import settings
 from tapcore.db import close_pool
 from tapcore.errors import TAPError
@@ -72,7 +71,7 @@ async def sync(request: Request):
 
 @app.get("/tap/examples")
 async def examples():
-    body = f"""<!DOCTYPE html>
+    body = """<!DOCTYPE html>
 <html vocab="http://www.ivoa.net/rdf/examples#">
 <head><title>TAP examples</title></head>
 <body>

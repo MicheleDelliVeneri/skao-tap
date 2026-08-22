@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "skao-tap.fullname" . }}-test-availability
+  labels:
+    {{- include "skao-tap.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+spec:
+  restartPolicy: Never
+  containers:
+    - name: check-availability
+      image: curlimages/curl:8.11.1
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          URL="http://{{ include "skao-tap.fullname" . }}-tap-api:{{ .Values.tapApi.port }}/tap"
+          curl -fsS "$URL/availability" | grep -q "<vosi:available>true</vosi:available>"
+          curl -fsS "$URL/capabilities" | grep -q 'standardID="ivo://ivoa.net/std/TAP"'
+          curl -fsS "$URL/sync" \
+            --data-urlencode "LANG=ADQL" \
+            --data-urlencode "QUERY=SELECT table_name FROM tap_schema.tables" \
+            --data-urlencode "RESPONSEFORMAT=csv" | grep -q "tap_schema.tables"

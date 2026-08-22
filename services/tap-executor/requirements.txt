@@ -1,1 +1,0 @@
-# tapcore (installed from ./libs/tapcore) brings psycopg, astropy, queryparser

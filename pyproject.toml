@@ -1,0 +1,69 @@
+# uv workspace root (not an installable package): shared tooling config,
+# dev dependency groups, and the workspace member list.
+[project]
+name = "skao-tap"
+version = "0.1.0"
+description = "SKAO TAP 1.1 server: microservices on PostgreSQL"
+requires-python = ">=3.11"
+dependencies = [
+    "tapcore",
+    "tap-api",
+    "tap-executor",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["libs/tapcore", "services/tap-api", "services/tap-executor"]
+
+[tool.uv.sources]
+tapcore = { workspace = true }
+tap-api = { workspace = true }
+tap-executor = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "pytest>=8.0",
+    "pytest-timeout>=2.3",
+    "httpx>=0.27",
+    "pyvo>=1.5",
+    "requests>=2.31",
+]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["*.egg-info"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "SIM", # simplify
+    "C4",  # comprehensions
+    "RUF", # ruff-specific
+]
+ignore = [
+    "SIM108", # ternary operator not always clearer
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "component: end-to-end tests requiring PostgreSQL and the running services",
+]
+addopts = "-ra"
+timeout = 120

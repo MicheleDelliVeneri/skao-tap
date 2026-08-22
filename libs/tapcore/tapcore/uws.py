@@ -25,7 +25,7 @@ JOB_COLUMNS = (
 
 def _row_to_job(row) -> dict:
     keys = [c.strip() for c in JOB_COLUMNS.split(",")]
-    return dict(zip(keys, row))
+    return dict(zip(keys, row, strict=True))
 
 
 def new_job_id() -> str:
@@ -35,12 +35,12 @@ def new_job_id() -> str:
 def _iso(dt: datetime.datetime | None) -> str | None:
     if dt is None:
         return None
-    return dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def create_job(conn, parameters: dict[str, str], owner_id: str | None = None) -> dict:
     job_id = new_job_id()
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     destruction = now + datetime.timedelta(seconds=settings.job_retention_s)
     conn.execute(
         """
@@ -89,12 +89,8 @@ def update_job(conn, job_id: str, **fields) -> None:
     if not fields:
         return
     sets = ", ".join(f"{k} = %s" for k in fields)
-    values = [
-        json.dumps(v) if k == "parameters" else v for k, v in fields.items()
-    ]
-    cur = conn.execute(
-        f"UPDATE uws.jobs SET {sets} WHERE job_id = %s", (*values, job_id)
-    )
+    values = [json.dumps(v) if k == "parameters" else v for k, v in fields.items()]
+    cur = conn.execute(f"UPDATE uws.jobs SET {sets} WHERE job_id = %s", (*values, job_id))
     if cur.rowcount == 0:
         raise NotFoundError(f"job {job_id} not found")
 
@@ -108,6 +104,7 @@ def delete_job(conn, job_id: str) -> None:
 # ---------------------------------------------------------------------------
 # XML rendering
 # ---------------------------------------------------------------------------
+
 
 def _el(parent, tag, text=None, nil=False, **attrs):
     element = ET.SubElement(parent, f"{{{UWS_NS}}}{tag}", **attrs)
@@ -123,15 +120,21 @@ def result_url(job_id: str) -> str:
 
 
 def job_xml(job: dict) -> bytes:
+    def _nillable(tag: str, value) -> None:
+        if value is None:
+            _el(root, tag, nil=True)
+        else:
+            _el(root, tag, value)
+
     root = ET.Element(f"{{{UWS_NS}}}job", {"version": "1.1"})
     _el(root, "jobId", job["job_id"])
-    _el(root, "runId", job["run_id"]) if job["run_id"] else _el(root, "runId", nil=True)
-    _el(root, "ownerId", job["owner_id"]) if job["owner_id"] else _el(root, "ownerId", nil=True)
+    _nillable("runId", job["run_id"])
+    _nillable("ownerId", job["owner_id"])
     _el(root, "phase", job["phase"])
-    _el(root, "quote", _iso(job["quote"])) if job["quote"] else _el(root, "quote", nil=True)
+    _nillable("quote", _iso(job["quote"]))
     _el(root, "creationTime", _iso(job["creation_time"]))
-    _el(root, "startTime", _iso(job["start_time"])) if job["start_time"] else _el(root, "startTime", nil=True)
-    _el(root, "endTime", _iso(job["end_time"])) if job["end_time"] else _el(root, "endTime", nil=True)
+    _nillable("startTime", _iso(job["start_time"]))
+    _nillable("endTime", _iso(job["end_time"]))
     _el(root, "executionDuration", job["execution_duration"])
     _el(root, "destruction", _iso(job["destruction"]))
 

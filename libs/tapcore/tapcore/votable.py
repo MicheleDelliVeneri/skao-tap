@@ -70,9 +70,7 @@ def _masked_column(name: str, values: list) -> MaskedColumn:
     return MaskedColumn(converted, name=name, mask=mask)
 
 
-def serialize(
-    names: list[str], rows: list[tuple], fmt_key: str, status: str = "OK"
-) -> bytes:
+def serialize(names: list[str], rows: list[tuple], fmt_key: str, status: str = "OK") -> bytes:
     """Serialize a result set in the given canonical format."""
     if fmt_key == "votable":
         return _to_votable(names, rows, status)
@@ -115,4 +113,4 @@ def error_votable(message: str) -> bytes:
         f'    <INFO name="QUERY_STATUS" value="ERROR">{escape(message)}</INFO>\n'
         "  </RESOURCE>\n"
         "</VOTABLE>\n"
-    ).encode("utf-8")
+    ).encode()

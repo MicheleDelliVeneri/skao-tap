@@ -110,6 +110,7 @@ From PyVO:
 
 ```python
 import pyvo
+
 svc = pyvo.dal.TAPService("http://localhost:8080/tap")
 print(svc.search("SELECT TOP 5 * FROM ska.continuum_sources").to_table())
 ```
@@ -132,6 +133,44 @@ All via environment variables (see `tapcore/config.py`): `TAP_DATABASE_URL`,
 `TAP_BASE_URL`, `TAP_RESULTS_DIR`, `TAP_QUERY_ROLE`, `TAP_DEFAULT_MAXREC`,
 `TAP_HARD_MAXREC`, `TAP_SYNC_TIMEOUT`, `TAP_ASYNC_EXEC_DURATION`,
 `TAP_JOB_RETENTION`.
+
+## Development
+
+The repo is a [uv](https://docs.astral.sh/uv/) workspace
+(`libs/tapcore`, `services/tap-api`, `services/tap-executor`):
+
+```bash
+uv sync --all-groups                 # environment with dev + docs groups
+uv run ruff check . && uv run ruff format --check .
+uv run pytest tests/unit             # tapcore/tap-api unit tests
+uv run pytest tests/component       # boots the stack, exercised with PyVO
+uv run --group docs mkdocs serve     # documentation (mkdocs-material)
+```
+
+The component tests use **PyVO** — a standard IVOA client — to verify the
+service behaves as the TAP/UWS/VOSI/DALI specs require: capabilities and
+table metadata, sync queries (formats, `MAXREC`/overflow, geometry,
+`TAP_SCHEMA`), DALI error documents, and the full UWS job lifecycle. They
+need a reachable PostgreSQL (see `docs/development.md`) and skip otherwise.
+
+CI (`.github/workflows/ci.yml`) runs lint, unit, component, docs, and helm
+checks on every push/PR, and builds/pushes the three container images to
+GHCR on `main`. Docs deploy to GitHub Pages via `docs.yml`.
+
+## Kubernetes deployment (Helm)
+
+```bash
+helm upgrade --install skao-tap deploy/helm/skao-tap \
+  --namespace skao-tap --create-namespace \
+  --set tapApi.baseUrl=https://tap.example.org/tap
+helm test skao-tap -n skao-tap       # in-cluster VOSI + sync smoke test
+```
+
+The chart deploys `tap-api` (+ Service/optional Ingress), `tap-executor`
+(scale-out safe), an optional in-chart PostgreSQL 16 + pg_sphere
+StatefulSet initialized from the same `db/init` SQL, and a shared results
+PVC (use a ReadWriteMany storage class for multi-node clusters). See
+`docs/deployment.md`.
 
 ## Known limitations of this draft
 

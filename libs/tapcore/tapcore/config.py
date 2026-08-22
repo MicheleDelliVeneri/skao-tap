@@ -19,9 +19,7 @@ class Settings:
     default_maxrec: int = field(
         default_factory=lambda: int(os.getenv("TAP_DEFAULT_MAXREC", "10000"))
     )
-    hard_maxrec: int = field(
-        default_factory=lambda: int(os.getenv("TAP_HARD_MAXREC", "1000000"))
-    )
+    hard_maxrec: int = field(default_factory=lambda: int(os.getenv("TAP_HARD_MAXREC", "1000000")))
     sync_timeout_s: int = field(default_factory=lambda: int(os.getenv("TAP_SYNC_TIMEOUT", "30")))
     default_exec_duration_s: int = field(
         default_factory=lambda: int(os.getenv("TAP_ASYNC_EXEC_DURATION", "600"))

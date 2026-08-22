@@ -1,0 +1,20 @@
+skao-tap deployed.
+
+TAP base URL (in cluster):
+  http://{{ include "skao-tap.fullname" . }}-tap-api:{{ .Values.tapApi.port }}/tap
+{{- if .Values.ingress.enabled }}
+External:
+  http://{{ .Values.ingress.host }}/tap
+{{- end }}
+
+Try it:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "skao-tap.fullname" . }}-tap-api {{ .Values.tapApi.port }}
+  curl "http://localhost:{{ .Values.tapApi.port }}/tap/sync" \
+    --data-urlencode "LANG=ADQL" \
+    --data-urlencode "QUERY=SELECT TOP 5 * FROM ska.continuum_sources"
+
+Run the chart smoke test:
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+NOTE: with tapExecutor.replicas > 1 or multi-node scheduling, the results
+volume must use a ReadWriteMany-capable storage class (results.accessModes).

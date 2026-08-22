@@ -26,7 +26,7 @@ def availability_xml() -> str:
 
 def capabilities_xml() -> str:
     base = settings.base_url
-    return f'''<?xml version="1.0" encoding="UTF-8"?>
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
 <vosi:capabilities
     xmlns:vosi="http://www.ivoa.net/xml/VOSICapabilities/v1.0"
     xmlns:vod="http://www.ivoa.net/xml/VODataService/v1.1"
@@ -68,7 +68,7 @@ def capabilities_xml() -> str:
     </interface>
   </capability>
 </vosi:capabilities>
-'''
+"""
 
 
 def tables_xml() -> str:

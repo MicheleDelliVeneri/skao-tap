@@ -1,0 +1,74 @@
+# -- Container images. CI publishes ghcr.io/<repo>/{tap-api,tap-executor,tap-db}.
+image:
+  registry: ghcr.io/micheledelliveneri/skao-tap
+  tag: latest
+  pullPolicy: IfNotPresent
+
+tapApi:
+  replicas: 1
+  port: 8080
+  # -- Externally visible base URL, written into capabilities and result
+  # links. Leave empty to default to the in-cluster service URL.
+  baseUrl: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+tapExecutor:
+  # -- Executors claim jobs with FOR UPDATE SKIP LOCKED; scaling out is safe
+  # provided the results volume is ReadWriteMany (see `results`).
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# -- TAP service tuning (mapped to TAP_* environment variables).
+config:
+  defaultMaxrec: 10000
+  hardMaxrec: 1000000
+  syncTimeoutSeconds: 30
+  asyncExecDurationSeconds: 600
+  jobRetentionSeconds: 604800
+  queryRole: tap_reader
+
+# -- Shared volume where the executor writes job results and the API serves
+# them from. With >1 node use a ReadWriteMany storage class.
+results:
+  size: 1Gi
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+
+# -- In-chart PostgreSQL 16 + pg_sphere (the tap-db image), initialized from
+# files/db-init. Disable and set externalDatabase.url to bring your own.
+postgresql:
+  enabled: true
+  image: ""  # defaults to <image.registry>/tap-db:<image.tag>
+  database: tap
+  username: tap
+  password: tap
+  storage: 5Gi
+  storageClass: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+# -- Used when postgresql.enabled=false; full DSN including credentials.
+externalDatabase:
+  url: ""
+
+ingress:
+  enabled: false
+  className: ""
+  host: tap.example.org
+  annotations: {}
+  tls: []
