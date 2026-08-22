@@ -27,8 +27,8 @@ rev = "cfb341ec307ce35f463065455b11317dc1a0ead9"
 # Metadata-domain plugins shipped by this service; third-party model
 # packages register in the same group (see tapcore.plugins).
 [project.entry-points."skao_tap.models"]
-odp = "tap_api.odp:PLUGIN"
-software = "tap_api.software:PLUGIN"
+odp = "tap_api.plugins.odp:PLUGIN"
+software = "tap_api.plugins.software:PLUGIN"
 
 [tool.uv.sources]
 tapcore = { workspace = true }

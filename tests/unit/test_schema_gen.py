@@ -2,7 +2,7 @@
 real ska-src-mm-notification models."""
 
 from ska_src_mm_notification.models.schemas.srcnet_ingestion import SRCIngestionNotification
-from tapcore.schema_gen import build_tables, ddl_statements, registration_statements
+from tapcore.metadata.schema_gen import build_tables, ddl_statements, registration_statements
 
 TABLES = build_tables(SRCIngestionNotification, "srcnet", "projects")
 BY_NAME = {t.name: t for t in TABLES}

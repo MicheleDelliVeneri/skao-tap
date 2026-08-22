@@ -1,4 +1,4 @@
-"""Unit tests for the /api/v1 JSON facade (tap_api.json_api) on the fake pool."""
+"""Unit tests for the /api/v1 JSON facade (tap_api.endpoints.json_api) on the fake pool."""
 
 import os
 

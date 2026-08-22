@@ -10,7 +10,7 @@ from queryparser.adql import ADQLQueryTranslator
 from queryparser.exceptions import QueryError, QuerySyntaxError
 from queryparser.postgresql import PostgreSQLQueryProcessor
 
-from .errors import QueryParseError
+from ..errors import QueryParseError
 
 SUPPORTED_LANGUAGES = {"ADQL", "ADQL-2.0"}
 

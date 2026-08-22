@@ -3,18 +3,18 @@
 import itertools
 from collections.abc import Iterator
 
-from tapcore.adql import adql_to_postgresql, apply_maxrec, check_language, touched_tables
 from tapcore.config import settings
 from tapcore.db import pool
 from tapcore.errors import UsageError
-from tapcore.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
-from tapcore.upload import (
+from tapcore.query.adql import adql_to_postgresql, apply_maxrec, check_language, touched_tables
+from tapcore.query.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
+from tapcore.query.upload import (
     UploadedTable,
     create_upload_tables,
     parse_upload_param,
     rewrite_upload_refs,
 )
-from tapcore.votable import normalize_format
+from tapcore.query.votable import normalize_format
 
 from .params import require
 

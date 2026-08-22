@@ -6,12 +6,12 @@ store — with JSON requests/responses (OpenAPI-documented via FastAPI)
 instead of the XML the VO standards mandate. Standard VO clients keep using
 /tap; services and pipelines can use this API.
 
-It also publishes the active metadata-domain plugins (tapcore.plugins):
+It also publishes the active metadata-domain plugins (tapcore.metadata.plugins):
 each plugin's documents are validated with its own pydantic models and
 stored in tables generated from those same models — so ingested metadata
 is instantly queryable via both this API and TAP/ADQL. The observatory
-data product domain (tap_api.odp, srcnet schema) and the software
-discovery domain (tap_api.software) ship built in; third-party model
+data product domain (tap_api.plugins.odp, srcnet schema) and the software
+discovery domain (tap_api.plugins.software) ship built in; third-party model
 packages register through the skao_tap.models entry-point group.
 """
 
@@ -24,13 +24,14 @@ import time
 from fastapi import APIRouter, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from tapcore import ingest, uws
+from tapcore import uws
 from tapcore.config import settings
 from tapcore.db import pool
 from tapcore.errors import NotFoundError, UsageError
-from tapcore.plugins import MetadataPlugin, active_plugins
+from tapcore.metadata import ingest
+from tapcore.metadata.plugins import MetadataPlugin, active_plugins
 
-from .query import prepare_query, run_sync
+from ..queries.query import prepare_query, run_sync
 
 router = APIRouter(prefix="/api/v1", tags=["json-api"])
 
@@ -259,7 +260,7 @@ async def tables():
 
 # ---------------------------------------------------------------------------
 # Metadata-domain plugins: one ingest/list/fetch/amend endpoint set per
-# active plugin (see tapcore.plugins), mounted at /api/v1/<plugin.mount>
+# active plugin (see tapcore.metadata.plugins), mounted at /api/v1/<plugin.mount>
 # ---------------------------------------------------------------------------
 
 

@@ -1,9 +1,9 @@
 """Generic metadata ingestion for plugin-defined model hierarchies:
 schema bootstrap, hierarchical upserts, amendments, document rebuilds.
 
-All functions are parameterized by a :class:`tapcore.plugins.MetadataPlugin`
+All functions are parameterized by a :class:`tapcore.metadata.plugins.MetadataPlugin`
 — the relational layout is derived from the plugin's pydantic models by
-:mod:`tapcore.schema_gen`, so a new model release that adds fields or
+:mod:`tapcore.metadata.schema_gen`, so a new model release that adds fields or
 levels changes the database schema and the TAP_SCHEMA registration
 automatically (existing tables are migrated forward at startup).
 """
@@ -17,8 +17,8 @@ from enum import Enum
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from .config import settings
-from .errors import UsageError
+from ..config import settings
+from ..errors import UsageError
 from .plugins import MetadataPlugin
 from .schema_gen import TableSpec, ddl_statements, registration_statements
 

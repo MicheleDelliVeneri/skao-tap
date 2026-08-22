@@ -1,8 +1,8 @@
 """Unit tests for ADQL translation (queryparser-backed)."""
 
 import pytest
-from tapcore.adql import adql_to_postgresql, apply_maxrec, check_language, touched_tables
 from tapcore.errors import QueryParseError
+from tapcore.query.adql import adql_to_postgresql, apply_maxrec, check_language, touched_tables
 
 
 def test_plain_select_translates():

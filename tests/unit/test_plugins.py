@@ -1,12 +1,12 @@
-"""Unit tests for the metadata plugin system (tapcore.plugins) and the
+"""Unit tests for the metadata plugin system (tapcore.metadata.plugins) and the
 built-in software discovery domain."""
 
 import datetime
 
 import pytest
 from tapcore.config import settings
-from tapcore.plugins import active_plugins, discovered_plugins
-from tapcore.schema_gen import build_tables
+from tapcore.metadata.plugins import active_plugins, discovered_plugins
+from tapcore.metadata.schema_gen import build_tables
 
 SOFTWARE_PAYLOAD = {
     "uri": "ska:dsc-037-delay-ps:0.1.3",

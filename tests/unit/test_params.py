@@ -3,7 +3,7 @@
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from tap_api.params import gather_params, require
+from tap_api.queries.params import gather_params, require
 from tapcore.errors import UsageError
 
 app = FastAPI()

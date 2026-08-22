@@ -96,7 +96,7 @@ once (idempotent upsert).
 ### Model-driven database schema
 
 Each plugin's tables are **generated from its pydantic models at startup**
-(`tapcore/schema_gen.py`):
+(`tapcore/metadata/schema_gen.py`):
 
 - each `list[Model]` level becomes a child table with a composite primary
   key following the identity chain (`*_id` fields by convention,

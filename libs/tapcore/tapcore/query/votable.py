@@ -1,6 +1,6 @@
 """RESPONSEFORMAT handling and DALI error documents.
 
-Result serialization itself lives in tapcore.results (typed, streaming).
+Result serialization itself lives in tapcore.query.results (typed, streaming).
 The convenience serialize() here materializes a stream for small payloads.
 """
 

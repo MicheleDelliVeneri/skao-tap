@@ -6,7 +6,7 @@ notification library, the software discovery model) to a SQL schema, a
 JSON API mount point, and identity conventions. Everything downstream —
 table generation, TAP_SCHEMA registration, automatic column migration,
 the ingest/fetch/amend endpoints — is generic and instantiated once per
-active plugin (:mod:`tapcore.schema_gen`, :mod:`tapcore.ingest`).
+active plugin (:mod:`tapcore.metadata.schema_gen`, :mod:`tapcore.metadata.ingest`).
 
 Discovery uses the ``skao_tap.models`` entry-point group, so a third-party
 model package makes itself available simply by being installed alongside
@@ -27,7 +27,7 @@ from importlib.metadata import entry_points
 
 from pydantic import BaseModel
 
-from .config import settings
+from ..config import settings
 from .schema_gen import TableSpec, build_tables
 
 log = logging.getLogger("tapcore")

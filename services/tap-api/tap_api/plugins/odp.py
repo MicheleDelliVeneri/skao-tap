@@ -3,14 +3,14 @@
 Binds the ska-src-mm-notification pydantic models to the ``srcnet`` SQL
 schema (its public, ADQL-facing name) and the ``/api/v1/notifications``
 mount. All machinery is the shared, model-driven pipeline in
-:mod:`tapcore.schema_gen` and :mod:`tapcore.ingest` — a new library
+:mod:`tapcore.metadata.schema_gen` and :mod:`tapcore.metadata.ingest` — a new library
 release that adds fields or levels changes the database schema and the
 TAP_SCHEMA registration automatically.
 """
 
 from ska_src_mm_notification.models.schemas.srcnet_ingestion import SRCIngestionNotification
-from tapcore import ingest
-from tapcore.plugins import MetadataPlugin
+from tapcore.metadata import ingest
+from tapcore.metadata.plugins import MetadataPlugin
 
 PLUGIN = MetadataPlugin(
     name="odp",

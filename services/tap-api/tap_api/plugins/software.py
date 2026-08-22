@@ -10,7 +10,7 @@ prefixed columns by the shared schema generator.
 """
 
 from ska_src_sdm import Software
-from tapcore.plugins import MetadataPlugin
+from tapcore.metadata.plugins import MetadataPlugin
 
 PLUGIN = MetadataPlugin(
     name="software",

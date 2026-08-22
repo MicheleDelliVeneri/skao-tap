@@ -13,7 +13,7 @@ requests on the job and phase resources, `AFTER` job-list filtering, and
 real `ABORT` that cancels the executing statement via the backend PID and
 `pg_cancel_backend()`), and package 6 (plugin-based metadata databases:
 domains bind a pydantic model package to a SQL schema and mount point via
-a small contract, the shared machinery in `tapcore.schema_gen`/`ingest`
+a small contract, the shared machinery in `tapcore.metadata`
 does the rest, third-party packages register through the
 `skao_tap.models` entry-point group, and `TAP_MODEL_PLUGINS` selects what
 a deployment activates; the ODP/srcnet and software-discovery domains

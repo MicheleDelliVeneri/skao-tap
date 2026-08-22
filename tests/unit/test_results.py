@@ -7,8 +7,8 @@ from decimal import Decimal
 from xml.etree import ElementTree as ET
 
 import pytest
-from tapcore.results import ColumnMeta, RowLimiter, stream
-from tapcore.votable import error_votable, normalize_format, serialize
+from tapcore.query.results import ColumnMeta, RowLimiter, stream
+from tapcore.query.votable import error_votable, normalize_format, serialize
 
 VOT_NS = {"v": "http://www.ivoa.net/xml/VOTable/v1.3"}
 

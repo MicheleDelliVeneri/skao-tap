@@ -74,7 +74,7 @@ def test_repeated_upload_parameters_accumulate(client, fake_db):
 
 
 def test_http_uri_upload_fetch(client, fake_db, monkeypatch):
-    from tap_api import uploads
+    from tap_api.queries import uploads
 
     monkeypatch.setattr(uploads, "_fetch", lambda uri: VOTABLE)
     response = client.post(
@@ -87,7 +87,7 @@ def test_http_uri_upload_fetch(client, fake_db, monkeypatch):
 def test_fetch_size_cap(monkeypatch):
     import urllib.request
 
-    from tap_api import uploads
+    from tap_api.queries import uploads
     from tapcore.config import settings
 
     class Huge:

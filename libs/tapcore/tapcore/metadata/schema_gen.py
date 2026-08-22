@@ -1,6 +1,6 @@
 """Automatic relational schema generation from pydantic data models.
 
-A metadata-domain model hierarchy (see :mod:`tapcore.plugins`) is walked
+A metadata-domain model hierarchy (see :mod:`tapcore.metadata.plugins`) is walked
 generically:
 
 - every ``list[BaseModel]`` field becomes a child table named after the field;

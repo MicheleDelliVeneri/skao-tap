@@ -15,19 +15,19 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
-from tapcore import ingest
 from tapcore.config import settings
 from tapcore.db import close_pool, pool
 from tapcore.errors import TAPError
-from tapcore.plugins import active_plugins
-from tapcore.votable import error_votable
+from tapcore.metadata import ingest
+from tapcore.metadata.plugins import active_plugins
+from tapcore.query.votable import error_votable
 
-from . import vosi
-from .json_api import router as json_router
-from .params import gather_params
-from .query import prepare_query, run_sync
-from .uploads import gather_upload_files, parse_uploads, resolve_upload_sources
-from .uws_api import router as uws_router
+from .endpoints import vosi
+from .endpoints.json_api import router as json_router
+from .endpoints.uws_api import router as uws_router
+from .queries.params import gather_params
+from .queries.query import prepare_query, run_sync
+from .queries.uploads import gather_upload_files, parse_uploads, resolve_upload_sources
 
 log = logging.getLogger("tap-api")
 
