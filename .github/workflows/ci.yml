@@ -33,7 +33,14 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - run: uv sync --locked --all-groups
-      - run: uv run pytest tests/unit -v
+      - run: uv run pytest tests/unit -v --cov --cov-report=xml
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          flags: unit
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
   component:
     name: Component tests (PyVO vs IVOA TAP)
@@ -52,9 +59,16 @@ jobs:
           sudo -u postgres psql -c "CREATE USER tap WITH PASSWORD 'tap' SUPERUSER"
           sudo -u postgres psql -c "CREATE DATABASE tap OWNER tap"
       - run: uv sync --locked --all-groups
-      - run: uv run pytest tests/component -v
+      - run: uv run pytest tests/component -v --cov --cov-report=xml
         env:
           TAP_TEST_ADMIN_URL: postgresql://tap:tap@127.0.0.1:5432/postgres
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          flags: component
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
   docs:
     name: Docs build
