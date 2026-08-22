@@ -105,6 +105,7 @@ class FakeDB:
         now = datetime.datetime.now(datetime.UTC)
         self.closed = False
         self.cancelled: list[int] = []
+        self.terminated: list[int] = []
         self.jobs: dict[str, dict] = {}
         self.srcnet: dict[str, dict[tuple, dict]] = {}
         self.statements: list[str] = []
@@ -185,6 +186,14 @@ class FakeDB:
         if head.startswith("SELECT PG_CANCEL_BACKEND"):
             self.cancelled.append(params[0])
             return FakeResult([(True,)])
+
+        if head.startswith("SELECT PG_TERMINATE_BACKEND"):
+            self.terminated.append(params[0])
+            return FakeResult([(True,)])
+
+        if text.startswith("SELECT phase FROM uws.jobs"):
+            job = self.jobs.get(params[0])
+            return FakeResult([(job["phase"],)] if job else [])
 
         if "FROM pg_stat_activity" in text:
             return FakeResult()  # cancelled backend no longer active

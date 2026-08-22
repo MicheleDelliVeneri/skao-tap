@@ -59,10 +59,15 @@ class _AbortWatchdog:
     statements (a cancel on an idle backend is a silent no-op). This
     watchdog closes those windows from the executor's side: it re-checks
     the job phase twice a second for the whole execution and keeps
-    cancelling the backend until the statement actually stops.
+    cancelling the backend until the statement actually stops. Some backend
+    states honour cancellation only sporadically (e.g. deep in the
+    planner), so after a few ignored cancels it escalates to
+    pg_terminate_backend — safe here because the execution is read-only
+    and the executor already handles a dead connection as an abort.
     """
 
     POLL_S = 0.5
+    TERMINATE_AFTER_CANCELS = 6  # ~3s of ignored cancels
 
     def __init__(self, job_id: str, backend_pid: int):
         self._job_id = job_id
@@ -79,6 +84,7 @@ class _AbortWatchdog:
         self._thread.join(timeout=5)
 
     def _run(self):
+        cancels = 0
         while not self._stop.wait(self.POLL_S):
             try:
                 with pool().connection() as conn:
@@ -89,7 +95,17 @@ class _AbortWatchdog:
                         continue
                     # aborted (or deleted): interrupt the running statement,
                     # and keep doing so until execution ends
-                    conn.execute("SELECT pg_cancel_backend(%s)", (self._pid,))
+                    if cancels < self.TERMINATE_AFTER_CANCELS:
+                        conn.execute("SELECT pg_cancel_backend(%s)", (self._pid,))
+                        cancels += 1
+                    else:
+                        log.warning(
+                            "job %s backend %d ignored %d cancels, terminating it",
+                            self._job_id,
+                            self._pid,
+                            cancels,
+                        )
+                        conn.execute("SELECT pg_terminate_backend(%s)", (self._pid,))
             except Exception:  # never let monitoring kill the execution path
                 log.exception("abort watchdog check failed for job %s", self._job_id)
 

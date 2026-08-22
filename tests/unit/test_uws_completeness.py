@@ -158,3 +158,32 @@ def test_abort_skips_cancel_when_pid_already_cleared(client, fake_db):
         uws.abort_job(conn, stale)
     assert fake_db.jobs[job["job_id"]]["phase"] == "ABORTED"
     assert fake_db.cancelled == []
+
+
+def test_watchdog_cancels_then_escalates_to_terminate(fake_db, monkeypatch):
+    import time as time_module
+
+    from tap_executor import worker
+
+    monkeypatch.setattr(worker._AbortWatchdog, "POLL_S", 0.01)
+    monkeypatch.setattr(worker._AbortWatchdog, "TERMINATE_AFTER_CANCELS", 3)
+    job = fake_db.add_job(phase="ABORTED")
+    with worker._AbortWatchdog(job["job_id"], 4242):
+        deadline = time_module.monotonic() + 2
+        while not fake_db.terminated and time_module.monotonic() < deadline:
+            time_module.sleep(0.01)
+    assert fake_db.cancelled == [4242, 4242, 4242]  # bounded cancels first
+    assert fake_db.terminated and fake_db.terminated[0] == 4242
+
+
+def test_watchdog_stays_quiet_while_job_active(fake_db, monkeypatch):
+    import time as time_module
+
+    from tap_executor import worker
+
+    monkeypatch.setattr(worker._AbortWatchdog, "POLL_S", 0.01)
+    job = fake_db.add_job(phase="EXECUTING")
+    with worker._AbortWatchdog(job["job_id"], 4242):
+        time_module.sleep(0.1)
+    assert fake_db.cancelled == []
+    assert fake_db.terminated == []

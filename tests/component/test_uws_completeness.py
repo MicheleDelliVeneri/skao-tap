@@ -105,9 +105,11 @@ def test_abort_cancels_running_query(tap_service, database_url):
 
     # the backend really stopped: no active statement still counting
     with psycopg.connect(database_url) as conn:
-        for _ in range(20):
+        for _ in range(30):
             active = conn.execute(
-                "SELECT pid, state, left(query, 60) FROM pg_stat_activity"
+                "SELECT pid, state, wait_event_type, wait_event,"
+                " now() - query_start AS running_for, left(query, 60)"
+                " FROM pg_stat_activity"
                 " WHERE state = 'active' AND query ILIKE '%%tap_job_%%'"
                 " AND pid <> pg_backend_pid()"  # not this introspection query
             ).fetchall()
