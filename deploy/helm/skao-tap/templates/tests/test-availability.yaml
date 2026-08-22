@@ -37,4 +37,4 @@ spec:
             -F "UPLOAD=mine,param:mine" \
             -F "QUERY=SELECT u.label FROM TAP_UPLOAD.mine AS u" \
             -F "RESPONSEFORMAT=csv" \
-            -F "mine=@/tmp/upload.vot;type=application/x-votable+xml" | grep -q "helm-e2e"
+            -F "mine=@/tmp/upload.vot" | grep -q "helm-e2e"
