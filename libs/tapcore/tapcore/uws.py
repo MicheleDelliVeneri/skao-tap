@@ -128,8 +128,11 @@ def abort_job(conn, job: dict) -> None:
 
     The executor records the PostgreSQL backend PID while the query runs;
     pg_cancel_backend() interrupts that statement, and the executor treats
-    the resulting cancellation as an abort rather than an error.
+    the resulting cancellation as an abort rather than an error. The job is
+    re-read here so a PID already cleared by a finished execution is not
+    cancelled — that connection is back in the executor's pool.
     """
+    job = get_job(conn, job["job_id"])
     if job["phase"] in FINAL_PHASES:
         return
     update_job(

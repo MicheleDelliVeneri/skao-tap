@@ -171,13 +171,18 @@ def main() -> None:
     _ensure_backend_pid_column()
     last_cleanup = 0.0
     while True:
-        job = claim_job()
-        if job is not None:
-            execute_job(job)
-            continue
-        if time.monotonic() - last_cleanup > CLEANUP_INTERVAL_S:
-            cleanup_expired()
-            last_cleanup = time.monotonic()
+        # survive transient failures (e.g. an ABORT's pg_cancel_backend
+        # racing a finished execution and cancelling a pooled connection)
+        try:
+            job = claim_job()
+            if job is not None:
+                execute_job(job)
+                continue
+            if time.monotonic() - last_cleanup > CLEANUP_INTERVAL_S:
+                cleanup_expired()
+                last_cleanup = time.monotonic()
+        except Exception:
+            log.exception("executor loop error, retrying")
         time.sleep(POLL_INTERVAL_S)
 
 

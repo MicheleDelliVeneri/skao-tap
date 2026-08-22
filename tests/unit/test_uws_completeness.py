@@ -143,3 +143,18 @@ def test_executor_treats_cancellation_of_aborted_job_as_abort(fake_db, results_d
     stored = fake_db.jobs[job["job_id"]]
     assert stored["phase"] == "ABORTED"
     assert stored["error_message"] is None
+
+
+def test_abort_skips_cancel_when_pid_already_cleared(client, fake_db):
+    """A finished execution clears backend_pid; an ABORT racing it must not
+    cancel the PID from its stale read — that connection is pooled again."""
+    job = fake_db.add_job(phase="EXECUTING", backend_pid=4242)
+    stale = dict(job)  # what the API handler read before the executor finished
+    fake_db.jobs[job["job_id"]]["backend_pid"] = None
+    from tapcore import uws
+    from tapcore.db import pool
+
+    with pool().connection() as conn:
+        uws.abort_job(conn, stale)
+    assert fake_db.jobs[job["job_id"]]["phase"] == "ABORTED"
+    assert fake_db.cancelled == []
