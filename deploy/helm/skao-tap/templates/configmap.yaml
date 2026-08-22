@@ -8,8 +8,9 @@ data:
   TAP_BASE_URL: {{ include "skao-tap.baseUrl" . | quote }}
   TAP_RESULTS_DIR: /results
   TAP_QUERY_ROLE: {{ .Values.config.queryRole | quote }}
-  TAP_DEFAULT_MAXREC: {{ .Values.config.defaultMaxrec | quote }}
-  TAP_HARD_MAXREC: {{ .Values.config.hardMaxrec | quote }}
-  TAP_SYNC_TIMEOUT: {{ .Values.config.syncTimeoutSeconds | quote }}
-  TAP_ASYNC_EXEC_DURATION: {{ .Values.config.asyncExecDurationSeconds | quote }}
-  TAP_JOB_RETENTION: {{ .Values.config.jobRetentionSeconds | quote }}
+  {{- /* int64 guards against Helm rendering large numbers as 1e+06 */}}
+  TAP_DEFAULT_MAXREC: {{ .Values.config.defaultMaxrec | int64 | quote }}
+  TAP_HARD_MAXREC: {{ .Values.config.hardMaxrec | int64 | quote }}
+  TAP_SYNC_TIMEOUT: {{ .Values.config.syncTimeoutSeconds | int64 | quote }}
+  TAP_ASYNC_EXEC_DURATION: {{ .Values.config.asyncExecDurationSeconds | int64 | quote }}
+  TAP_JOB_RETENTION: {{ .Values.config.jobRetentionSeconds | int64 | quote }}

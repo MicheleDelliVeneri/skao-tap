@@ -196,8 +196,6 @@ PVC (use a ReadWriteMany storage class for multi-node clusters). See
 
 Follow-up work is tracked as numbered packages in `docs/roadmap.md`.
 
-- **No table upload** (`UPLOAD` is rejected with a UsageFault and not
-  declared in capabilities) — package 2.
 - UWS `WAIT` (blocking requests, 1.1) and job list `AFTER` filtering are
   not implemented; `ABORT` marks the job but does not cancel the running
   backend statement — package 3.
@@ -209,3 +207,10 @@ fully materialized), columns are typed from the cursor and carry
 units/UCDs/descriptions from `TAP_SCHEMA.columns`, and **Parquet** and
 **Arrow IPC** are available via `RESPONSEFORMAT=parquet|arrow` alongside
 VOTable/CSV/TSV/JSON.
+
+Resolved by package 2: **table upload** (`UPLOAD`) is supported on /sync
+and /async — inline multipart VOTables (`param:`) and `http(s)` URIs,
+queried as `TAP_UPLOAD.<name>` via per-query temporary tables, with
+`uploadMethods` and the row limit declared in capabilities
+(TABLEDATA serialization only; limits via `TAP_UPLOAD_MAX_ROWS` /
+`TAP_UPLOAD_MAX_BYTES`).

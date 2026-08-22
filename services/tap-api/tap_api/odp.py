@@ -1,9 +1,11 @@
-"""SRCNet notification ingestion: schema bootstrap and hierarchical upserts.
+"""Observatory data product (ODP) metadata: ingestion of SRC notifications
+into the ``srcnet`` schema — bootstrap, hierarchical upserts, amendments.
 
 The relational layout is derived at import time from the
 ska-src-mm-notification pydantic models by :mod:`tap_api.schema_gen`, so a
 new library release that adds fields or levels changes the database schema
-and the TAP_SCHEMA registration automatically.
+and the TAP_SCHEMA registration automatically. (``srcnet`` stays the SQL
+schema name — it is the public, ADQL-facing name existing queries use.)
 """
 
 import json
@@ -11,9 +13,10 @@ import logging
 from enum import Enum
 
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from ska_src_mm_notification.models.schemas.srcnet_ingestion import SRCIngestionNotification
 from tapcore.config import settings
+from tapcore.errors import UsageError
 
 from .schema_gen import TableSpec, build_tables, ddl_statements, registration_statements
 
@@ -90,6 +93,56 @@ def ingest_notification(conn, notification: SRCIngestionNotification) -> dict[st
 
     store(TABLES[0], notification, {})
     return counts
+
+
+def amend_rows(conn, project_id: str, table_name: str, match: dict, values: dict) -> int:
+    """Partial update of already-ingested rows — e.g. backfilling a column
+    added by a newer data-model release without re-sending notifications.
+
+    ``table_name`` is the model-level name (projects, observations, ...,
+    artifacts); ``match`` narrows the rows by column equality (empty = all
+    rows of the project); ``values`` are the columns to set. Every value is
+    validated against the pydantic field it maps to, so amendments obey the
+    same constraints as ingestion. Key columns cannot be changed or used
+    with wrong names; the update is always scoped to the project.
+
+    Returns the number of rows updated.
+    """
+    table = next((t for t in TABLES if t.name == table_name), None)
+    if table is None:
+        names = ", ".join(t.name for t in TABLES)
+        raise UsageError(f"unknown table {table_name!r} (one of: {names})")
+    columns = {c.name for c in table.columns}
+    keys = set(table.pk_columns)
+
+    if not values:
+        raise UsageError("values must contain at least one column to set")
+    for column, value in values.items():
+        if column not in columns:
+            raise UsageError(f"{table_name} has no column {column!r}")
+        if column in keys:
+            raise UsageError(f"{column} is a key column and cannot be amended")
+        field = table.model.model_fields.get(column)
+        if field is not None:
+            try:
+                values[column] = TypeAdapter(field.annotation).validate_python(value)
+            except ValidationError as exc:
+                errors = "; ".join(e["msg"] for e in exc.errors())
+                raise UsageError(f"invalid value for {table_name}.{column}: {errors}") from None
+    for column in match:
+        if column not in columns:
+            raise UsageError(f"{table_name} has no column {column!r} to match on")
+
+    conditions = dict(match)
+    conditions["project_id"] = project_id
+    sets = ", ".join(f"{c} = %s" for c in values)
+    where = " AND ".join(f"{c} = %s" for c in conditions)
+    cur = conn.execute(
+        f"UPDATE {table.qualified} SET {sets} WHERE {where}",
+        tuple(_column_value(v) for v in values.values())
+        + tuple(_column_value(v) for v in conditions.values()),
+    )
+    return cur.rowcount
 
 
 def fetch_notification(conn, project_id: str) -> dict | None:

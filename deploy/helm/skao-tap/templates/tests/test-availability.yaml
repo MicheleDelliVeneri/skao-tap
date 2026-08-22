@@ -19,7 +19,22 @@ spec:
           URL="http://{{ include "skao-tap.fullname" . }}-tap-api:{{ .Values.tapApi.port }}/tap"
           curl -fsS "$URL/availability" | grep -q "<vosi:available>true</vosi:available>"
           curl -fsS "$URL/capabilities" | grep -q 'standardID="ivo://ivoa.net/std/TAP"'
+          curl -fsS "$URL/capabilities" | grep -q 'TAPRegExt#upload-inline'
           curl -fsS "$URL/sync" \
             --data-urlencode "LANG=ADQL" \
             --data-urlencode "QUERY=SELECT table_name FROM tap_schema.tables" \
             --data-urlencode "RESPONSEFORMAT=csv" | grep -q "tap_schema.tables"
+          cat > /tmp/upload.vot <<'VOT'
+          <?xml version="1.0"?>
+          <VOTABLE version="1.4" xmlns="http://www.ivoa.net/xml/VOTable/v1.3">
+          <RESOURCE><TABLE>
+          <FIELD name="label" datatype="char" arraysize="*"/>
+          <DATA><TABLEDATA><TR><TD>helm-e2e</TD></TR></TABLEDATA></DATA>
+          </TABLE></RESOURCE></VOTABLE>
+          VOT
+          curl -fsS "$URL/sync" \
+            -F "LANG=ADQL" \
+            -F "UPLOAD=mine,param:mine" \
+            -F "QUERY=SELECT u.label FROM TAP_UPLOAD.mine AS u" \
+            -F "RESPONSEFORMAT=csv" \
+            -F "mine=@/tmp/upload.vot" | grep -q "helm-e2e"

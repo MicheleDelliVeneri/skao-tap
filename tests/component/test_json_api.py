@@ -7,13 +7,79 @@ import copy
 import httpx
 import pytest
 import pyvo
-from ska_src_mm_notification.models.schemas.srcnet_ingestion import SRC_INGESTION_EXAMPLE
+from ska_src_mm_notification.models.schemas.srcnet_ingestion import (
+    SRC_INGESTION_EXAMPLE,
+)
 
 pytestmark = pytest.mark.component
 
 
 def _api(tap_service: str) -> str:
     return tap_service.rsplit("/tap", 1)[0] + "/api/v1"
+
+
+def test_notification_built_with_library_builder_and_queried_via_tap(tap_service):
+    """The full producer-to-archive path: build the notification with the
+    library's own NotificationBuilder (what a data producer runs), send it,
+    and query the ingested metadata back through TAP/ADQL."""
+    from ska_src_mm_notification.builder import NotificationBuilder
+    from ska_src_mm_notification.models.schemas.srcnet_ingestion import Artifact, DataProduct
+
+    product = DataProduct(
+        product_id="builder-prod-1",
+        o_ucd="phot.flux",
+        dataproduct_type="cube",
+        calib_level=2,
+        target_name="Builder Target",
+        artifacts=[
+            Artifact(
+                artifact_id="builder-art-1",
+                access_url="https://example.org/cube.fits",
+                access_format="application/fits",
+                access_estsize=123,
+            )
+        ],
+    )
+    builder = NotificationBuilder().create_simple_notification(
+        project_id="component-builder",
+        group_ids=["group-1"],
+        obs_id="obs-b1",
+        obs_title="Builder observation",
+        eb_id="eb-b1",
+        data_products=[product],
+        project_title="Builder project",
+        pi_name="Component PI",
+    )
+    payload = builder.build_dict()
+
+    response = httpx.post(f"{_api(tap_service)}/notifications", json=payload, timeout=30)
+    assert response.status_code == 201, response.text
+    rows = response.json()["rows"]
+    assert rows["srcnet.projects"] == 1
+    assert rows["srcnet.data_products"] == 1
+    assert rows["srcnet.artifacts"] == 1
+
+    document = httpx.get(f"{_api(tap_service)}/notifications/component-builder", timeout=10).json()
+    assert document["project_title"] == "Builder project"
+    (observation,) = document["observations"]
+    assert observation["obs_id"] == "obs-b1"
+
+    sync = httpx.post(
+        f"{tap_service}/sync",
+        data={
+            "QUERY": (
+                "SELECT p.project_id, a.access_url"
+                " FROM srcnet.projects AS p"
+                " JOIN srcnet.artifacts AS a ON a.project_id = p.project_id"
+                " WHERE p.project_id = 'component-builder'"
+            ),
+            "LANG": "ADQL",
+            "RESPONSEFORMAT": "csv",
+        },
+        timeout=30,
+    )
+    assert sync.status_code == 200
+    assert "component-builder,https://example.org/cube.fits" in sync.text
 
 
 def test_ingest_example_notification(tap_service):
@@ -209,3 +275,194 @@ def test_openapi_documents_json_api(tap_service):
     spec = httpx.get(f"{root}/openapi.json").json()
     assert "/api/v1/notifications" in spec["paths"]
     assert "/api/v1/query" in spec["paths"]
+
+
+def test_full_metadata_notification_roundtrip(tap_service):
+    """Send a notification with EVERY DataProduct and Artifact field
+    populated and verify the long tail of columns lands in the database
+    and comes back through both the JSON document and ADQL."""
+    from ska_src_mm_notification.builder import NotificationBuilder
+    from ska_src_mm_notification.models.schemas.srcnet_ingestion import Artifact, DataProduct
+
+    artifact = Artifact(
+        artifact_id="full-art-1",
+        access_url="https://example.org/full.fits",
+        access_format="application/fits",
+        access_estsize=4096,
+        path_to_parent="obs/full",
+        semantics="science",
+        s_ra=62.3,
+        s_dec=-65.5,
+        s_fov=1.5,
+        s_region="CIRCLE ICRS 62.3 -65.5 1.5",
+        em_wlen=0.21,
+        em_min=0.20,
+        em_max=0.22,
+        t_min=60000.0,
+        t_max=60001.0,
+        t_exptime=3600.0,
+        pol_states="XXYY",
+        pol_xel=2,
+    )
+    product = DataProduct(
+        product_id="full-prod-1",
+        o_ucd="phot.flux",
+        dataproduct_type="cube",
+        calib_level=3,
+        data_product_origin="ODP",
+        target_name="Full Target",
+        is_calibrator=True,
+        calibrator_type="bandpass",
+        em_band="Radio",
+        s_ra=62.3,
+        s_dec=-65.5,
+        s_fov=1.5,
+        s_region="CIRCLE ICRS 62.3 -65.5 1.5",
+        em_wlen=0.21,
+        em_min=0.20,
+        em_max=0.22,
+        t_min=60000.0,
+        t_max=60001.0,
+        t_exptime=3600.0,
+        s_xel1=1024,
+        s_xel2=1024,
+        em_xel=16384,
+        t_xel=1,
+        baseline_min=29.0,
+        baseline_max=74000.0,
+        num_baselines=2016,
+        num_antennas=64,
+        beam_size=7.5,
+        beam_maj=8.0,
+        beam_min=7.0,
+        beam_pa=12.5,
+        pol_states="XXYY",
+        pol_xel=2,
+        baselines=[29, 74000],
+        calibrator_targets=["J1939-6342"],
+        artifacts=[artifact],
+    )
+    payload = (
+        NotificationBuilder()
+        .create_simple_notification(
+            project_id="component-full",
+            group_ids=["group-full"],
+            obs_id="obs-full",
+            obs_title="Fully populated observation",
+            eb_id="eb-full",
+            data_products=[product],
+            project_title="Full metadata project",
+            pi_name="Full PI",
+            data_rights="public",
+            instrument_name="MeerKAT",
+            facility_name="SKAO",
+        )
+        .build_dict()
+    )
+
+    response = httpx.post(f"{_api(tap_service)}/notifications", json=payload, timeout=30)
+    assert response.status_code == 201, response.text
+
+    document = httpx.get(f"{_api(tap_service)}/notifications/component-full", timeout=10).json()
+    stored_product = document["observations"][0]["scheduling_blocks"][0]["execution_blocks"][0][
+        "data_products"
+    ][0]
+    for field, expected in (
+        ("beam_pa", 12.5),
+        ("num_antennas", 64),
+        ("s_xel1", 1024),
+        ("is_calibrator", True),
+    ):
+        assert stored_product[field] == expected, field
+    (stored_artifact,) = stored_product["artifacts"]
+    assert stored_artifact["t_exptime"] == 3600.0
+    assert stored_artifact["pol_states"] == "XXYY"
+
+    sync = httpx.post(
+        f"{tap_service}/sync",
+        data={
+            "QUERY": (
+                "SELECT p.beam_maj, p.num_baselines, a.em_min"
+                " FROM srcnet.data_products AS p"
+                " JOIN srcnet.artifacts AS a ON a.product_id = p.product_id"
+                " WHERE p.project_id = 'component-full'"
+            ),
+            "LANG": "ADQL",
+            "RESPONSEFORMAT": "csv",
+        },
+        timeout=30,
+    )
+    assert sync.status_code == 200
+    assert "8.0,2016,0.2" in sync.text
+
+
+def test_schema_evolution_adds_new_model_columns_without_data_loss(tap_service, database_url):
+    """Simulate a library release that adds a field: an existing table
+    missing a column is migrated forward by ensure_schema (ADD COLUMN IF
+    NOT EXISTS) and already-ingested rows survive."""
+    import psycopg
+    from tap_api.odp import ensure_schema
+
+    httpx.post(f"{_api(tap_service)}/notifications", json=SRC_INGESTION_EXAMPLE, timeout=30)
+
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        before = conn.execute(
+            "SELECT count(*) FROM srcnet.data_products WHERE project_id = 'project12314'"
+        ).fetchone()[0]
+        assert before >= 1
+        # pretend this deployment predates the beam_pa field
+        conn.execute("ALTER TABLE srcnet.data_products DROP COLUMN beam_pa")
+
+    with psycopg.connect(database_url) as conn, conn.transaction():
+        ensure_schema(conn)
+
+    with psycopg.connect(database_url) as conn:
+        restored = conn.execute(
+            "SELECT beam_pa FROM srcnet.data_products WHERE project_id = 'project12314'"
+        ).fetchall()
+        assert len(restored) == before  # rows survived, column is back (NULL)
+        assert all(value is None for (value,) in restored)
+
+
+def test_amend_backfills_new_column_on_real_database(tap_service):
+    """PATCH /notifications/{project}: backfill a column across rows and
+    verify via the document and ADQL; constraint violations are rejected."""
+    httpx.post(f"{_api(tap_service)}/notifications", json=SRC_INGESTION_EXAMPLE, timeout=30)
+    url = f"{_api(tap_service)}/notifications/project12314"
+
+    response = httpx.patch(
+        url, json={"table": "data_products", "values": {"beam_pa": 42.0}}, timeout=30
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["updated"] >= 1
+
+    sync = httpx.post(
+        f"{tap_service}/sync",
+        data={
+            "QUERY": (
+                "SELECT DISTINCT beam_pa FROM srcnet.data_products"
+                " WHERE project_id = 'project12314'"
+            ),
+            "LANG": "ADQL",
+            "RESPONSEFORMAT": "csv",
+        },
+        timeout=30,
+    )
+    assert sync.text.strip().splitlines()[1:] == ["42.0"]
+
+    # the pydantic constraint (beam_pa in [-180, 180]) still guards amendments
+    rejected = httpx.patch(
+        url, json={"table": "data_products", "values": {"beam_pa": 999.0}}, timeout=30
+    )
+    assert rejected.status_code == 400
+    # and the database CHECK would catch anything that slipped through
+    scoped = httpx.patch(
+        url,
+        json={
+            "table": "data_products",
+            "match": {"product_id": "nope"},
+            "values": {"beam_pa": 1.0},
+        },
+        timeout=30,
+    )
+    assert scoped.json()["updated"] == 0

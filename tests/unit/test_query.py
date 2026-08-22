@@ -38,7 +38,7 @@ def test_prepare_query_format_falls_back_to_legacy_param(fake_db):
     ("params", "match"),
     [
         ({"QUERY": QUERY, "REQUEST": "getAvailability"}, "REQUEST=getAvailability"),
-        ({"QUERY": QUERY, "UPLOAD": "t,http://x"}, "UPLOAD"),
+        ({"QUERY": QUERY, "UPLOAD": "notapair"}, "UPLOAD"),
         ({"QUERY": QUERY, "MAXREC": "many"}, "MAXREC=many"),
         ({"QUERY": QUERY, "MAXREC": "-1"}, "MAXREC must be >= 0"),
         ({"QUERY": QUERY, "RESPONSEFORMAT": "xml3"}, "RESPONSEFORMAT=xml3"),

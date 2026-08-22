@@ -106,6 +106,42 @@ jobs:
             --set ingress.enabled=true \
             --set ingress.host=tap.example.org > /dev/null
 
+  helm-e2e:
+    name: Helm chart e2e (kind)
+    runs-on: ubuntu-24.04
+    needs: [helm]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build images
+        run: |
+          docker build -t skao-tap-e2e/tap-api:e2e -f services/tap-api/Dockerfile .
+          docker build -t skao-tap-e2e/tap-executor:e2e -f services/tap-executor/Dockerfile .
+          docker build -t skao-tap-e2e/tap-db:e2e db
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: skao-tap-e2e
+      - name: Load images into kind
+        run: |
+          kind load docker-image skao-tap-e2e/tap-api:e2e --name skao-tap-e2e
+          kind load docker-image skao-tap-e2e/tap-executor:e2e --name skao-tap-e2e
+          kind load docker-image skao-tap-e2e/tap-db:e2e --name skao-tap-e2e
+      - name: Install chart (in-chart PostgreSQL)
+        run: |
+          helm install skao-tap deploy/helm/skao-tap \
+            --set image.registry=skao-tap-e2e \
+            --set image.tag=e2e \
+            --set image.pullPolicy=Never \
+            --wait --timeout 5m
+      - name: Run chart tests (availability, ADQL query, UPLOAD)
+        run: helm test skao-tap --logs --timeout 5m
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide
+          kubectl describe pods
+          kubectl logs -l app.kubernetes.io/instance=skao-tap --all-containers --tail=200 || true
+
   images:
     name: Build image (${{ matrix.image.name }})
     runs-on: ubuntu-24.04

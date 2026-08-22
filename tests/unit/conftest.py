@@ -54,6 +54,7 @@ class FakeServerCursor:
         return False
 
     def execute(self, sql, params=None):
+        self._db.statements.append(sql.strip())
         if self._db.result_error is not None:
             raise self._db.result_error
         self.description = self._db.result_description
@@ -239,6 +240,24 @@ class FakeDB:
 
         if head.startswith("DELETE FROM UWS.JOBS"):
             return FakeResult(rowcount=1 if self.jobs.pop(params[0], None) else 0)
+
+        match = re.match(r"UPDATE (srcnet\.\S+) SET ", text)
+        if match:  # srcnet amend
+            table = match.group(1)
+            set_part, where_part = text.split(" WHERE ", 1)
+            set_names = re.findall(r"(\w+) = %s", set_part)
+            where_names = re.findall(r"(\w+) = %s", where_part)
+            set_values = [
+                getattr(p, "obj", None) if type(p).__name__ == "Jsonb" else p
+                for p in params[: len(set_names)]
+            ]
+            conditions = dict(zip(where_names, params[len(set_names) :], strict=True))
+            updated = 0
+            for row in self.srcnet.get(table, {}).values():
+                if all(row.get(k) == v for k, v in conditions.items()):
+                    row.update(zip(set_names, set_values, strict=True))
+                    updated += 1
+            return FakeResult(rowcount=updated)
 
         match = re.match(r"INSERT INTO (srcnet\.\S+) \(([^)]*)\) VALUES", text)
         if match and "ON CONFLICT" in text:  # srcnet upsert
