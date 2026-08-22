@@ -6,11 +6,13 @@ store — with JSON requests/responses (OpenAPI-documented via FastAPI)
 instead of the XML the VO standards mandate. Standard VO clients keep using
 /tap; services and pipelines can use this API.
 
-It also accepts SKA SRC ingestion notifications, validated with the
-ska-src-mm-notification pydantic models, and stores them in the srcnet
-tables generated from those same models (see tap_api.odp) — so ingested
-observatory data product metadata is instantly queryable via both this
-API and TAP/ADQL.
+It also publishes the active metadata-domain plugins (tapcore.plugins):
+each plugin's documents are validated with its own pydantic models and
+stored in tables generated from those same models — so ingested metadata
+is instantly queryable via both this API and TAP/ADQL. The observatory
+data product domain (tap_api.odp, srcnet schema) and the software
+discovery domain (tap_api.software) ship built in; third-party model
+packages register through the skao_tap.models entry-point group.
 """
 
 import asyncio
@@ -22,13 +24,12 @@ import time
 from fastapi import APIRouter, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from ska_src_mm_notification.models.schemas.srcnet_ingestion import SRCIngestionNotification
-from tapcore import uws
+from tapcore import ingest, uws
 from tapcore.config import settings
 from tapcore.db import pool
 from tapcore.errors import NotFoundError, UsageError
+from tapcore.plugins import MetadataPlugin, active_plugins
 
-from .odp import TABLES, amend_rows, fetch_notification, ingest_notification
 from .query import prepare_query, run_sync
 
 router = APIRouter(prefix="/api/v1", tags=["json-api"])
@@ -257,78 +258,17 @@ async def tables():
 
 
 # ---------------------------------------------------------------------------
-# SRC ingestion notifications
+# Metadata-domain plugins: one ingest/list/fetch/amend endpoint set per
+# active plugin (see tapcore.plugins), mounted at /api/v1/<plugin.mount>
 # ---------------------------------------------------------------------------
 
 
-@router.post("/notifications", status_code=201)
-async def ingest(notification: SRCIngestionNotification):
-    """Validate (ska-src-mm-notification models) and store a notification.
-
-    The payload is flattened into the srcnet.* tables generated from the
-    same models; re-posting a notification upserts (idempotent).
-    """
-    with pool().connection() as conn:
-        counts = ingest_notification(conn, notification)
-    return {
-        "status": "ingested",
-        "project_id": notification.project_id,
-        "schema_version": notification.schema_version,
-        "rows": counts,
-        "query_hint": (
-            "SELECT * FROM srcnet.data_products WHERE project_id = "
-            f"'{notification.project_id}' (via /tap/sync or /api/v1/query)"
-        ),
-    }
-
-
-@router.get("/notifications")
-async def list_notifications():
-    tables = {t.name: t.qualified for t in TABLES}
-    with pool().connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT p.project_id, p.project_title, p.data_rights,
-                   (SELECT count(*) FROM {tables["data_products"]} d
-                     WHERE d.project_id = p.project_id),
-                   (SELECT count(*) FROM {tables["artifacts"]} a
-                     WHERE a.project_id = p.project_id)
-            FROM {tables["projects"]} p
-            ORDER BY p.project_id
-            """
-        ).fetchall()
-    return {
-        "projects": [
-            {
-                "project_id": r[0],
-                "project_title": r[1],
-                "data_rights": r[2],
-                "data_products": r[3],
-                "artifacts": r[4],
-            }
-            for r in rows
-        ]
-    }
-
-
-@router.get("/notifications/{project_id}")
-async def get_notification(project_id: str):
-    with pool().connection() as conn:
-        document = fetch_notification(conn, project_id)
-    if document is None:
-        raise NotFoundError(f"project {project_id} not found")
-    return document
-
-
 class AmendRequest(BaseModel):
-    table: str = Field(
-        description="Target table: projects, observations, scheduling_blocks,"
-        " execution_blocks, data_products, or artifacts"
-    )
+    table: str = Field(description="Target table (model-level name)")
     match: dict[str, str | int | float | bool] = Field(
         default_factory=dict,
         description="Column equality filters selecting the rows to amend"
-        " (empty = every row of the project in that table)",
+        " (empty = every row of the document in that table)",
     )
     values: dict = Field(
         description="Columns to set; each value is validated against the"
@@ -336,21 +276,75 @@ class AmendRequest(BaseModel):
     )
 
 
-@router.patch("/notifications/{project_id}")
-async def amend_notification(project_id: str, body: AmendRequest):
-    """Amend already-ingested rows — e.g. backfill a column added by a
-    newer data-model release — without re-sending the whole notification.
+def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
+    """The JSON endpoint set for one metadata domain."""
+    domain = APIRouter(prefix=f"/{plugin.mount}", tags=[f"metadata:{plugin.name}"])
+    root = plugin.tables[0]
+    id_column = root.id_column
 
-    The update is validated field-by-field with the ska-src-mm-notification
-    models and always scoped to the given project.
-    """
-    with pool().connection() as conn, conn.transaction():
-        if fetch_notification(conn, project_id) is None:
-            raise NotFoundError(f"project {project_id} not found")
-        updated = amend_rows(conn, project_id, body.table, dict(body.match), dict(body.values))
-    return {
-        "status": "amended",
-        "project_id": project_id,
-        "table": body.table,
-        "updated": updated,
-    }
+    async def ingest_endpoint(document):
+        with pool().connection() as conn:
+            counts = ingest.ingest_document(conn, plugin, document)
+        root_id = getattr(document, id_column)
+        return {
+            "status": "ingested",
+            id_column: root_id,
+            "rows": counts,
+            "query_hint": (
+                f"SELECT * FROM {root.qualified} WHERE {id_column} = "
+                f"'{root_id}' (via /tap/sync or /api/v1/query)"
+            ),
+        }
+
+    # the plugin's root model is only known at runtime: FastAPI picks the
+    # request-body validator up from the endpoint's annotations
+    ingest_endpoint.__annotations__ = {"document": plugin.model}
+    ingest_endpoint.__doc__ = (
+        f"Validate (with the {plugin.model.__name__} model) and store a document.\n\n"
+        f"The payload is flattened into the {plugin.sql_schema}.* tables generated"
+        " from the same model; re-posting upserts (idempotent)."
+    )
+    domain.post("", status_code=201)(ingest_endpoint)
+
+    @domain.get("")
+    async def list_endpoint():
+        with pool().connection() as conn:
+            summaries = ingest.list_documents(conn, plugin)
+        return {plugin.root_table: summaries}
+
+    @domain.get("/{root_id}")
+    async def fetch_endpoint(root_id: str):
+        with pool().connection() as conn:
+            document = ingest.fetch_document(conn, plugin, root_id)
+        if document is None:
+            raise NotFoundError(
+                f"{root.name[:-1] if root.name.endswith('s') else root.name} {root_id} not found"
+            )
+        return document
+
+    @domain.patch("/{root_id}")
+    async def amend_endpoint(root_id: str, body: AmendRequest):
+        """Amend already-ingested rows — e.g. backfill a column added by a
+        newer data-model release — without re-sending the whole document.
+
+        Values are validated field-by-field with the plugin's models and the
+        update is always scoped to the given root document.
+        """
+        with pool().connection() as conn, conn.transaction():
+            if ingest.fetch_document(conn, plugin, root_id) is None:
+                raise NotFoundError(f"{root_id} not found")
+            updated = ingest.amend_rows(
+                conn, plugin, root_id, body.table, dict(body.match), dict(body.values)
+            )
+        return {
+            "status": "amended",
+            id_column: root_id,
+            "table": body.table,
+            "updated": updated,
+        }
+
+    return domain
+
+
+for _plugin in active_plugins():
+    router.include_router(build_metadata_router(_plugin))

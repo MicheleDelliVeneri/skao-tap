@@ -15,14 +15,15 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
+from tapcore import ingest
 from tapcore.config import settings
 from tapcore.db import close_pool, pool
 from tapcore.errors import TAPError
+from tapcore.plugins import active_plugins
 from tapcore.votable import error_votable
 
 from . import vosi
 from .json_api import router as json_router
-from .odp import ensure_schema
 from .params import gather_params
 from .query import prepare_query, run_sync
 from .uploads import gather_upload_files, parse_uploads, resolve_upload_sources
@@ -31,29 +32,32 @@ from .uws_api import router as uws_router
 log = logging.getLogger("tap-api")
 
 
-def _bootstrap_srcnet(attempts: int = 5, delay_s: float = 2.0) -> None:
-    """Create/refresh the srcnet tables generated from the notification models."""
+def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
+    """Create/refresh the tables generated from the active metadata plugins."""
+    plugins = active_plugins()
+    log.info("active metadata plugins: %s", ", ".join(p.name for p in plugins) or "none")
     for attempt in range(1, attempts + 1):
         try:
             with pool().connection() as conn, conn.transaction():
                 # forward-migrate deployments whose uws.jobs predates ABORT
                 # support (the column is in db/init for fresh databases)
                 conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS backend_pid integer")
-                ensure_schema(conn)
+                for plugin in plugins:
+                    ingest.ensure_schema(conn, plugin)
             return
         except Exception as exc:
             if attempt == attempts:
                 # Fail fast: a half-initialized service would only surface
-                # confusing errors later on /api/v1/notifications and
-                # srcnet.* queries; the orchestrator should restart us.
-                raise RuntimeError(f"srcnet bootstrap failed after {attempts} attempts") from exc
-            log.warning("srcnet bootstrap attempt %d failed (%s), retrying", attempt, exc)
+                # confusing errors later on the metadata endpoints and
+                # generated-schema queries; the orchestrator should restart us.
+                raise RuntimeError(f"metadata bootstrap failed after {attempts} attempts") from exc
+            log.warning("metadata bootstrap attempt %d failed (%s), retrying", attempt, exc)
             time.sleep(delay_s)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _bootstrap_srcnet()
+    _bootstrap_metadata()
     yield
     close_pool()
 
