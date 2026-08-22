@@ -7,13 +7,79 @@ import copy
 import httpx
 import pytest
 import pyvo
-from ska_src_mm_notification.models.schemas.srcnet_ingestion import SRC_INGESTION_EXAMPLE
+from ska_src_mm_notification.models.schemas.srcnet_ingestion import (
+    SRC_INGESTION_EXAMPLE,
+)
 
 pytestmark = pytest.mark.component
 
 
 def _api(tap_service: str) -> str:
     return tap_service.rsplit("/tap", 1)[0] + "/api/v1"
+
+
+def test_notification_built_with_library_builder_and_queried_via_tap(tap_service):
+    """The full producer-to-archive path: build the notification with the
+    library's own NotificationBuilder (what a data producer runs), send it,
+    and query the ingested metadata back through TAP/ADQL."""
+    from ska_src_mm_notification.builder import NotificationBuilder
+    from ska_src_mm_notification.models.schemas.srcnet_ingestion import Artifact, DataProduct
+
+    product = DataProduct(
+        product_id="builder-prod-1",
+        o_ucd="phot.flux",
+        dataproduct_type="cube",
+        calib_level=2,
+        target_name="Builder Target",
+        artifacts=[
+            Artifact(
+                artifact_id="builder-art-1",
+                access_url="https://example.org/cube.fits",
+                access_format="application/fits",
+                access_estsize=123,
+            )
+        ],
+    )
+    builder = NotificationBuilder().create_simple_notification(
+        project_id="component-builder",
+        group_ids=["group-1"],
+        obs_id="obs-b1",
+        obs_title="Builder observation",
+        eb_id="eb-b1",
+        data_products=[product],
+        project_title="Builder project",
+        pi_name="Component PI",
+    )
+    payload = builder.build_dict()
+
+    response = httpx.post(f"{_api(tap_service)}/notifications", json=payload, timeout=30)
+    assert response.status_code == 201, response.text
+    rows = response.json()["rows"]
+    assert rows["srcnet.projects"] == 1
+    assert rows["srcnet.data_products"] == 1
+    assert rows["srcnet.artifacts"] == 1
+
+    document = httpx.get(f"{_api(tap_service)}/notifications/component-builder", timeout=10).json()
+    assert document["project_title"] == "Builder project"
+    (observation,) = document["observations"]
+    assert observation["obs_id"] == "obs-b1"
+
+    sync = httpx.post(
+        f"{tap_service}/sync",
+        data={
+            "QUERY": (
+                "SELECT p.project_id, a.access_url"
+                " FROM srcnet.projects AS p"
+                " JOIN srcnet.artifacts AS a ON a.project_id = p.project_id"
+                " WHERE p.project_id = 'component-builder'"
+            ),
+            "LANG": "ADQL",
+            "RESPONSEFORMAT": "csv",
+        },
+        timeout=30,
+    )
+    assert sync.status_code == 200
+    assert "component-builder,https://example.org/cube.fits" in sync.text
 
 
 def test_ingest_example_notification(tap_service):
