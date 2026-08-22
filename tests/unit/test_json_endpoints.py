@@ -17,7 +17,8 @@ def test_sync_query_json(client):
 
 
 def test_sync_query_validation(client):
-    assert client.post("/api/v1/query", json={}).status_code == 422
+    missing_body = client.post("/api/v1/query", json={})
+    assert missing_body.status_code == 422
     bad_lang = client.post("/api/v1/query", json={"query": QUERY, "lang": "SQL"})
     assert bad_lang.status_code == 400
 
@@ -75,15 +76,19 @@ def test_phase_transitions(client, fake_db):
     assert abort.json()["phase"] == "ABORTED"
     again = client.post(f"/api/v1/jobs/{job_id}/phase", json={"phase": "ABORT"})
     assert again.json()["phase"] == "ABORTED"
-    assert client.post(f"/api/v1/jobs/{job_id}/phase", json={"phase": "PAUSE"}).status_code == 400
-    assert client.post(f"/api/v1/jobs/{job_id}/phase", json={"phase": "RUN"}).status_code == 400
+    unknown = client.post(f"/api/v1/jobs/{job_id}/phase", json={"phase": "PAUSE"})
+    assert unknown.status_code == 400
+    rerun = client.post(f"/api/v1/jobs/{job_id}/phase", json={"phase": "RUN"})
+    assert rerun.status_code == 400
 
 
 def test_delete_job(client, fake_db):
     job_id = client.post("/api/v1/jobs", json={"query": QUERY}).json()["job_id"]
-    assert client.delete(f"/api/v1/jobs/{job_id}").status_code == 204
+    deleted = client.delete(f"/api/v1/jobs/{job_id}")
+    assert deleted.status_code == 204
     assert job_id not in fake_db.jobs
-    assert client.delete(f"/api/v1/jobs/{job_id}").status_code == 404
+    missing = client.delete(f"/api/v1/jobs/{job_id}")
+    assert missing.status_code == 404
 
 
 def test_job_result_download(client, fake_db, results_dir):
@@ -132,5 +137,6 @@ def test_notification_ingest_list_and_roundtrip(client, fake_db):
 def test_notification_validation_and_missing(client):
     bad = dict(SRC_INGESTION_EXAMPLE)
     bad.pop("project_id")
-    assert client.post("/api/v1/notifications", json=bad).status_code == 422
+    invalid = client.post("/api/v1/notifications", json=bad)
+    assert invalid.status_code == 422
     assert client.get("/api/v1/notifications/nope").status_code == 404

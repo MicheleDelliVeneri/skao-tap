@@ -1,9 +1,10 @@
 """Unit tests for the tapcore.uws persistence helpers on the fake pool."""
 
 import pytest
-from tapcore import uws
-from tapcore.db import pool
+from tapcore import db, uws
 from tapcore.errors import NotFoundError
+
+pool = db.pool
 
 
 def test_create_and_get_job(fake_db):
@@ -51,8 +52,6 @@ def test_delete_job(fake_db):
 
 
 def test_pool_is_cached_and_closable(monkeypatch):
-    import tapcore.db as db
-
     created = []
 
     class StubPool:

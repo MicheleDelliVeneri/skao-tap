@@ -150,7 +150,8 @@ def test_delete_job_via_action_and_method(client, fake_db):
     assert response.status_code == 303
     assert first not in fake_db.jobs
     second = _create_job(client)
-    assert client.delete(f"/tap/async/{second}", follow_redirects=False).status_code == 303
+    deleted = client.delete(f"/tap/async/{second}", follow_redirects=False)
+    assert deleted.status_code == 303
     assert second not in fake_db.jobs
     bad = client.post(f"/tap/async/{_create_job(client)}", data={"ACTION": "PAUSE"})
     assert bad.status_code == 400
