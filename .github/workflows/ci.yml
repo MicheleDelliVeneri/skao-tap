@@ -65,6 +65,9 @@ jobs:
       - run: uv run pytest tests/component -v --cov --cov-report=xml
         env:
           TAP_TEST_ADMIN_URL: postgresql://tap:tap@127.0.0.1:5432/postgres
+      - name: Service logs
+        if: failure()
+        run: tail -n 150 .service-logs/*.log || true
       - name: Upload coverage to Codecov
         # skip on forked PRs, where secrets (CODECOV_TOKEN) are unavailable
         if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}

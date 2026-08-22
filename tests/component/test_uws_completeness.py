@@ -64,7 +64,9 @@ def test_after_filters_job_list(tap_service):
     )
 
 
-def test_abort_cancels_running_query(tap_service):
+def test_abort_cancels_running_query(tap_service, database_url):
+    import psycopg
+
     job_url = _create(tap_service, SLOW_QUERY)
     # wait until the executor has actually claimed it
     for _ in range(40):
@@ -85,6 +87,18 @@ def test_abort_cancels_running_query(tap_service):
     phase = httpx.get(f"{job_url}/phase", params={"WAIT": "10"}, timeout=30).text
     assert phase == "ABORTED"
     assert time.monotonic() - aborted_at < 15  # cancelled, not run to completion
+
+    # the backend really stopped: no active statement still counting
+    with psycopg.connect(database_url) as conn:
+        for _ in range(20):
+            active = conn.execute(
+                "SELECT pid, state, left(query, 60) FROM pg_stat_activity"
+                " WHERE state = 'active' AND query ILIKE '%%tap_job_%%'"
+            ).fetchall()
+            if not active:
+                break
+            time.sleep(0.5)
+        assert not active, f"backend still executing after abort: {active}"
 
     # the abort sticks: the executor must not flip it to COMPLETED or ERROR
     time.sleep(3)
