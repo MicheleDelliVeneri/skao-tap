@@ -13,9 +13,14 @@ pytestmark = pytest.mark.component
 QUICK_QUERY = "SELECT TOP 3 source_id, source_name FROM ska.continuum_sources"
 
 # ~8^10 = 1e9 row combinations to count: CPU-bound for well over a minute,
-# produces no result rows until done — safe to abort mid-flight.
-_TABLES = ", ".join(f"ska.continuum_sources AS t{i}" for i in range(10))
-SLOW_QUERY = f"SELECT COUNT(*) AS n FROM {_TABLES}"
+# produces no result rows until done — safe to abort mid-flight. Explicit
+# JOIN ... ON 1=1 keeps the syntactic join order (join_collapse_limit), so
+# planning is instant and the time is spent in the (cancellable) executor —
+# an implicit 10-way cross join stalls the *planner*, which ignores
+# pg_cancel_backend for minutes.
+SLOW_QUERY = "SELECT COUNT(*) AS n FROM ska.continuum_sources AS t0 " + " ".join(
+    f"JOIN ska.continuum_sources AS t{i} ON 1=1" for i in range(1, 10)
+)
 
 
 FINAL_PHASES = ("COMPLETED", "ERROR", "ABORTED")
@@ -104,7 +109,7 @@ def test_abort_cancels_running_query(tap_service, database_url):
             active = conn.execute(
                 "SELECT pid, state, left(query, 60) FROM pg_stat_activity"
                 " WHERE state = 'active' AND query ILIKE '%%tap_job_%%'"
-                " AND pid <> pg_backend_pid()"
+                " AND pid <> pg_backend_pid()"  # not this introspection query
             ).fetchall()
             if not active:
                 break
