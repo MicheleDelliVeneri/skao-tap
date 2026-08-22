@@ -18,7 +18,8 @@ CREATE TABLE uws.jobs (
     error_type          text,                               -- 'transient' | 'fatal'
     error_message       text,
     result_mime         text,
-    result_size         bigint
+    result_size         bigint,
+    backend_pid         integer                             -- executing backend, for ABORT
 );
 
 CREATE INDEX jobs_phase_creation ON uws.jobs (phase, creation_time);

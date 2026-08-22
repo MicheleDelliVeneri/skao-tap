@@ -100,6 +100,7 @@ def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[byt
             "SELECT set_config('statement_timeout', %s, true)",
             (str(settings.sync_timeout_s * 1000),),
         )
+        conn.execute("SET LOCAL jit = off")  # uninterruptible compile stalls
         conn.execute(f"SET LOCAL ROLE {settings.query_role}")
         with conn.cursor(name="tap_sync") as cur:
             cur.itersize = CURSOR_ITERSIZE

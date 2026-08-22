@@ -27,12 +27,12 @@ Parameters:
 
 | Method | Resource | Description |
 |---|---|---|
-| GET | `/async` | Job list (`PHASE` filter, `LAST` limit); returns `<uws:jobs>` |
+| GET | `/async` | Job list (`PHASE` filter, `LAST` limit, `AFTER` ISO-8601 creation-time filter); returns `<uws:jobs>` |
 | POST | `/async` | Create a job from the same parameters as `/sync`; add `PHASE=RUN` to queue immediately; 303 → job URI |
-| GET | `/async/{id}` | Job summary `<uws:job>` document |
+| GET | `/async/{id}` | Job summary `<uws:job>` document; `WAIT=<s>` (or `-1` for the server maximum, `TAP_WAIT_MAX`) blocks until the phase changes, optionally with `PHASE=<phase>` as the reference phase |
 | POST | `/async/{id}` | `ACTION=DELETE` destroys the job |
 | DELETE | `/async/{id}` | Destroys the job; 303 → job list |
-| GET/POST | `/async/{id}/phase` | Read phase / `PHASE=RUN` or `PHASE=ABORT` |
+| GET/POST | `/async/{id}/phase` | Read phase (supports `WAIT`/`PHASE` blocking) / `PHASE=RUN` or `PHASE=ABORT`; ABORT cancels the running statement (`pg_cancel_backend`) |
 | GET/POST | `/async/{id}/executionduration` | Per-job execution time limit (seconds), settable while `PENDING` |
 | GET/POST | `/async/{id}/destruction` | Destruction time; expired jobs are garbage-collected |
 | GET | `/async/{id}/quote` | Estimated completion time (nil in this draft) |

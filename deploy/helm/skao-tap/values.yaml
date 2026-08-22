@@ -35,6 +35,7 @@ config:
   syncTimeoutSeconds: 30
   asyncExecDurationSeconds: 600
   jobRetentionSeconds: 604800
+  waitMaxSeconds: 60
   queryRole: tap_reader
 
 # -- Shared volume where the executor writes job results and the API serves

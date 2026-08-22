@@ -14,3 +14,4 @@ data:
   TAP_SYNC_TIMEOUT: {{ .Values.config.syncTimeoutSeconds | int64 | quote }}
   TAP_ASYNC_EXEC_DURATION: {{ .Values.config.asyncExecDurationSeconds | int64 | quote }}
   TAP_JOB_RETENTION: {{ .Values.config.jobRetentionSeconds | int64 | quote }}
+  TAP_WAIT_MAX: {{ .Values.config.waitMaxSeconds | int64 | quote }}

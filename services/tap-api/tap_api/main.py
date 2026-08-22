@@ -36,6 +36,9 @@ def _bootstrap_srcnet(attempts: int = 5, delay_s: float = 2.0) -> None:
     for attempt in range(1, attempts + 1):
         try:
             with pool().connection() as conn, conn.transaction():
+                # forward-migrate deployments whose uws.jobs predates ABORT
+                # support (the column is in db/init for fresh databases)
+                conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS backend_pid integer")
                 ensure_schema(conn)
             return
         except Exception as exc:
