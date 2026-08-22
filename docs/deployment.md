@@ -41,7 +41,8 @@ Key values (see `values.yaml` for the full list):
 | `auth.enabled` | `false` | Gate the mutating metadata endpoints ([guide](auth.md)) |
 | `auth.plugin` | `iam-groups` | Authorisation plugin: local IAM groups, or the SRCNet Permissions API |
 | `auth.iam.issuer` | `""` | Required when `auth.enabled`; tokens are verified against its JWKS |
-| `auth.roles` | empty | Per-operation groups/scopes for `iam-groups` |
+| `auth.iam.audience` | `""` | Required when `auth.enabled`; guards against cross-service token replay |
+| `auth.roles` | `{}` | Per-operation groups/scopes for `iam-groups`; required, and an empty rule denies |
 
 !!! warning "Results volume access mode"
     The results volume is shared between the API and the executor. With more
@@ -257,7 +258,8 @@ All services read environment variables (see `tapcore/config.py`):
 | `TAP_AUTH_ENABLED` | `false` | Enable authentication/authorisation ([guide](auth.md)) |
 | `TAP_AUTH_PLUGIN` | `iam-groups` | Which authorisation plugin decides (`iam-groups`, `permissions-api`, or your own) |
 | `TAP_IAM_ISSUER` | — | Token issuer; tokens are always verified against its JWKS |
-| `TAP_IAM_AUDIENCE` | — | Expected token audience (empty accepts any) |
+| `TAP_IAM_AUDIENCE` | — | Expected token audience; required unless `TAP_IAM_ALLOW_ANY_AUDIENCE=true` |
+| `TAP_IAM_GROUP_CLAIMS` | `groups,wlcg.groups` | Claims read as IAM group membership |
 | `TAP_AUTH_ROLES` | `{}` | `iam-groups` policy, as JSON keyed by operation |
 | `TAP_PERMISSIONS_API_URL` | — | SKA SRC Permissions API base URL (`permissions-api` plugin) |
 | `TAP_LOG_LEVEL` | `INFO` | Level for the services' own records (bootstrap, legacy-table warnings, deletion audit trail); uvicorn's access log is separate |

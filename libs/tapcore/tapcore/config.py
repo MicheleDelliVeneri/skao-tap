@@ -53,6 +53,17 @@ class Settings:
     # plugin decides authorisation
     iam_issuer: str = field(default_factory=lambda: os.getenv("TAP_IAM_ISSUER", ""))
     iam_audience: str = field(default_factory=lambda: os.getenv("TAP_IAM_AUDIENCE", ""))
+    # accepting any audience lets tokens minted for other clients of the same
+    # IAM be replayed here, so it must be asked for explicitly
+    iam_allow_any_audience: bool = field(
+        default_factory=lambda: (
+            os.getenv("TAP_IAM_ALLOW_ANY_AUDIENCE", "false").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+    )
+    iam_group_claims: str = field(
+        default_factory=lambda: os.getenv("TAP_IAM_GROUP_CLAIMS", "groups,wlcg.groups")
+    )
     iam_well_known_url: str = field(default_factory=lambda: os.getenv("TAP_IAM_WELL_KNOWN_URL", ""))
     iam_jwks_cache_s: int = field(
         default_factory=lambda: int(os.getenv("TAP_IAM_JWKS_CACHE", "300"))

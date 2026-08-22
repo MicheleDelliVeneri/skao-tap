@@ -69,8 +69,12 @@ def principal_of(request: Request) -> Principal:
     return resolved
 
 
-async def attach_principal(request: Request) -> None:
+def attach_principal(request: Request) -> None:
     """App-wide dependency: verify any credential the request carries.
+
+    Declared sync on purpose: verification may have to fetch the IAM's
+    discovery document or JWKS, and FastAPI runs sync dependencies in a
+    threadpool instead of blocking the event loop.
 
     Registered on every route, not just the gated ones. An endpoint that
     needs no token still must not accept a forged or expired one — silently
@@ -83,9 +87,14 @@ async def attach_principal(request: Request) -> None:
 
 
 def require(operation: str):
-    """A FastAPI dependency gating one operation behind the active plugin."""
+    """A FastAPI dependency gating one operation behind the active plugin.
 
-    async def dependency(request: Request) -> Principal:
+    The returned dependency is sync so FastAPI runs it in a threadpool: a
+    plugin may call out over the network (the permissions-api one does) and
+    must not block the event loop.
+    """
+
+    def dependency(request: Request) -> Principal:
         active = plugin()
         if active is None:  # auth disabled: behave exactly as before
             return ANONYMOUS

@@ -12,9 +12,13 @@ carries any one of them:
                           "scopes": ["science-metadata:admin"]}
     }'
 
-An operation with no groups and no scopes requires a verified token and
-nothing more. An operation missing from the mapping is denied outright:
-silently allowing an operation nobody configured is the wrong default for a
+Every gated operation must be granted explicitly: an operation missing from
+the mapping, or present with neither groups nor scopes, is denied. Accepting
+any verified token is a deliberate choice that has to be written down:
+
+    "metadata.amend": {"any_verified_token": true}
+
+Silently allowing an operation nobody configured is the wrong default for a
 policy file, especially for deletion.
 """
 
@@ -48,20 +52,42 @@ class IAMGroupsPlugin(AuthPlugin):
         if rule is None:
             log.warning("no TAP_AUTH_ROLES entry for %s: denying", operation)
             return False
-        groups, scopes = rule
+        groups, scopes, any_verified_token = rule
+        if any_verified_token:
+            return True
         if not groups and not scopes:
-            return True  # any verified token is enough for this operation
+            # an operation configured with nothing grants nothing: the empty
+            # rule is what an unfinished policy looks like, not a decision
+            log.warning(
+                "TAP_AUTH_ROLES[%s] names no group or scope and does not set"
+                " any_verified_token: denying",
+                operation,
+            )
+            return False
         return bool(set(groups) & set(principal.groups)) or bool(
             set(scopes) & set(principal.scopes)
         )
 
     def describe(self) -> str:
-        configured = ", ".join(sorted(self.roles)) or "nothing"
-        return f"{self.name} (operations configured: {configured})"
+        # spell out what each operation actually grants: "configured" alone
+        # would read as reassuring for a rule that grants nothing, or for one
+        # that lets any verified token through
+        if not self.roles:
+            return f"{self.name} (no operation is granted to anyone)"
+        parts = []
+        for operation, (groups, scopes, any_verified_token) in sorted(self.roles.items()):
+            if any_verified_token:
+                grant = "ANY verified token"
+            elif groups or scopes:
+                grant = " or ".join([*groups, *(f"scope:{s}" for s in scopes)])
+            else:
+                grant = "nobody (no group or scope configured)"
+            parts.append(f"{operation}={grant}")
+        return f"{self.name} ({'; '.join(parts)})"
 
 
-def _parse_roles(raw) -> dict[str, tuple[tuple[str, ...], tuple[str, ...]]]:
-    """Normalize the JSON policy into {operation: (groups, scopes)}."""
+def _parse_roles(raw) -> dict[str, tuple[tuple[str, ...], tuple[str, ...], bool]]:
+    """Normalize the JSON policy into {operation: (groups, scopes, any_token)}."""
     if isinstance(raw, str):
         try:
             raw = json.loads(raw or "{}")
@@ -75,5 +101,5 @@ def _parse_roles(raw) -> dict[str, tuple[tuple[str, ...], tuple[str, ...]]]:
             raise ServiceError(f"TAP_AUTH_ROLES[{operation!r}] must be an object")
         groups = tuple(f"/{str(g).lstrip('/')}" for g in rule.get("groups") or ())
         scopes = tuple(str(s) for s in rule.get("scopes") or ())
-        parsed[operation] = (groups, scopes)
+        parsed[operation] = (groups, scopes, bool(rule.get("any_verified_token", False)))
     return parsed

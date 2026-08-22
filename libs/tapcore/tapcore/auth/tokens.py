@@ -17,8 +17,12 @@ from jwt import PyJWKClient
 from ..config import settings
 from ..errors import AuthenticationError, ServiceError
 
-# claims INDIGO IAM (and the wider WLCG profile) uses for group membership
-GROUP_CLAIMS = ("groups", "wlcg.groups", "entitlements", "eduperson_entitlement")
+# Claims INDIGO IAM (and the wider WLCG profile) use for group membership.
+# Deliberately excludes `entitlements`/`eduperson_entitlement`: those can be
+# passed through from a federated home IdP, so treating them as group names
+# would let an attribute asserted elsewhere match a local policy group. A
+# deployment that does trust them can add them via TAP_IAM_GROUP_CLAIMS.
+DEFAULT_GROUP_CLAIMS = ("groups", "wlcg.groups")
 
 
 class Principal:
@@ -75,14 +79,28 @@ class IAMTokenVerifier:
         jwks_cache_s: int = 300,
         timeout_s: float = 5.0,
         well_known_url: str | None = None,
+        allow_any_audience: bool = False,
+        group_claims: tuple[str, ...] = ("groups", "wlcg.groups"),
     ):
         if not issuer:
             raise ValueError("an IAM issuer is required to verify tokens")
+        if not audience and not allow_any_audience:
+            # One IAM issues tokens to many services. Without an audience
+            # check, a token minted for any other client of the same issuer
+            # is accepted here as its bearer's credential, so skipping the
+            # check has to be a deliberate, recorded choice.
+            raise ValueError(
+                "an expected token audience is required (TAP_IAM_AUDIENCE);"
+                " set TAP_IAM_ALLOW_ANY_AUDIENCE=true to accept any token"
+                " from the issuer, which allows tokens issued to other"
+                " services to be replayed against this one"
+            )
         self.issuer = issuer.rstrip("/")
         self.audience = audience or None
         self.jwks_cache_s = jwks_cache_s
         self.timeout_s = timeout_s
         self.well_known_url = well_known_url or f"{self.issuer}/.well-known/openid-configuration"
+        self.group_claims = tuple(group_claims)
         self._lock = threading.Lock()
         self._jwks_client: PyJWKClient | None = None
         self._jwks_uri: str | None = None
@@ -163,17 +181,17 @@ class IAMTokenVerifier:
             raise AuthenticationError(f"bearer token is not valid: {exc}") from exc
         return Principal(
             subject=str(claims["sub"]),
-            groups=_groups(claims),
+            groups=_groups(claims, self.group_claims),
             scopes=tuple(str(claims.get("scope", "")).split()),
             token=token,
             claims=claims,
         )
 
 
-def _groups(claims: dict) -> tuple[str, ...]:
-    """Group membership, from whichever claim the IAM populated."""
+def _groups(claims: dict, names: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Group membership, from the claims this deployment trusts."""
     found: list[str] = []
-    for name in GROUP_CLAIMS:
+    for name in names or DEFAULT_GROUP_CLAIMS:
         value = claims.get(name)
         if isinstance(value, str):
             found.append(value)
@@ -193,11 +211,14 @@ def verifier() -> IAMTokenVerifier:
     global _VERIFIER
     with _VERIFIER_LOCK:
         if _VERIFIER is None:
+            claims = tuple(c.strip() for c in settings.iam_group_claims.split(",") if c.strip())
             _VERIFIER = IAMTokenVerifier(
                 issuer=settings.iam_issuer,
                 audience=settings.iam_audience or None,
                 jwks_cache_s=settings.iam_jwks_cache_s,
                 well_known_url=settings.iam_well_known_url or None,
+                allow_any_audience=settings.iam_allow_any_audience,
+                group_claims=claims or DEFAULT_GROUP_CLAIMS,
             )
         return _VERIFIER
 

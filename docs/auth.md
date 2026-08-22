@@ -53,10 +53,18 @@ If the discovery document names a different issuer than the one configured,
 the service refuses to use it, rather than letting a mistyped URL move trust
 to another IAM.
 
-Group membership is read from whichever claim the IAM populates (`groups`,
-`wlcg.groups`, `entitlements`, `eduperson_entitlement`) and normalised to a
-leading slash, so `/ska/oper` and `ska/oper` in configuration mean the same
-thing.
+An **audience is required**. One IAM issues tokens to many services, so
+without `aud` validation a token minted for any other client of the same
+issuer would be accepted here as its bearer's credential. Accepting that is
+possible but has to be asked for: `auth.iam.allowAnyAudience: true`.
+
+Group membership is read from `groups` and `wlcg.groups` by default, and
+normalised to a leading slash, so `/ska/oper` and `ska/oper` in
+configuration mean the same thing. `entitlements` and
+`eduperson_entitlement` are **not** read: a federated home IdP can assert
+those, and treating them as group names would let an attribute asserted
+elsewhere match a local policy group. A deployment that trusts them can add
+them with `auth.iam.groupClaims`.
 
 ## Choosing a plugin
 
@@ -87,9 +95,19 @@ auth:
       scopes: ["science-metadata:admin"]
 ```
 
-An operation with empty `groups` and `scopes` accepts any verified token. An
-operation left out of the mapping entirely is **denied** — an operation
-nobody configured should not be open by omission, least of all deletion.
+Every operation must be granted explicitly. An operation left out of the
+mapping, **or present with neither groups nor scopes, is denied** — an
+unfinished policy grants nothing, least of all deletion. Accepting any
+verified token is a choice that has to be written down:
+
+```yaml
+    metadata.amend:
+      anyVerifiedToken: true
+```
+
+The chart refuses to render `plugin: iam-groups` with an empty `roles`
+mapping, so enabling auth without writing a policy fails at deploy time
+rather than quietly denying (or, worse, quietly allowing) every write.
 
 ### `permissions-api`
 
@@ -123,6 +141,15 @@ through the vendored `ska_src_permissions_api` client; it is spoken directly
 here because those packages are published to SKA's internal index rather
 than PyPI, and one POST does not justify a private index in every build.
 
+!!! warning "The token travels in the query string"
+    The Permissions API's contract takes the access token as a **required
+    query parameter** (`?token=<jwt>`), not a header — its OpenAPI document
+    declares no header credential, so this cannot be avoided from the client
+    side. Query strings are recorded by access logs, ingress controllers and
+    tracing systems, so live tokens may be readable wherever those logs land.
+    Treat the Permissions API's access logs as credential material, or use
+    the `iam-groups` plugin, which never forwards the token anywhere.
+
 Two deliberate differences from DMAPI's usage:
 
 - **the token is verified before it is sent.** DMAPI forwards the bearer
@@ -138,6 +165,7 @@ Two deliberate differences from DMAPI's usage:
 
 ```python
 from tapcore.auth import AuthPlugin
+
 
 class MyPolicy(AuthPlugin):
     name = "my-policy"

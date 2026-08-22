@@ -12,6 +12,8 @@ ROLES = json.dumps(
         "metadata.delete": {"groups": ["/ska/science-metadata/admin"]},
     }
 )
+# what an operator gets by enabling auth and forgetting to write a policy
+EMPTY_ROLES = json.dumps({"metadata.ingest": {}, "metadata.amend": {}, "metadata.delete": {}})
 
 
 @pytest.fixture
@@ -72,8 +74,10 @@ def test_amend_is_gated(client, secured, software_payload, bearer):
     client.post("/api/v1/software", json=software_payload, headers=oper)
     body = {"table": "software", "values": {"status": "DEPRECATED"}}
     url = f"/api/v1/software/{software_payload['uri']}"
-    assert client.patch(url, json=body).status_code == 401
-    assert client.patch(url, json=body, headers=oper).status_code == 200
+    anonymous = client.patch(url, json=body)
+    authorised = client.patch(url, json=body, headers=oper)
+    assert anonymous.status_code == 401
+    assert authorised.status_code == 200
 
 
 def test_forged_token_is_401_not_403(client, secured, software_payload, forged_keypair, bearer):
@@ -104,14 +108,17 @@ def test_reads_and_queries_stay_anonymous(client, secured, software_payload, fak
     assert client.get(f"/api/v1/software/{software_payload['uri']}").status_code == 200
     assert client.get("/api/v1/tables").status_code == 200
     query = "SELECT source_id, ra FROM ska.continuum_sources"
-    assert client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": query}).status_code == 200
-    assert client.post("/api/v1/jobs", json={"query": query}).status_code == 201
+    synchronous = client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": query})
+    job = client.post("/api/v1/jobs", json={"query": query})
+    assert synchronous.status_code == 200
+    assert job.status_code == 201
 
 
 def test_a_bad_token_is_rejected_even_on_an_open_endpoint(client, secured, forged_keypair, bearer):
     """An unverifiable credential is an error, never silently anonymous."""
     forged, _ = forged_keypair
-    assert client.get("/api/v1/software", headers=bearer(forged)).status_code == 401
+    response = client.get("/api/v1/software", headers=bearer(forged))
+    assert response.status_code == 401
 
 
 def test_auth_endpoint_reports_the_policy(client, secured, iam_issuer):
@@ -135,5 +142,25 @@ def test_auth_endpoint_reports_when_disabled(client):
 
 def test_mutations_are_open_when_auth_is_disabled(client, software_payload):
     """The default deployment must behave exactly as it did before auth existed."""
-    assert client.post("/api/v1/software", json=software_payload).status_code == 201
-    assert client.delete(f"/api/v1/software/{software_payload['uri']}").status_code == 200
+    created = client.post("/api/v1/software", json=software_payload)
+    deleted = client.delete(f"/api/v1/software/{software_payload['uri']}")
+    assert created.status_code == 201
+    assert deleted.status_code == 200
+
+
+def test_an_empty_policy_denies_every_write(
+    client, auth_settings, stub_iam, iam_issuer, iam_audience, software_payload, bearer
+):
+    """Auth enabled with an unwritten policy must lock writes, not open them."""
+    auth_settings(
+        auth_enabled=True,
+        auth_plugin="iam-groups",
+        auth_roles=EMPTY_ROLES,
+        iam_issuer=iam_issuer,
+        iam_audience=iam_audience,
+    )
+    token = bearer()
+    created = client.post("/api/v1/software", json=software_payload, headers=token)
+    deleted = client.delete(f"/api/v1/software/{software_payload['uri']}", headers=token)
+    assert created.status_code == 403
+    assert deleted.status_code == 403

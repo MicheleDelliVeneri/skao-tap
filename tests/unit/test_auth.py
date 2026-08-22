@@ -90,9 +90,34 @@ def test_discovery_is_cached(iam_verifier, make_token):
     assert iam_verifier._discovered_at > 0
 
 
-def test_audience_optional_when_unconfigured(stub_iam, make_token, iam_issuer):
-    verifier = IAMTokenVerifier(issuer=iam_issuer, audience=None)
-    assert verifier.verify(make_token(aud="anything-at-all")).subject == "user-1"
+def test_verifier_refuses_to_run_without_an_audience(iam_issuer):
+    """One IAM serves many services: no audience check means cross-service replay."""
+    with pytest.raises(ValueError, match="audience is required"):
+        IAMTokenVerifier(issuer=iam_issuer, audience=None)
+
+
+def test_any_audience_is_possible_but_must_be_explicit(stub_iam, make_token, iam_issuer):
+    verifier = IAMTokenVerifier(issuer=iam_issuer, audience=None, allow_any_audience=True)
+    assert verifier.verify(make_token(aud="some-other-service")).subject == "user-1"
+
+
+def test_entitlement_claims_are_not_groups_by_default(
+    stub_iam, make_token, iam_issuer, iam_audience
+):
+    """A federated home IdP can assert entitlements; they must not be policy groups."""
+    verifier = IAMTokenVerifier(issuer=iam_issuer, audience=iam_audience)
+    token = make_token(groups=None, entitlements=["/ska/science-metadata/admin"])
+    assert verifier.verify(token).groups == ()
+
+
+def test_entitlement_claims_can_be_opted_into(stub_iam, make_token, iam_issuer, iam_audience):
+    verifier = IAMTokenVerifier(
+        issuer=iam_issuer,
+        audience=iam_audience,
+        group_claims=("groups", "entitlements"),
+    )
+    token = make_token(groups=None, entitlements=["/ska/x"])
+    assert verifier.verify(token).groups == ("/ska/x",)
 
 
 def test_group_claims_are_normalised(stub_iam, make_token, iam_issuer, iam_audience):
@@ -132,11 +157,43 @@ def test_iam_groups_denies_unconfigured_operations():
     assert not plugin.authorize(_principal(groups=["/ska/oper"]), "metadata.delete", {})
 
 
-def test_iam_groups_empty_rule_accepts_any_verified_token():
+def test_iam_groups_empty_rule_grants_nothing():
+    """An unfinished policy entry must not read as "allow everyone".
+
+    Regression for the shipped chart default, which listed every operation
+    with empty groups and scopes: an empty rule used to mean "any verified
+    token", so enabling auth without writing a policy left ingest, amend and
+    delete open to any account at the IAM.
+    """
     from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
 
-    plugin = IAMGroupsPlugin(roles={"metadata.amend": {}})
+    plugin = IAMGroupsPlugin(roles={"metadata.amend": {}, "metadata.delete": {"groups": []}})
+    assert not plugin.authorize(_principal(groups=["/ska/oper"]), "metadata.amend", {})
+    assert not plugin.authorize(_principal(groups=["/ska/oper"]), "metadata.delete", {})
+
+
+def test_iam_groups_any_verified_token_must_be_explicit():
+    from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
+
+    plugin = IAMGroupsPlugin(roles={"metadata.amend": {"any_verified_token": True}})
     assert plugin.authorize(_principal(), "metadata.amend", {})
+    assert not plugin.authorize(Principal(), "metadata.amend", {})
+
+
+def test_iam_groups_describe_names_what_each_operation_grants():
+    """The startup line must not read as reassuring for a rule granting nothing."""
+    from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
+
+    described = IAMGroupsPlugin(
+        roles={
+            "metadata.ingest": {"groups": ["/ska/oper"]},
+            "metadata.amend": {"any_verified_token": True},
+            "metadata.delete": {},
+        }
+    ).describe()
+    assert "metadata.ingest=/ska/oper" in described
+    assert "metadata.amend=ANY verified token" in described
+    assert "metadata.delete=nobody" in described
 
 
 def test_iam_groups_never_authorizes_anonymous():
