@@ -26,6 +26,11 @@ XML = "application/xml"
 
 
 def _job_url(job_id: str) -> str:
+    """The canonical URL of a job.
+
+    Callers pass the id as stored in uws.jobs — never the raw path segment —
+    so only a server-generated id can reach a Location header.
+    """
     return f"{settings.base_url}/async/{job_id}"
 
 
@@ -169,7 +174,7 @@ async def post_phase(job_id: str, request: Request):
             uws.abort_job(conn, job)
         else:
             raise UsageError("PHASE must be RUN or ABORT")
-    return RedirectResponse(_job_url(job_id), status_code=303)
+    return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
 
 @router.get("/{job_id}/executionduration")
@@ -191,7 +196,7 @@ async def post_execution_duration(job_id: str, request: Request):
         if job["phase"] != "PENDING":
             raise UsageError("executionduration can only be set while the job is PENDING")
         uws.update_job(conn, job_id, execution_duration=max(0, duration))
-    return RedirectResponse(_job_url(job_id), status_code=303)
+    return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
 
 @router.get("/{job_id}/destruction")
@@ -210,8 +215,9 @@ async def post_destruction(job_id: str, request: Request):
     except ValueError:
         raise UsageError("DESTRUCTION must be an ISO-8601 timestamp") from None
     with pool().connection() as conn:
+        job = uws.get_job(conn, job_id)
         uws.update_job(conn, job_id, destruction=when)
-    return RedirectResponse(_job_url(job_id), status_code=303)
+    return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
 
 @router.get("/{job_id}/quote")
@@ -245,7 +251,7 @@ async def post_parameters(job_id: str, request: Request):
         merged = dict(job["parameters"] or {})
         merged.update(params)
         uws.update_job(conn, job_id, parameters=merged)
-    return RedirectResponse(_job_url(job_id), status_code=303)
+    return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
 
 @router.get("/{job_id}/results")

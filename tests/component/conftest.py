@@ -40,12 +40,20 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+def _connect_admin_or_skip() -> psycopg.Connection:
+    """Open the admin connection, skipping the component tests if the server
+    is unreachable."""
+    try:
+        return psycopg.connect(_admin_url(), autocommit=True, connect_timeout=5)
+    except Exception as exc:
+        # what pytest.skip() raises, raised directly so the caller can rely on
+        # this branch never returning
+        raise pytest.skip.Exception(f"PostgreSQL not reachable for component tests: {exc}") from exc
+
+
 @pytest.fixture(scope="session")
 def database_url():
-    try:
-        admin = psycopg.connect(_admin_url(), autocommit=True, connect_timeout=5)
-    except Exception as exc:
-        pytest.skip(f"PostgreSQL not reachable for component tests: {exc}")
+    admin = _connect_admin_or_skip()
     if shutil.which("psql") is None:
         pytest.skip("psql client not available for component tests")
     with admin:
