@@ -19,6 +19,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      # Enables GitHub Pages (build type: Actions) on first run, so the
+      # deploy job doesn't 404 on repos where Pages was never switched on.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
