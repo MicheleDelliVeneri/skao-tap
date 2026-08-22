@@ -17,6 +17,7 @@ spec:
         {{- include "skao-tap.labels" . | nindent 8 }}
         app.kubernetes.io/component: tap-executor
     spec:
+      {{- include "skao-tap.scheduling" (dict "ctx" $ "component" "tap-executor" "values" .Values.tapExecutor) | nindent 6 }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:

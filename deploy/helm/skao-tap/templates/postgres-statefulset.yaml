@@ -27,6 +27,14 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.postgresqlSecurityContext.container | nindent 12 }}
+          {{- /* server tuning: each entry becomes a -c key=value argument */}}
+          {{- with .Values.postgresql.tuning }}
+          args:
+            {{- range $key, $value := . }}
+            - "-c"
+            - {{ printf "%s=%v" $key $value | quote }}
+            {{- end }}
+          {{- end }}
           ports:
             - name: postgres
               containerPort: 5432

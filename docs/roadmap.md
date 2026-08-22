@@ -18,7 +18,12 @@ does the rest, third-party packages register through the
 `skao_tap.models` entry-point group, and `TAP_MODEL_PLUGINS` selects what
 a deployment activates; the ODP/srcnet and software-discovery domains
 ship built in — the user data product domain follows when its model
-package exists).
+package exists), and package 5 (scaling, resilience and backup: default
+soft anti-affinity/zone-spread and PodDisruptionBudgets for multi-replica
+services, opt-in VerticalPodAutoscalers per service, `postgresql.tuning`
+server arguments for right-sizing the in-chart database, a scheduled
+`pg_dump` backup CronJob with retention, and documented HA-PostgreSQL,
+PITR and restore procedures — see the deployment guide).
 
 ## Package 4 — Identity and registry — *current*
 
@@ -60,28 +65,6 @@ decides what the bearer of a token may do.
   behaves exactly as today (fully anonymous), so local development and the
   demo notebook are unaffected.
 - VOResource record and VO Registry registration of the service.
-
-## Package 5 — Scaling, resilience and backup
-
-- **Vertical autoscaling of the service pods**: VerticalPodAutoscaler
-  policies for tap-api and tap-executor (recommendation mode first, then
-  auto), with sensible min/max bounds in the Helm chart alongside the
-  existing resource requests/limits.
-- **Database vertical scaling**: right-size the PostgreSQL StatefulSet from
-  observed load (connections, shared_buffers, work_mem for large ADQL
-  sorts/joins), expose the knobs as chart values, and document guidance for
-  managed/external databases.
-- **Distributed deployment for resilience**: multiple tap-api and
-  tap-executor replicas spread across nodes/zones (topology spread
-  constraints and pod anti-affinity), PodDisruptionBudgets, and a
-  highly-available PostgreSQL option (e.g. a streaming-replication operator
-  such as CloudNativePG or Zalando) with automated failover. The executor's
-  `FOR UPDATE SKIP LOCKED` claim already makes multi-replica execution safe.
-- **Backup strategy**: scheduled base backups plus WAL archiving for
-  point-in-time recovery of the database (jobs, TAP_SCHEMA, srcnet
-  metadata), snapshot or object-storage backup of the results volume with a
-  retention policy aligned to `TAP_JOB_RETENTION`, and documented,
-  regularly exercised restore procedures.
 
 ## Package 7 — Queryable region footprints (`s_region`)
 

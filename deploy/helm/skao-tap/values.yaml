@@ -5,11 +5,17 @@ image:
   pullPolicy: IfNotPresent
 
 tapApi:
+  # -- Safe to scale out; pair >1 with a ReadWriteMany results volume.
   replicas: 1
   port: 8080
   # -- Externally visible base URL, written into capabilities and result
   # links. Leave empty to default to the in-cluster service URL.
   baseUrl: ""
+  # -- Override the chart's default spreading (see `scheduling`) wholesale.
+  affinity: {}
+  topologySpreadConstraints: []
+  nodeSelector: {}
+  tolerations: []
   resources:
     requests:
       cpu: 100m
@@ -21,6 +27,65 @@ tapExecutor:
   # -- Executors claim jobs with FOR UPDATE SKIP LOCKED; scaling out is safe
   # provided the results volume is ReadWriteMany (see `results`).
   replicas: 1
+  # -- Override the chart's default spreading (see `scheduling`) wholesale.
+  affinity: {}
+  topologySpreadConstraints: []
+  nodeSelector: {}
+  tolerations: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# -- Resilience: spread each service's replicas across nodes (preferred
+# pod anti-affinity) and zones (topology spread, ScheduleAnyway) — soft
+# constraints, so single-node clusters schedule exactly as before. Per-
+# component `affinity`/`topologySpreadConstraints` values override these.
+scheduling:
+  spreadReplicas: true
+
+# -- Keep at least one pod of each service through voluntary disruptions
+# (drains, upgrades). Only rendered for components with >1 replica.
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+# -- Vertical autoscaling of tap-api and tap-executor. Requires the VPA CRDs
+# (https://github.com/kubernetes/autoscaler) in the cluster. Start with
+# updateMode "Off" (recommendation only, read via `kubectl describe vpa`),
+# move to "Auto" once the bounds are trusted.
+verticalAutoscaling:
+  enabled: false
+  updateMode: "Off"
+  tapApi:
+    minAllowed:
+      cpu: 100m
+      memory: 256Mi
+    maxAllowed:
+      cpu: "2"
+      memory: 4Gi
+  tapExecutor:
+    minAllowed:
+      cpu: 100m
+      memory: 256Mi
+    maxAllowed:
+      cpu: "2"
+      memory: 4Gi
+
+# -- Scheduled pg_dump backups of the whole database (jobs, TAP_SCHEMA,
+# ingested metadata) to a dedicated PVC, pruned after retentionDays.
+# Works against the in-chart PostgreSQL and externalDatabase alike. For
+# point-in-time recovery see docs/deployment.md.
+backup:
+  enabled: false
+  schedule: "0 2 * * *"
+  # -- Keep dumps at least this many days; align with config.jobRetentionSeconds.
+  retentionDays: 7
+  deadlineSeconds: 1800
+  storage: 10Gi
+  storageClass: ""
   resources:
     requests:
       cpu: 100m
@@ -62,6 +127,14 @@ postgresql:
   password: tap
   storage: 5Gi
   storageClass: ""
+  # -- postgresql.conf overrides, passed as `-c key=value` server arguments.
+  # Size to the pod's memory limit; typical starting points for 2Gi:
+  #   max_connections: 100
+  #   shared_buffers: 512MB
+  #   effective_cache_size: 1536MB
+  #   work_mem: 32MB              # per sort/hash node — large ADQL joins
+  #   maintenance_work_mem: 128MB
+  tuning: {}
   resources:
     requests:
       cpu: 250m

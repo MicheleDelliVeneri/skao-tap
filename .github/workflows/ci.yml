@@ -108,6 +108,17 @@ jobs:
             --set externalDatabase.url=postgresql://tap:tap@db.example:5432/tap \
             --set ingress.enabled=true \
             --set ingress.host=tap.example.org > /dev/null
+      - name: Template with scaling, VPA, backup and PG tuning
+        run: |
+          helm template skao-tap deploy/helm/skao-tap \
+            --set tapApi.replicas=3 \
+            --set tapExecutor.replicas=2 \
+            --set results.accessModes={ReadWriteMany} \
+            --set verticalAutoscaling.enabled=true \
+            --set backup.enabled=true \
+            --set postgresql.tuning.shared_buffers=512MB \
+            --set postgresql.tuning.max_connections=100 \
+            | grep -qE "kind: (PodDisruptionBudget|VerticalPodAutoscaler|CronJob)"
 
   helm-e2e:
     name: Helm chart e2e (kind)
