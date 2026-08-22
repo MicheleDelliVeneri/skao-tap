@@ -71,6 +71,13 @@ jobs:
             docker exec tap-db-ci pg_isready -U tap -d tap && break
             sleep 2
           done
+          # fail here, with the server's own logs, rather than further down
+          # with a confusing psql connection error
+          if ! docker exec tap-db-ci pg_isready -U tap -d tap; then
+            echo "::error::tap-db did not become ready within 120s"
+            docker logs --tail 100 tap-db-ci
+            exit 1
+          fi
           docker exec tap-db-ci psql -U tap -d tap -c "ALTER USER tap WITH SUPERUSER"
           docker exec tap-db-ci psql -U tap -d tap -tAc "SELECT version()"
       - run: uv sync --locked --all-groups
