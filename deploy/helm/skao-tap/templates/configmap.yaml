@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "skao-tap.fullname" . }}-config
+  labels:
+    {{- include "skao-tap.labels" . | nindent 4 }}
+data:
+  TAP_BASE_URL: {{ include "skao-tap.baseUrl" . | quote }}
+  TAP_RESULTS_DIR: /results
+  TAP_QUERY_ROLE: {{ .Values.config.queryRole | quote }}
+  TAP_DEFAULT_MAXREC: {{ .Values.config.defaultMaxrec | quote }}
+  TAP_HARD_MAXREC: {{ .Values.config.hardMaxrec | quote }}
+  TAP_SYNC_TIMEOUT: {{ .Values.config.syncTimeoutSeconds | quote }}
+  TAP_ASYNC_EXEC_DURATION: {{ .Values.config.asyncExecDurationSeconds | quote }}
+  TAP_JOB_RETENTION: {{ .Values.config.jobRetentionSeconds | quote }}

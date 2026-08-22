@@ -1,0 +1,11 @@
+FROM python:3.12-slim AS base
+COPY --from=ghcr.io/astral-sh/uv:0.6 /uv /usr/local/bin/uv
+WORKDIR /srv
+COPY pyproject.toml uv.lock ./
+COPY libs/tapcore ./libs/tapcore
+COPY services/tap-executor ./services/tap-executor
+COPY services/tap-api/pyproject.toml ./services/tap-api/pyproject.toml
+RUN mkdir -p services/tap-api/tap_api \
+    && touch services/tap-api/tap_api/__init__.py \
+    && uv sync --frozen --no-dev --no-editable --package tap-executor
+CMD ["/srv/.venv/bin/python", "-m", "tap_executor.worker"]

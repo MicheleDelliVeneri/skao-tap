@@ -1,0 +1,30 @@
+site_name: skao-tap
+site_description: IVOA TAP 1.1 server in Python — microservices on PostgreSQL
+repo_url: https://github.com/MicheleDelliVeneri/skao-tap
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  features:
+    - navigation.sections
+    - content.code.copy
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.highlight
+  - pymdownx.superfences
+nav:
+  - Overview: index.md
+  - Architecture: architecture.md
+  - API reference: api.md
+  - Deployment: deployment.md
+  - Development: development.md

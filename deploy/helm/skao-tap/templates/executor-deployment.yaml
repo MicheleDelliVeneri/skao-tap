@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "skao-tap.fullname" . }}-tap-executor
+  labels:
+    {{- include "skao-tap.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tap-executor
+spec:
+  replicas: {{ .Values.tapExecutor.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: tap-executor
+  template:
+    metadata:
+      labels:
+        {{- include "skao-tap.labels" . | nindent 8 }}
+        app.kubernetes.io/component: tap-executor
+    spec:
+      containers:
+        - name: tap-executor
+          image: "{{ .Values.image.registry }}/tap-executor:{{ include "skao-tap.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "skao-tap.fullname" . }}-config
+            - secretRef:
+                name: {{ include "skao-tap.fullname" . }}-db
+          volumeMounts:
+            - name: results
+              mountPath: /results
+          resources:
+            {{- toYaml .Values.tapExecutor.resources | nindent 12 }}
+      volumes:
+        - name: results
+          persistentVolumeClaim:
+            claimName: {{ include "skao-tap.fullname" . }}-results
