@@ -9,7 +9,12 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from tapcore.config import settings
 from tapcore.db import close_pool, pool
 from tapcore.errors import TAPError
@@ -97,8 +102,8 @@ async def sync(request: Request):
     if params.get("REQUEST") == "getCapabilities":  # TAP 1.0 compatibility
         return RedirectResponse(f"{settings.base_url}/capabilities", status_code=303)
     prepared = prepare_query(params)
-    body, mime = run_sync(prepared)
-    return Response(body, media_type=mime)
+    chunks, mime = run_sync(prepared)
+    return StreamingResponse(chunks, media_type=mime)
 
 
 @app.get("/tap/examples")

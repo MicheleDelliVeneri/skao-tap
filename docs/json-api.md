@@ -14,7 +14,12 @@ POST /api/v1/query
 {"query": "SELECT TOP 5 * FROM ska.continuum_sources", "maxrec": 100}
 ```
 
-returns `{"status": "OK|OVERFLOW", "metadata": [...], "data": [[...], ...]}`.
+returns `{"metadata": [...], "data": [[...], ...], "status": "OK|OVERFLOW"}`,
+with each metadata entry carrying `datatype`, `unit`, `ucd` and
+`description` from TAP_SCHEMA. Set `"format": "parquet"` (or `"arrow"`,
+`"votable"`, `"csv"`, `"tsv"`) for other output formats — Parquet responses
+embed the column metadata in the Arrow schema and the DALI status in the
+file metadata.
 Errors come back as JSON (`{"error": "UsageError", "message": ...}`) with
 the same HTTP status codes as the DALI VOTable errors on `/tap`.
 

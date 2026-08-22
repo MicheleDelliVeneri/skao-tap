@@ -5,12 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tapcore"
 version = "0.1.0"
-description = "Shared core for the SKAO TAP microservices: ADQL translation, VOTable serialization, UWS job model"
+description = "Shared core for the SKAO TAP microservices: ADQL translation, typed streaming result serialization, UWS job model"
 requires-python = ">=3.11"
 dependencies = [
     "psycopg[binary,pool]>=3.1",
-    "astropy>=6.0",
-    "numpy>=1.26",
+    "pyarrow>=17.0",
     "queryparser-python3>=0.7",
 ]
 

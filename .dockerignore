@@ -8,3 +8,5 @@ tests
 docs
 deploy
 scripts
+**/build
+**/*.egg-info

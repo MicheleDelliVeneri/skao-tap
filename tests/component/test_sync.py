@@ -13,11 +13,17 @@ VOT = {"v": "http://www.ivoa.net/xml/VOTable/v1.3"}
 
 
 def _query_status(text: str) -> str:
+    """The effective QUERY_STATUS: per DALI, a trailing INFO written after
+    the table (e.g. OVERFLOW while streaming) overrides the header one."""
     root = ET.fromstring(text)
-    for info in root.iter(f"{{{VOT['v']}}}INFO"):
-        if info.get("name") == "QUERY_STATUS":
-            return info.get("value")
-    raise AssertionError("no QUERY_STATUS INFO in response")
+    values = [
+        info.get("value")
+        for info in root.iter(f"{{{VOT['v']}}}INFO")
+        if info.get("name") == "QUERY_STATUS"
+    ]
+    if not values:
+        raise AssertionError("no QUERY_STATUS INFO in response")
+    return values[-1]
 
 
 def test_sync_select_with_pyvo(tap_service):

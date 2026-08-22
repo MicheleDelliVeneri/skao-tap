@@ -17,7 +17,7 @@ import os
 import shutil
 
 from fastapi import APIRouter, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from ska_src_mm_notification.models.schemas.srcnet_ingestion import SRCIngestionNotification
 from tapcore import uws
@@ -40,10 +40,17 @@ class QueryRequest(BaseModel):
     query: str = Field(description="ADQL query", min_length=1)
     lang: str = Field(default="ADQL", description="Query language (ADQL or ADQL-2.0)")
     maxrec: int | None = Field(default=None, ge=0, description="Row limit (MAXREC)")
+    format: str = Field(
+        default="json",
+        description="Result format: json (default), votable, csv, tsv, parquet, or arrow",
+    )
 
 
 class JobRequest(QueryRequest):
-    format: str = Field(default="votable", description="Result format: votable, csv, tsv, or json")
+    format: str = Field(
+        default="votable",
+        description="Result format: votable, csv, tsv, json, parquet, or arrow",
+    )
     run: bool = Field(default=False, description="Queue the job for execution immediately")
     run_id: str | None = Field(default=None, description="Client-supplied run identifier")
 
@@ -59,10 +66,13 @@ def _tap_params(body: QueryRequest, fmt: str | None = None) -> dict[str, str]:
 
 @router.post("/query")
 async def sync_query(body: QueryRequest):
-    """Synchronous ADQL query with a JSON response (status, metadata, data)."""
-    prepared = prepare_query(_tap_params(body, fmt="json"))
-    payload, mime = run_sync(prepared)
-    return Response(payload, media_type=mime)
+    """Synchronous ADQL query, JSON by default (metadata, data, status).
+
+    Set ``format`` to ``parquet`` or ``arrow`` for columnar responses.
+    """
+    prepared = prepare_query(_tap_params(body, fmt=body.format))
+    chunks, mime = run_sync(prepared)
+    return StreamingResponse(chunks, media_type=mime)
 
 
 # ---------------------------------------------------------------------------

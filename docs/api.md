@@ -18,7 +18,7 @@ Parameters:
 |---|---|---|
 | `QUERY` | yes | The ADQL query |
 | `LANG` | yes | `ADQL` or `ADQL-2.0` |
-| `RESPONSEFORMAT` (or `FORMAT`) | no | `votable` (default), `csv`, `tsv`, `json`, or the equivalent MIME types |
+| `RESPONSEFORMAT` (or `FORMAT`) | no | `votable` (default), `csv`, `tsv`, `json`, `parquet`, `arrow`, or the equivalent MIME types |
 | `MAXREC` | no | Row limit; `0` returns metadata only; overflow is flagged with `QUERY_STATUS=OVERFLOW` |
 | `REQUEST` | no | `doQuery` accepted for TAP 1.0 compatibility |
 | `UPLOAD` | — | Not supported; rejected with a UsageFault |
