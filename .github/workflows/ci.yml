@@ -39,6 +39,7 @@ jobs:
         with:
           files: coverage.xml
           flags: unit
+          slug: MicheleDelliVeneri/skao-tap
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
@@ -67,6 +68,7 @@ jobs:
         with:
           files: coverage.xml
           flags: component
+          slug: MicheleDelliVeneri/skao-tap
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
