@@ -216,9 +216,12 @@ async def delete_job(job_id: str):
     except FileNotFoundError:
         pass  # nothing was ever written for this job
     except OSError:
-        # the job row is gone either way; keep the traceback (the id is
-        # server-generated and format-checked, so it is safe to log)
-        log.warning("failed to remove result files for job %s", job_id, exc_info=True)
+        # the job row is gone either way. The id is not interpolated into the
+        # message — it reaches the log as a path-derived request value, which
+        # CodeQL flags as log injection (py/log-injection) whatever format
+        # check it passed — but the traceback names the directory that could
+        # not be removed, so the record stays actionable.
+        log.warning("failed to remove the result files of a deleted job", exc_info=True)
     return Response(status_code=204)
 
 

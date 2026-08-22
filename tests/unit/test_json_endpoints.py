@@ -87,7 +87,7 @@ def test_delete_job(client, fake_db, caplog):
     deleted = client.delete(f"/api/v1/jobs/{job_id}")
     assert deleted.status_code == 204
     assert job_id not in fake_db.jobs
-    assert "failed to remove result files" not in caplog.text
+    assert "failed to remove the result files" not in caplog.text
     missing = client.delete(f"/api/v1/jobs/{job_id}")
     assert missing.status_code == 404
 
@@ -103,10 +103,11 @@ def test_delete_job_warns_on_unexpected_cleanup_error(client, monkeypatch, caplo
     monkeypatch.setattr(json_api.shutil, "rmtree", fail_cleanup)
     deleted = client.delete(f"/api/v1/jobs/{job_id}")
     assert deleted.status_code == 204
-    # the id is server-generated and format-checked, so it is logged along
-    # with the traceback: an unattributable warning is not actionable
-    assert f"failed to remove result files for job {job_id}" in caplog.text
+    # the id is a request value (py/log-injection), so it stays out of the
+    # message; the traceback is what makes the record actionable
+    assert "failed to remove the result files of a deleted job" in caplog.text
     assert "PermissionError" in caplog.text
+    assert job_id not in caplog.text
 
 
 def test_job_result_download(client, fake_db, results_dir):

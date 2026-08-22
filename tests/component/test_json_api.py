@@ -178,8 +178,10 @@ def test_notification_delete_cascades_through_the_hierarchy(tap_service, databas
     deleted = httpx.delete(url, timeout=30)
     assert deleted.status_code == 200, deleted.text
     assert deleted.json() == {"status": "deleted", "project_id": payload["project_id"]}
-    assert httpx.get(url, timeout=10).status_code == 404
-    assert httpx.delete(url, timeout=10).status_code == 404
+    fetched_after_delete = httpx.get(url, timeout=10)
+    deleted_again = httpx.delete(url, timeout=10)
+    assert fetched_after_delete.status_code == 404
+    assert deleted_again.status_code == 404
 
     with psycopg.connect(database_url) as conn:
         after = {

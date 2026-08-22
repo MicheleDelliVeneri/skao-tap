@@ -198,7 +198,8 @@ def test_delete_audit_log_cannot_be_forged_through_the_id(caplog):
 
     forged = "nope\nINFO:tapcore:deleted everything"
     with caplog.at_level(logging.INFO, logger="tapcore"):
-        assert ingest.delete_document(Conn(), PLUGIN, forged)
+        deleted = ingest.delete_document(Conn(), PLUGIN, forged)
+    assert deleted
     assert "deleted everything" in caplog.text  # only as part of the quoted id
     assert len(caplog.records) == 1
     assert "\n" not in caplog.records[0].getMessage()

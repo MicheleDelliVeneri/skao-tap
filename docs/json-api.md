@@ -102,9 +102,19 @@ with `{"status": "deleted", "<id column>": "..."}` — the same
 report-what-happened shape as `POST` and `PATCH` — and `404` if the document
 is not there, so deleting twice is *not* idempotent (unlike
 `DELETE /api/v1/jobs/{id}`, which follows UWS and answers `204`). Each
-deletion is logged by the service. There is no authentication layer yet:
-until one is wired in, deployments must not expose the API to untrusted
-networks.
+deletion is logged by the service.
+
+There is no authentication layer yet, so `DELETE` — like every other
+endpoint — is open to anyone who can reach the service, and deployments
+must not expose it to untrusted networks. Package 4 of the
+[roadmap](roadmap.md) wires in the SRCNet flow: INDIGO IAM bearer tokens
+validated against the issuer's JWKS, with authorisation delegated per route
+to the [SKA SRC Permissions
+API](https://gitlab.com/ska-telescope/src/src-service-apis/ska-src-permissions-api)
+(IAM group membership via its `/gms` endpoint mapped onto roles). The
+mutating endpoints — `POST`, `PATCH` and `DELETE` — are the first to be
+protected, and the deletion audit record then carries the authenticated
+subject.
 
 ### Model-driven database schema
 

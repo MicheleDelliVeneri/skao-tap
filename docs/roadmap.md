@@ -22,8 +22,43 @@ package exists).
 
 ## Package 4 — Identity and registry — *current*
 
-- Authentication and job ownership (`ownerId`), per-user visibility of the
-  job list; groundwork for per-user schemas and quotas.
+Authentication and authorisation follow the SRCNet flow rather than a
+service-local scheme: **INDIGO IAM** issues the tokens, and the
+[SKA SRC Permissions API](https://gitlab.com/ska-telescope/src/src-service-apis/ska-src-permissions-api)
+decides what the bearer of a token may do.
+
+- **INDIGO IAM bearer tokens**: accept `Authorization: Bearer <token>` on
+  `/tap/*` and `/api/v1/*`, validating the access token against the IAM
+  issuer's OIDC discovery document and JWKS (signature, `iss`, `aud`,
+  `exp`, required scopes), with the issuer, audience and JWKS cache TTL as
+  chart values. The token subject becomes the request identity.
+- **Permissions API for authorisation**: no permission logic in this
+  service. Each protected request is checked against a `type=route`
+  policy (HTTP method + path) held by the Permissions API, which maps IAM
+  group membership — read through its `/gms` Group Membership Service
+  endpoint — onto roles and evaluates the route's role expression. The
+  policies for the TAP service are versioned in the Permissions API's
+  environment directories, not here.
+- **What gets protected**: the destructive and mutating surface first —
+  `POST`/`PATCH`/`DELETE /api/v1/<mount>` on every metadata domain (a
+  `DELETE` cascades through a whole document hierarchy), then job
+  creation, job mutation and job deletion. Anonymous read-only querying
+  stays possible where a deployment's policy allows it, so plain VO
+  clients keep working.
+- **Token exchange for downstream calls**: where the service has to act on
+  a user's behalf against another SRCNet service, exchange the incoming
+  token through the Permissions API (`type=exchange` policies) for one
+  carrying the target audience, instead of forwarding the original.
+- **Job ownership**: fill UWS `ownerId` from the validated token subject,
+  scope the job list and job resources to the owner, and keep anonymous
+  jobs working when a deployment runs unauthenticated. Groundwork for
+  per-user schemas and quotas.
+- **Deletion becomes attributable**: the audit record written on
+  `DELETE /api/v1/<mount>/{root_id}` gains the authenticated subject, so
+  cascading deletions can be traced to a user.
+- **Graceful degradation**: a deployment with no IAM issuer configured
+  behaves exactly as today (fully anonymous), so local development and the
+  demo notebook are unaffected.
 - VOResource record and VO Registry registration of the service.
 
 ## Package 5 — Scaling, resilience and backup
@@ -73,3 +108,33 @@ ingested metadata.
   region syntax itself (and keep doing so afterwards as defense in depth).
 - **Amendments follow**: `PATCH` updates to `s_region` re-derive the
   geometry column.
+
+## Package 8 — Unified SRCNet logging and observability
+
+The services currently use ad-hoc `logging.getLogger("tap_api")` /
+`"tapcore"` loggers with the default formatting, so their output does not
+join up with the rest of SRCNet.
+
+- **Adopt `ska-src-logging`**: replace the local logger setup with the
+  shared
+  [SKA SRC API logging library](https://gitlab.com/ska-telescope/src/src-api/ska-src-api-logging)
+  (`get_logger(app_name=...)`) in `tapcore`, `tap-api` and `tap-executor`,
+  so every record carries the standard structured fields and JSON output
+  in deployments (colourised console locally).
+- **Request correlation**: propagate `X-Request-ID` across tap-api →
+  PostgreSQL → tap-executor so one user query, its UWS job and the
+  executor's statements share a correlation id; wrap per-job work in the
+  library's `LogContext` to attach `job_id`, `owner_id` and the metadata
+  domain to every record in scope.
+- **OpenTelemetry and metrics**: `setup_uvicorn_logging()` in the FastAPI
+  lifespan, `setup_otel_fastapi(app, service_name=...)` for traces and log
+  shipping, and `setup_metrics_endpoint(app)` for Prometheus scraping —
+  mounted so it does not collide with the TAP/VOSI resource paths, and
+  exposed through the Helm chart (endpoint, service annotations,
+  opt-out for air-gapped sites).
+- **Redaction**: use the library's sensitive-data redaction on the paths
+  that handle tokens and user-supplied identifiers, keeping the log-safe
+  rendering already applied to metadata ids.
+- **Consistency pass**: audit existing log statements for level and
+  message shape while porting, and cover the correlation-id propagation
+  with a component test.
