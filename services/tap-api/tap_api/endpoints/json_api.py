@@ -215,8 +215,10 @@ async def delete_job(job_id: str):
         uws.delete_job(conn, job_id)
     try:
         shutil.rmtree(uws.job_results_dir(job_id))
-    except OSError:
-        log.warning("failed to remove result files for job %s", job_id, exc_info=True)
+    except OSError as exc:
+        if isinstance(exc, FileNotFoundError):
+            return Response(status_code=204)
+        log.warning("failed to remove result files for a deleted job")
     return Response(status_code=204)
 
 

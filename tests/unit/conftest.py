@@ -6,6 +6,10 @@ layer, the UWS job lifecycle, and the executor can be exercised without a
 PostgreSQL server.
 """
 
+# pyright: reportGeneralTypeIssues=false, reportMissingImports=false
+# pyright: reportArgumentType=false, reportAttributeAccessIssue=false
+# pyright: reportOptionalMemberAccess=false
+
 import contextlib
 import datetime
 import json
@@ -79,7 +83,7 @@ class FakeConnection:
         pass
 
     def execute(self, sql, params=None):
-        return self._db.run(sql, params)
+        return self._db.run(sql, params or ())
 
 
 class FakePool:
@@ -164,7 +168,7 @@ class FakeDB:
 
     # -- SQL routing --------------------------------------------------------
 
-    def run(self, sql, params=None):
+    def run(self, sql, params=()):
         text = sql.strip()
         self.statements.append(text)
         head = text.upper()
@@ -311,6 +315,22 @@ class FakeDB:
         if head.startswith("DELETE FROM UWS.JOBS"):
             return FakeResult(rowcount=1 if self.jobs.pop(params[0], None) else 0)
 
+        match = re.match(r"DELETE FROM ((?:srcnet|software)\.\S+) WHERE (\w+) = %s", text)
+        if match:  # metadata root delete; PostgreSQL cascades to descendants
+            root_table, id_column = match.groups()
+            root_rows = self.srcnet.get(root_table, {})
+            root_keys = [key for key, row in root_rows.items() if row.get(id_column) == params[0]]
+            for key in root_keys:
+                del root_rows[key]
+            if root_keys:
+                for rows in self.srcnet.values():
+                    descendant_keys = [
+                        key for key, row in rows.items() if row.get(id_column) == params[0]
+                    ]
+                    for key in descendant_keys:
+                        del rows[key]
+            return FakeResult(rowcount=len(root_keys))
+
         match = re.match(r"UPDATE ((?:srcnet|software)\.\S+) SET ", text)
         if match:  # srcnet amend
             table = match.group(1)
@@ -332,8 +352,9 @@ class FakeDB:
         match = re.match(r"INSERT INTO ((?:srcnet|software)\.\S+) \(([^)]*)\) VALUES", text)
         if match and "ON CONFLICT" in text:  # srcnet upsert
             table, columns = match.group(1), [c.strip() for c in match.group(2).split(",")]
-            pk = re.search(r"ON CONFLICT \(([^)]*)\)", text).group(1)
-            pk_columns = [c.strip() for c in pk.split(",")]
+            pk_match = re.search(r"ON CONFLICT \(([^)]*)\)", text)
+            assert pk_match is not None
+            pk_columns = [c.strip() for c in pk_match.group(1).split(",")]
             values = [getattr(p, "obj", None) if type(p).__name__ == "Jsonb" else p for p in params]
             row = dict(zip(columns, values, strict=True))
             key = tuple(row[c] for c in pk_columns)

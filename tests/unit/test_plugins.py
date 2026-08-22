@@ -60,6 +60,9 @@ def test_selection_all_and_subset(plugin_selection):
     plugin_selection("cheese")
     with pytest.raises(LookupError, match="unknown plugin 'cheese'"):
         active_plugins()
+    plugin_selection("odp,odp")
+    with pytest.raises(ValueError, match="selects plugin 'odp' more than once"):
+        active_plugins()
 
 
 def test_identity_overrides_and_flattening():
@@ -139,21 +142,37 @@ def test_software_ingest_list_fetch_amend(client, fake_db):
 
 def test_software_validation_rejects_bad_payload(client):
     bad = dict(SOFTWARE_PAYLOAD, uri="not-a-valid-uri")
-    assert client.post("/api/v1/software", json=bad).status_code == 422
+    bad_response = client.post("/api/v1/software", json=bad)
     missing = {k: v for k, v in SOFTWARE_PAYLOAD.items() if k != "artifacts"}
-    assert client.post("/api/v1/software", json=missing).status_code == 422
+    missing_response = client.post("/api/v1/software", json=missing)
+    assert bad_response.status_code == 422
+    assert missing_response.status_code == 422
 
 
 def test_unknown_software_document_is_404(client):
     url = "/api/v1/software/ska:nope:0.0.1"
-    assert client.get(url).status_code == 404
-    assert client.delete(url).status_code == 404
+    fetched = client.get(url)
+    deleted = client.delete(url)
+    assert fetched.status_code == 404
+    assert deleted.status_code == 404
 
 
 def test_openapi_documents_metadata_delete(client):
     spec = client.get("/openapi.json").json()
     path = spec["paths"]["/api/v1/software/{root_id}"]
     assert "delete" in path
+
+
+def test_software_delete_document(client, fake_db):
+    created = client.post("/api/v1/software", json=SOFTWARE_PAYLOAD)
+    assert created.status_code == 201
+
+    url = f"/api/v1/software/{SOFTWARE_PAYLOAD['uri']}"
+    deleted = client.delete(url)
+    assert deleted.status_code == 200
+    assert deleted.json() == {"status": "deleted", "uri": SOFTWARE_PAYLOAD["uri"]}
+    assert not fake_db.srcnet["srcnet.software"]
+    assert not fake_db.srcnet["srcnet.software_artifacts"]
 
 
 def test_delete_document_targets_the_plugin_root():
@@ -174,7 +193,8 @@ def test_delete_document_targets_the_plugin_root():
             return Result()
 
     conn = Connection()
-    assert ingest.delete_document(conn, PLUGIN, "ska:demo:1.0.0")
+    deleted = ingest.delete_document(conn, PLUGIN, "ska:demo:1.0.0")
+    assert deleted
     assert conn.statement == "DELETE FROM srcnet.software WHERE uri = %s"
     assert conn.params == ("ska:demo:1.0.0",)
 

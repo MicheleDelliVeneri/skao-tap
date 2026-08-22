@@ -124,8 +124,10 @@ def test_software_delete_cascades_to_artifacts(tap_service):
     deleted = httpx.delete(url, timeout=30)
     assert deleted.status_code == 200, deleted.text
     assert deleted.json() == {"status": "deleted", "uri": payload["uri"]}
-    assert httpx.get(url, timeout=10).status_code == 404
-    assert httpx.delete(url, timeout=10).status_code == 404
+    fetched_after_delete = httpx.get(url, timeout=10)
+    deleted_again = httpx.delete(url, timeout=10)
+    assert fetched_after_delete.status_code == 404
+    assert deleted_again.status_code == 404
 
     artifacts = httpx.post(
         f"{tap_service}/sync",

@@ -1,5 +1,7 @@
 """Unit tests for the /api/v1 JSON facade (tap_api.endpoints.json_api) on the fake pool."""
 
+# pyright: reportMissingImports=false
+
 import os
 
 from ska_src_mm_notification.models.schemas.srcnet_ingestion import SRC_INGESTION_EXAMPLE
@@ -82,13 +84,29 @@ def test_phase_transitions(client, fake_db):
     assert rerun.status_code == 400
 
 
-def test_delete_job(client, fake_db):
+def test_delete_job(client, fake_db, caplog):
     job_id = client.post("/api/v1/jobs", json={"query": QUERY}).json()["job_id"]
     deleted = client.delete(f"/api/v1/jobs/{job_id}")
     assert deleted.status_code == 204
     assert job_id not in fake_db.jobs
+    assert "failed to remove result files" not in caplog.text
     missing = client.delete(f"/api/v1/jobs/{job_id}")
     assert missing.status_code == 404
+
+
+def test_delete_job_warns_on_unexpected_cleanup_error(client, monkeypatch, caplog):
+    from tap_api.endpoints import json_api
+
+    job_id = client.post("/api/v1/jobs", json={"query": QUERY}).json()["job_id"]
+
+    def fail_cleanup(_path):
+        raise PermissionError
+
+    monkeypatch.setattr(json_api.shutil, "rmtree", fail_cleanup)
+    deleted = client.delete(f"/api/v1/jobs/{job_id}")
+    assert deleted.status_code == 204
+    assert "failed to remove result files for a deleted job" in caplog.text
+    assert job_id not in caplog.text
 
 
 def test_job_result_download(client, fake_db, results_dir):

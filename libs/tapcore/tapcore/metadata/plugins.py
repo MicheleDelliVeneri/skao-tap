@@ -100,14 +100,18 @@ def active_plugins() -> list[MetadataPlugin]:
         active = list(available.values())
     else:
         active = []
+        selected_names: set[str] = set()
         for name in (part.strip() for part in selection.split(",")):
             if not name:
                 continue
+            if name in selected_names:
+                raise ValueError(f"TAP_MODEL_PLUGINS selects plugin {name!r} more than once")
             if name not in available:
                 known = ", ".join(sorted(available)) or "none"
                 raise LookupError(
                     f"TAP_MODEL_PLUGINS selects unknown plugin {name!r} (installed: {known})"
                 )
+            selected_names.add(name)
             active.append(available[name])
     _check_table_collisions(active)
     return active

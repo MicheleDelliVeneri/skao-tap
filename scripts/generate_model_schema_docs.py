@@ -58,7 +58,7 @@ def render_schema_docs(plugins: Iterable[MetadataPlugin]) -> str:
                     f"Primary key: `{', '.join(table.pk_columns)}`",
                     "",
                     "| Column | Model field | SQL type | TAP type | Nullable | Key | "
-                    "Constraints | Description |",
+                    + "Constraints | Description |",
                     "|---|---|---|---|:---:|:---:|---|---|",
                 ]
             )
