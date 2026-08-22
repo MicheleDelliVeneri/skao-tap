@@ -12,15 +12,39 @@ pytestmark = pytest.mark.component
 
 QUICK_QUERY = "SELECT TOP 3 source_id, source_name FROM ska.continuum_sources"
 
-# ~8^10 = 1e9 row combinations to count: CPU-bound for well over a minute,
-# produces no result rows until done — safe to abort mid-flight. Explicit
-# JOIN ... ON 1=1 keeps the syntactic join order (join_collapse_limit), so
-# planning is instant and the time is spent in the (cancellable) executor —
-# an implicit 10-way cross join stalls the *planner*, which ignores
-# pg_cancel_backend for minutes.
-SLOW_QUERY = "SELECT COUNT(*) AS n FROM ska.continuum_sources AS t0 " + " ".join(
-    f"JOIN ska.continuum_sources AS t{i} ON 1=1" for i in range(1, 10)
-)
+# The slow query must spend its time in *execution*, where PostgreSQL
+# checks for interrupts at every tuple, not in *planning*: a many-relation
+# cross join stalls the join-order planner, which honors neither
+# pg_cancel_backend nor pg_terminate_backend for tens of seconds (observed
+# in CI: a backend shrugging off six cancels and two terminates inside
+# DECLARE). A 2-relation cross join over a large seeded table plans in
+# microseconds and would take hours to execute — cancellable instantly.
+SLOW_QUERY = "SELECT COUNT(*) AS n FROM ska.abort_fodder AS a JOIN ska.abort_fodder AS b ON 1=1"
+
+
+@pytest.fixture(scope="module")
+def abort_fodder(tap_service, database_url):
+    """A ~2M-row table registered in TAP_SCHEMA, giving SLOW_QUERY a
+    ~4e12-tuple execution with a trivially cheap plan."""
+    import psycopg
+
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS ska.abort_fodder AS"
+            " SELECT g AS id FROM generate_series(1, 2000000) AS g"
+        )
+        conn.execute("GRANT SELECT ON ska.abort_fodder TO tap_reader")
+        conn.execute(
+            "INSERT INTO tap_schema.tables (schema_name, table_name, table_type, description)"
+            " VALUES ('ska', 'ska.abort_fodder', 'table', 'abort-test fodder')"
+            " ON CONFLICT (table_name) DO NOTHING"
+        )
+        conn.execute(
+            "INSERT INTO tap_schema.columns (table_name, column_name, datatype)"
+            " VALUES ('ska.abort_fodder', 'id', 'long')"
+            " ON CONFLICT (table_name, column_name) DO NOTHING"
+        )
+    return "ska.abort_fodder"
 
 
 FINAL_PHASES = ("COMPLETED", "ERROR", "ABORTED")
@@ -79,7 +103,7 @@ def test_after_filters_job_list(tap_service):
     )
 
 
-def test_abort_cancels_running_query(tap_service, database_url):
+def test_abort_cancels_running_query(tap_service, database_url, abort_fodder):
     import psycopg
 
     job_url = _create(tap_service, SLOW_QUERY)
@@ -127,7 +151,7 @@ def test_abort_cancels_running_query(tap_service, database_url):
     assert result.status_code == 404
 
 
-def test_abort_immediately_after_run(tap_service, database_url):
+def test_abort_immediately_after_run(tap_service, database_url, abort_fodder):
     """Abort racing the executor's PID publication: even if the cancel from
     the API has nothing to hit yet, the executor must notice ABORTED and
     never run the scan to completion."""
@@ -158,7 +182,7 @@ def test_abort_immediately_after_run(tap_service, database_url):
     assert httpx.get(f"{job_url}/results/result", timeout=10).status_code == 404
 
 
-def test_json_api_wait_after_and_abort(tap_service):
+def test_json_api_wait_after_and_abort(tap_service, abort_fodder):
     api = tap_service.rsplit("/tap", 1)[0] + "/api/v1"
     job = httpx.post(f"{api}/jobs", json={"query": QUICK_QUERY, "run": True}, timeout=30).json()
     deadline = time.monotonic() + 60
