@@ -1,8 +1,5 @@
 FROM python:3.14-slim AS builder
-COPY --from=ghcr.io/astral-sh/uv:0.6 /uv /usr/local/bin/uv
-# git is needed to fetch the ska-src-mm-notification dependency from GitLab
-RUN apt-get update && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /usr/local/bin/uv
 WORKDIR /srv
 COPY pyproject.toml uv.lock ./
 COPY libs/tapcore ./libs/tapcore

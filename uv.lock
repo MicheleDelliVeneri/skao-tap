@@ -1096,12 +1096,16 @@ wheels = [
 [[package]]
 name = "ska-src-mm-notification"
 version = "0.1.6"
-source = { git = "https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification.git?rev=ab55c051825efd65490275cbdddef3418ef473ad#ab55c051825efd65490275cbdddef3418ef473ad" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "astropy" },
     { name = "jsonschema" },
     { name = "pydantic" },
     { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4a/03/9cba5a532e9b602368e2afdc1f0c48e01d4608a4b5021b1ae2778ac6d113/ska_src_mm_notification-0.1.6.tar.gz", hash = "sha256:6952ec7e43da92d1ae0c34cb0b33a897717461d56a451072144b046d70dfdf55", size = 38573, upload-time = "2026-08-22T09:11:23.596Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cf/5a/002c8680164b4c802563489ab117d2088c8f2d5b1327c1e9904bcdff9a03/ska_src_mm_notification-0.1.6-py3-none-any.whl", hash = "sha256:b2ee9da10e67511b545948db1de8b4831f4d253c97d8b846cee910455f0cb39a", size = 48272, upload-time = "2026-08-22T09:11:22.519Z" },
 ]
 
 [[package]]
@@ -1179,7 +1183,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "ska-src-mm-notification", git = "https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification.git?rev=ab55c051825efd65490275cbdddef3418ef473ad" },
+    { name = "ska-src-mm-notification", specifier = ">=0.1.6" },
     { name = "tapcore", editable = "libs/tapcore" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
 ]

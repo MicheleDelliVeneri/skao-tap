@@ -1,5 +1,5 @@
 FROM python:3.14-slim AS base
-COPY --from=ghcr.io/astral-sh/uv:0.6 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /usr/local/bin/uv
 WORKDIR /srv
 COPY pyproject.toml uv.lock ./
 COPY libs/tapcore ./libs/tapcore
