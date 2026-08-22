@@ -70,9 +70,16 @@ ingested metadata.
   pgsphere geometry column (`s_region_geom spoly`; circles converted to
   polygon approximations), register it in TAP_SCHEMA, and index it with
   GiST so ADQL `INTERSECTS`/`CONTAINS` over footprints are fast.
-- **Reject malformed regions at the API boundary**: the library accepts
-  any string for `s_region` today; until an upstream validator lands in
-  ska-src-mm-notification (tracked there), the ingestion endpoint should
-  validate the region syntax itself.
+- **ska-src-mm-notification 0.1.8 — fix the region type mismatch**: the
+  model declares `s_region: str | None` with no format validation, while
+  the field's own description promises "pgsphere format or STC-S in ICRS
+  frame" — any string (e.g. `"NOT A REGION"`) validates today, unlike the
+  numeric fields, which carry Ge/Le constraints. The 0.1.8 release should
+  add a pydantic validator for the STC-S grammar (`CIRCLE`, `POLYGON`,
+  `POSITION` in ICRS, sensible coordinate ranges), so malformed regions
+  are rejected at the producer, before they reach any archive.
+- **Reject malformed regions at the API boundary**: until the 0.1.8
+  validator lands upstream, the ingestion endpoint should validate the
+  region syntax itself (and keep doing so afterwards as defense in depth).
 - **Amendments follow**: `PATCH` updates to `s_region` re-derive the
   geometry column.
