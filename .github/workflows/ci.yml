@@ -95,7 +95,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: Chart DB init SQL matches db/init
         run: diff -ru db/init deploy/helm/skao-tap/files/db-init
       - run: helm lint deploy/helm/skao-tap
