@@ -27,7 +27,7 @@
 
 | Service | Code | Role |
 |---|---|---|
-| `db` | `db/` | PostgreSQL 16 + pg_sphere; init scripts create `TAP_SCHEMA`, a sample `ska.continuum_sources` catalogue, the `uws.jobs` table and a read-only `tap_reader` role |
+| `db` | `db/` | PostgreSQL 18 + pg_sphere; init scripts create `TAP_SCHEMA`, a sample `ska.continuum_sources` catalogue, the `uws.jobs` table and a read-only `tap_reader` role |
 | `tap-api` | `services/tap-api` | All TAP/UWS/VOSI HTTP endpoints |
 | `tap-executor` | `services/tap-executor` | Asynchronous (UWS) query execution; replicas can run concurrently |
 

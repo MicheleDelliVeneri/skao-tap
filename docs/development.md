@@ -38,14 +38,23 @@ duration, destruction, job listing).
 
 They connect using `TAP_TEST_ADMIN_URL`
 (default `postgresql://tap:tap@127.0.0.1:5432/postgres`) and skip
-automatically when no server is reachable. Local one-time setup mirrors CI:
+automatically when no server is reachable. The simplest server is the
+project's own database image — the same one CI runs, so the tests always see
+the shipped PostgreSQL major and pg_sphere build:
 
 ```bash
-sudo apt-get install postgresql postgresql-16-pgsphere
-sudo service postgresql start
-sudo -u postgres psql -c "CREATE USER tap WITH PASSWORD 'tap' SUPERUSER" \
-                      -c "CREATE DATABASE tap OWNER tap"
+docker build -t skao-tap/tap-db db
+docker run -d --name tap-db -p 5432:5432 \
+  -e POSTGRES_USER=tap -e POSTGRES_PASSWORD=tap -e POSTGRES_DB=tap \
+  skao-tap/tap-db
+docker exec tap-db psql -U tap -d tap -c "ALTER USER tap WITH SUPERUSER"
 ```
+
+The fixtures shell out to `psql` to load `db/init/*.sql`, so a client is
+needed on the host too (`apt-get install postgresql-client`, or
+`brew install libpq`). A locally installed server works as well, provided it
+is PostgreSQL 18 with `postgresql-18-pgsphere` from the
+[PGDG repository](https://www.postgresql.org/download/linux/).
 
 ## Docs
 

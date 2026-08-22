@@ -5,6 +5,11 @@ services:
       POSTGRES_USER: tap
       POSTGRES_PASSWORD: tap
       POSTGRES_DB: tap
+      # postgres:18 defaults PGDATA to /var/lib/postgresql/<major>/docker and
+      # declares /var/lib/postgresql as its volume. Pin it back under the
+      # mount below, or the cluster would initialise outside the named volume
+      # and be discarded on every `docker compose down`.
+      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - ./db/init:/docker-entrypoint-initdb.d:ro
       - pgdata:/var/lib/postgresql/data

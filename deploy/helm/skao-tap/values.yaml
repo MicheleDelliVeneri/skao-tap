@@ -52,7 +52,7 @@ results:
   accessModes:
     - ReadWriteOnce
 
-# -- In-chart PostgreSQL 16 + pg_sphere (the tap-db image), initialized from
+# -- In-chart PostgreSQL 18 + pg_sphere (the tap-db image), initialized from
 # files/db-init. Disable and set externalDatabase.url to bring your own.
 postgresql:
   enabled: true
