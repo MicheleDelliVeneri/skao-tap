@@ -188,6 +188,10 @@ def execute_job(job: dict) -> None:
                     shutil.rmtree(result_dir, ignore_errors=True)
                     log.info("job %s aborted before execution", job_id)
                     return
+            # JIT compilation runs uninterruptibly at cursor DECLARE and can
+            # ignore cancellation for many seconds on high-cost plans; it is
+            # a net loss for streaming cursor workloads anyway
+            conn.execute("SET LOCAL jit = off")
             conn.execute(f"SET LOCAL ROLE {settings.query_role}")
             with (
                 _AbortWatchdog(job_id, pid),
