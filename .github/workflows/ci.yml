@@ -140,6 +140,26 @@ jobs:
             --set postgresql.tuning.shared_buffers=512MB \
             --set postgresql.tuning.max_connections=100 \
             | grep -qE "kind: (PodDisruptionBudget|VerticalPodAutoscaler|CronJob)"
+      - name: Template with authentication enabled
+        run: |
+          helm template skao-tap deploy/helm/skao-tap \
+            --set auth.enabled=true \
+            --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
+            --set auth.iam.audience=science-metadata \
+            --set 'auth.roles.metadata\.delete.groups={/ska/oper}' \
+            | grep -q 'TAP_AUTH_ROLES'
+          helm template skao-tap deploy/helm/skao-tap \
+            --set auth.enabled=true \
+            --set auth.plugin=permissions-api \
+            --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
+            --set auth.permissionsApi.url=https://permissions.srcnet.skao.int/api/v1 \
+            | grep -q 'TAP_PERMISSIONS_API_URL'
+      - name: Enabling auth without an IAM issuer is refused
+        run: |
+          if helm template skao-tap deploy/helm/skao-tap --set auth.enabled=true >/dev/null 2>&1; then
+            echo "::error::auth.enabled=true rendered without auth.iam.issuer"
+            exit 1
+          fi
 
   helm-e2e:
     name: Helm chart e2e (kind)

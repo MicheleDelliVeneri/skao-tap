@@ -395,6 +395,186 @@ def fake_db(monkeypatch):
     return db
 
 
+SOFTWARE_PAYLOAD = {
+    "uri": "ska:dsc-037-delay-ps:0.1.3",
+    "description": "Delay power-spectrum pipeline",
+    "release_date": "2026-01-15T00:00:00Z",
+    "status": "STABLE",
+    "artifacts": [
+        {
+            "kind": "DOCKER",
+            "location": "images.canfar.net/dsc-037-delay-ps:0.1.3",
+            "cpu_architecture": ["amd64", "arm64"],
+            "digest": "sha256:" + "ab" * 32,
+            "supported_modes": ["HEADLESS"],
+        }
+    ],
+    "discovery": {"science_category": ["EoR"], "tools_included": ["casa"]},
+    "resources": {"requires_gpu": True, "min_memory": 16},
+    "provenance": {"registered_by": "onyx", "registration_date": "2026-01-16T00:00:00Z"},
+}
+
+
+@pytest.fixture
+def software_payload():
+    """A valid ska-src-sdm document for the built-in software domain."""
+    import copy
+
+    return copy.deepcopy(SOFTWARE_PAYLOAD)
+
+
+# --- stub INDIGO IAM -------------------------------------------------------
+# Token verification is the security-critical path, so the tests sign real
+# RS256 JWTs and serve a real JWKS from an in-process transport rather than
+# stubbing the verifier out.
+
+IAM_ISSUER = "https://iam.example.org"
+IAM_AUDIENCE = "science-metadata"
+
+
+def _rsa_jwk(kid="k1"):
+    import json as _json
+
+    import jwt as _jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = _json.loads(_jwt.algorithms.RSAAlgorithm.to_jwk(private.public_key()))
+    jwk.update({"kid": kid, "alg": "RS256", "use": "sig"})
+    return private, jwk
+
+
+@pytest.fixture(scope="session")
+def iam_issuer():
+    return IAM_ISSUER
+
+
+@pytest.fixture(scope="session")
+def iam_audience():
+    return IAM_AUDIENCE
+
+
+@pytest.fixture(scope="session")
+def iam_keypair():
+    """The IAM's signing key: tokens signed with it verify."""
+    return _rsa_jwk()
+
+
+@pytest.fixture(scope="session")
+def forged_keypair():
+    """A different key under the same kid: tokens signed with it must not."""
+    return _rsa_jwk(kid="k1")
+
+
+@pytest.fixture
+def make_token(iam_keypair):
+    """Mint a signed access token, overriding any claim."""
+    import time as _time
+
+    import jwt as _jwt
+
+    def build(private=None, *, kid="k1", **overrides):
+        claims = {
+            "sub": "user-1",
+            "iss": IAM_ISSUER,
+            "aud": IAM_AUDIENCE,
+            "exp": int(_time.time()) + 300,
+            "iat": int(_time.time()),
+            "groups": ["/ska/science-metadata/oper"],
+            "scope": "openid profile science-metadata:write",
+        }
+        claims.update(overrides)
+        claims = {k: v for k, v in claims.items() if v is not None}
+        return _jwt.encode(
+            claims, private or iam_keypair[0], algorithm="RS256", headers={"kid": kid}
+        )
+
+    return build
+
+
+@pytest.fixture
+def stub_iam(monkeypatch, iam_keypair):
+    """Serve the OIDC discovery document and JWKS in-process."""
+    import urllib.request
+
+    import httpx
+
+    state = {"issuer": IAM_ISSUER, "keys": [iam_keypair[1]], "jwks_calls": 0}
+
+    def handler(request):
+        if request.url.path.endswith("/.well-known/openid-configuration"):
+            return httpx.Response(
+                200, json={"issuer": state["issuer"], "jwks_uri": f"{IAM_ISSUER}/jwk"}
+            )
+        if request.url.path == "/jwk":
+            state["jwks_calls"] += 1
+            return httpx.Response(200, json={"keys": state["keys"]})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    def patched_get(url, **kwargs):
+        kwargs.pop("timeout", None)
+        with real_client(transport=transport) as client:
+            return client.get(url, **kwargs)
+
+    def patched_urlopen(url, *args, **kwargs):
+        target = url.full_url if hasattr(url, "full_url") else url
+        with real_client(transport=transport) as client:
+            body = client.get(target).content
+
+        class _Response:
+            def read(self):
+                return body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        return _Response()
+
+    monkeypatch.setattr(httpx, "get", patched_get)
+    monkeypatch.setattr(urllib.request, "urlopen", patched_urlopen)
+
+    from tapcore.auth import reset_verifier
+
+    reset_verifier()
+    yield state
+    reset_verifier()
+
+
+@pytest.fixture
+def auth_settings(monkeypatch):
+    """Override auth-related settings (Settings is frozen) and reset the caches."""
+    from tapcore.auth import reset_verifier
+    from tapcore.config import settings
+
+    original = {}
+
+    def apply(**overrides):
+        for key, value in overrides.items():
+            original.setdefault(key, getattr(settings, key))
+            object.__setattr__(settings, key, value)
+        reset_verifier()
+        _reset_api_auth()
+
+    yield apply
+
+    for key, value in original.items():
+        object.__setattr__(settings, key, value)
+    reset_verifier()
+    _reset_api_auth()
+
+
+def _reset_api_auth():
+    from tap_api.auth import reset_plugin
+
+    reset_plugin()
+
+
 @pytest.fixture
 def results_dir(tmp_path):
     """Point settings.results_dir at a temp dir (Settings is frozen)."""

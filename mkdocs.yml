@@ -33,4 +33,5 @@ nav:
   - Generated model schemas: model-schemas.md
   - Deployment: deployment.md
   - Development: development.md
+  - Authentication: auth.md
   - Roadmap: roadmap.md

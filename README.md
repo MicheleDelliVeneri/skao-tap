@@ -224,13 +224,14 @@ Follow-up work is tracked as numbered packages in `docs/roadmap.md`.
 - UWS `WAIT` (blocking requests, 1.1) and job list `AFTER` filtering are
   not implemented; `ABORT` marks the job but does not cancel the running
   backend statement — package 3.
-- **No authentication** — every request is anonymous, all jobs have a nil
-  `ownerId`, and the mutating metadata endpoints (`POST`/`PATCH`/`DELETE`)
-  are open, so a deployment must not be exposed to untrusted networks yet.
-  Package 4 wires in the SRCNet flow: INDIGO IAM bearer tokens plus the
+- **Authentication is off by default** — a deployment that configures no IAM
+  is fully anonymous, including the mutating metadata endpoints, so it must
+  not be exposed to untrusted networks. Setting `auth.enabled=true` with an
+  IAM issuer gates `POST`/`PATCH`/`DELETE` on `/api/v1/<mount>` behind
+  verified bearer tokens, either from IAM group membership or via the
   [SKA SRC Permissions API](https://gitlab.com/ska-telescope/src/src-service-apis/ska-src-permissions-api)
-  for route authorisation and group membership. Registry registration
-  (VOResource records) is also part of package 4.
+  — see [docs/auth.md](docs/auth.md). Job ownership (`ownerId`), per-user job
+  visibility and registry registration (VOResource) remain open in package 4.
 - **Service-local logging** — logs are plain `logging` records, outside the
   shared SRCNet observability stack; package 8 adopts
   [`ska-src-logging`](https://gitlab.com/ska-telescope/src/src-api/ska-src-api-logging)

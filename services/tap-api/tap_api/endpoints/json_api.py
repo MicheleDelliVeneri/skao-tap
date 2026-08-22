@@ -22,7 +22,7 @@ import os
 import shutil
 import time
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Depends, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from tapcore import uws
@@ -32,6 +32,7 @@ from tapcore.errors import NotFoundError, UsageError
 from tapcore.metadata import ingest
 from tapcore.metadata.plugins import MetadataPlugin, active_plugins
 
+from ..auth import auth_summary, require
 from ..queries.query import prepare_query, run_sync
 
 router = APIRouter(prefix="/api/v1", tags=["json-api"])
@@ -69,6 +70,22 @@ def _tap_params(body: QueryRequest, fmt: str | None = None) -> dict[str, str]:
     if fmt is not None:
         params["RESPONSEFORMAT"] = fmt
     return params
+
+
+@router.get("/auth")
+async def auth_info():
+    """What this deployment enforces: whether a token is needed, and from where.
+
+    Clients (and operators) should not have to discover by trial that a
+    deployment is unauthenticated, or which IAM issues the tokens it accepts.
+    """
+    summary = auth_summary()
+    summary["gated_operations"] = {
+        "metadata.ingest": "POST /api/v1/<mount>",
+        "metadata.amend": "PATCH /api/v1/<mount>/{root_id}",
+        "metadata.delete": "DELETE /api/v1/<mount>/{root_id}",
+    }
+    return summary
 
 
 @router.post("/query")
@@ -323,7 +340,9 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
         f"The payload is flattened into the {plugin.sql_schema}.* tables generated"
         " from the same model; re-posting upserts (idempotent)."
     )
-    domain.post("", status_code=201)(ingest_endpoint)
+    domain.post("", status_code=201, dependencies=[Depends(require("metadata.ingest"))])(
+        ingest_endpoint
+    )
 
     @domain.get("")
     async def list_endpoint():
@@ -339,7 +358,7 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
             raise NotFoundError(f"{resource} {root_id} not found")
         return document
 
-    @domain.delete("/{root_id}")
+    @domain.delete("/{root_id}", dependencies=[Depends(require("metadata.delete"))])
     async def delete_endpoint(root_id: str):
         """Delete a document; generated foreign keys cascade to every child row."""
         with pool().connection() as conn:
@@ -348,7 +367,7 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
             raise NotFoundError(f"{resource} {root_id} not found")
         return {"status": "deleted", id_column: root_id}
 
-    @domain.patch("/{root_id}")
+    @domain.patch("/{root_id}", dependencies=[Depends(require("metadata.amend"))])
     async def amend_endpoint(root_id: str, body: AmendRequest):
         """Amend already-ingested rows — e.g. backfill a column added by a
         newer data-model release — without re-sending the whole document.
