@@ -4,7 +4,7 @@
 name = "skao-tap"
 version = "0.1.0"
 description = "SKAO TAP 1.1 server: microservices on PostgreSQL"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
     "tapcore",
     "tap-api",
@@ -39,7 +39,7 @@ docs = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py314"
 extend-exclude = ["*.egg-info"]
 
 [tool.ruff.lint]

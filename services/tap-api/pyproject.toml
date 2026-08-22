@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "tap-api"
 version = "0.1.0"
 description = "SKAO TAP service HTTP frontend: /sync, /async (UWS), VOSI endpoints"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
     "tapcore",
     "fastapi>=0.110",
