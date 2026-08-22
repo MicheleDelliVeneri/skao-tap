@@ -1,9 +1,11 @@
-"""SRCNet notification ingestion: schema bootstrap and hierarchical upserts.
+"""Observatory data product (ODP) metadata: ingestion of SRC notifications
+into the ``srcnet`` schema — bootstrap, hierarchical upserts, amendments.
 
 The relational layout is derived at import time from the
 ska-src-mm-notification pydantic models by :mod:`tap_api.schema_gen`, so a
 new library release that adds fields or levels changes the database schema
-and the TAP_SCHEMA registration automatically.
+and the TAP_SCHEMA registration automatically. (``srcnet`` stays the SQL
+schema name — it is the public, ADQL-facing name existing queries use.)
 """
 
 import json

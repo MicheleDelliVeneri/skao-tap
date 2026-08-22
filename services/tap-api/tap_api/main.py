@@ -22,9 +22,9 @@ from tapcore.votable import error_votable
 
 from . import vosi
 from .json_api import router as json_router
+from .odp import ensure_schema
 from .params import gather_params
 from .query import prepare_query, run_sync
-from .srcnet import ensure_schema
 from .uploads import gather_upload_files, parse_uploads, resolve_upload_sources
 from .uws_api import router as uws_router
 

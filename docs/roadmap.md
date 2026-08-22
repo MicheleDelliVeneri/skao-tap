@@ -44,3 +44,20 @@ configurable limits).
   metadata), snapshot or object-storage backup of the results volume with a
   retention policy aligned to `TAP_JOB_RETENTION`, and documented,
   regularly exercised restore procedures.
+
+## Package 6 — Further metadata databases
+
+Beyond the observatory data product metadata (the `srcnet` schema,
+generated from ska-src-mm-notification), publish additional metadata
+domains through the same TAP/ADQL and JSON machinery:
+
+- **Software database**: catalogue of software (pipelines, containers,
+  versions, provenance) available to and used by SRCNet processing.
+- **User data product database**: metadata for user-generated data
+  products, as opposed to observatory-generated ones.
+- Each domain will likely ship its own upstream data-model package (not
+  the notification library), so generalize the model-driven pipeline —
+  `tap_api.schema_gen` (pydantic models → tables + TAP_SCHEMA
+  registration), the ingestion/amendment endpoints, and the automatic
+  column migration — to register multiple model packages, each mapping to
+  its own SQL schema.

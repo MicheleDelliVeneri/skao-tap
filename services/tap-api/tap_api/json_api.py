@@ -8,8 +8,9 @@ instead of the XML the VO standards mandate. Standard VO clients keep using
 
 It also accepts SKA SRC ingestion notifications, validated with the
 ska-src-mm-notification pydantic models, and stores them in the srcnet
-tables generated from those same models (see tap_api.srcnet) — so ingested
-metadata is instantly queryable via both this API and TAP/ADQL.
+tables generated from those same models (see tap_api.odp) — so ingested
+observatory data product metadata is instantly queryable via both this
+API and TAP/ADQL.
 """
 
 import datetime
@@ -25,8 +26,8 @@ from tapcore.config import settings
 from tapcore.db import pool
 from tapcore.errors import NotFoundError, UsageError
 
+from .odp import TABLES, amend_rows, fetch_notification, ingest_notification
 from .query import prepare_query, run_sync
-from .srcnet import TABLES, amend_rows, fetch_notification, ingest_notification
 
 router = APIRouter(prefix="/api/v1", tags=["json-api"])
 
