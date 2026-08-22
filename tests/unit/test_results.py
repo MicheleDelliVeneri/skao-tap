@@ -158,7 +158,7 @@ def test_arrow_ipc_stream_roundtrip():
         table = reader.read_all()
     assert table.num_rows == 2
     assert table.schema.field("id").type == pa.int64()
-    assert table.schema.field("flux").metadata[b"ucd" if False else b"unit"] == b"mJy"
+    assert table.schema.field("flux").metadata[b"unit"] == b"mJy"
 
 
 def test_serialize_convenience_wrapper():
