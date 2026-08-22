@@ -62,12 +62,12 @@ from tapcore.metadata.plugins import MetadataPlugin
 from my_package.models import MyRootModel
 
 PLUGIN = MetadataPlugin(
-    name="mydomain",             # selection key in TAP_MODEL_PLUGINS
-    model=MyRootModel,           # root of the pydantic hierarchy
-    sql_schema="mydomain",       # SQL schema for the generated tables
-    root_table="things",         # name of the root table
-    description="My metadata domain",   # TAP_SCHEMA schema description
-    mount="mydomain",            # JSON API mount: /api/v1/mydomain
+    name="mydomain",  # selection key in TAP_MODEL_PLUGINS
+    model=MyRootModel,  # root of the pydantic hierarchy
+    sql_schema="mydomain",  # SQL schema for the generated tables
+    root_table="things",  # name of the root table
+    description="My metadata domain",  # TAP_SCHEMA schema description
+    mount="mydomain",  # JSON API mount: /api/v1/mydomain
     # optional: identity fields for models without a required '*_id' field
     id_fields={"MyRootModel": "uri"},
 )
