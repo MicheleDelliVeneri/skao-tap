@@ -5,7 +5,10 @@ All functions are parameterized by a :class:`tapcore.metadata.plugins.MetadataPl
 — the relational layout is derived from the plugin's pydantic models by
 :mod:`tapcore.metadata.schema_gen`, so a new model release that adds fields or
 levels changes the database schema and the TAP_SCHEMA registration
-automatically (existing tables are migrated forward at startup).
+automatically (existing tables are migrated forward at startup). Renames are
+the one change that is not automatic: additive DDL cannot move rows, so a
+domain that moved leaves its old tables behind and startup only warns about
+them (see ``_warn_legacy_tables`` and ``scripts/migrate_legacy_tables.sql``).
 """
 
 import datetime
@@ -36,13 +39,51 @@ def ensure_schema(conn, plugin: MetadataPlugin) -> None:
     for statement, params in registration_statements(tables, plugin.description):
         conn.execute(statement, params)
     log.info("%s schema ensured (%d tables)", plugin.sql_schema, len(tables))
+    _warn_legacy_tables(conn, plugin)
+
+
+def _warn_legacy_tables(conn, plugin: MetadataPlugin) -> None:
+    """Warn while tables from before a domain rename still exist.
+
+    The DDL is additive (CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT
+    EXISTS), so a renamed domain leaves its old tables — and their
+    TAP_SCHEMA registration and read grant — in place. Rows stranded there
+    are invisible to ingest, fetch, list and amend, and survive DELETE,
+    while staying queryable over TAP. Cleaning that up drops data, so the
+    service only reports it; scripts/migrate_legacy_tables.sql does the work.
+    """
+    for name in plugin.legacy_tables:
+        row = conn.execute("SELECT to_regclass(%s)", (name,)).fetchone()
+        if row is None or row[0] is None:
+            continue
+        log.warning(
+            "legacy table %s still exists; the %r domain now serves %s. Rows left"
+            " in %s are not served by the API and are not removed by DELETE, yet"
+            " remain TAP-queryable — run scripts/migrate_legacy_tables.sql",
+            name,
+            plugin.name,
+            plugin.tables[0].qualified,
+            name,
+        )
+
+
+def _log_safe(value: str, limit: int = 200) -> str:
+    """Single-line, quoted, length-capped rendering of caller-supplied text."""
+    flattened = " ".join(str(value).split())
+    if len(flattened) > limit:
+        flattened = f"{flattened[:limit]}..."
+    return repr(flattened)
 
 
 def _column_value(value):
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, (list, dict)):
-        return Jsonb(json.loads(json.dumps(value, default=_json_fallback)))
+        try:
+            json_value = json.loads(json.dumps(value, default=_json_fallback))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("metadata value is not JSON serializable") from exc
+        return Jsonb(json_value)
     return value
 
 
@@ -100,7 +141,7 @@ def ingest_document(conn, plugin: MetadataPlugin, document: BaseModel) -> dict[s
             row[col.name] = _resolve_path(instance, col.path)
         for child in tables:
             if child.parent is table:
-                children.append((child, getattr(instance, child.name, []) or []))
+                children.append((child, getattr(instance, child.field_name, []) or []))
         _upsert(conn, table, row)
         counts[table.qualified] = counts.get(table.qualified, 0) + 1
         next_chain = dict(key_chain)
@@ -149,7 +190,7 @@ def amend_rows(
             # FieldInfo.metadata, not in the annotation — re-attach them
             annotation = info.annotation
             if info.metadata:
-                annotation = typing.Annotated[annotation, *info.metadata]
+                annotation = typing.Annotated[annotation, *info.metadata]  # pyright: ignore
             try:
                 values[column] = TypeAdapter(annotation).validate_python(value)
             except ValidationError as exc:
@@ -203,7 +244,7 @@ def fetch_document(conn, plugin: MetadataPlugin, root_id: str) -> dict | None:
             child_chain[table.id_column] = doc[table.id_column]
             for child in tables:
                 if child.parent is table:
-                    doc[child.name] = load(child, child_chain)
+                    doc[child.field_name] = load(child, child_chain)
             # drop inherited key columns and nulls for a clean document
             for key in list(doc):
                 if (key in key_chain) or doc[key] is None:
@@ -213,6 +254,27 @@ def fetch_document(conn, plugin: MetadataPlugin, root_id: str) -> dict | None:
 
     docs = load(tables[0], {tables[0].id_column: root_id})
     return docs[0] if docs else None
+
+
+def delete_document(conn, plugin: MetadataPlugin, root_id: str) -> bool:
+    """Delete one root document and all descendants through FK cascades."""
+    root = plugin.tables[0]
+    result = conn.execute(
+        f"DELETE FROM {root.qualified} WHERE {root.id_column} = %s",
+        (root_id,),
+    )
+    deleted = result.rowcount > 0
+    if deleted:
+        # deletion is destructive and cascades: leave an audit trail. The id
+        # comes from the request path, so it is quoted and stripped of the
+        # newlines that would let a caller forge extra log records.
+        log.info(
+            "deleted %s %s (cascading to %d descendant table(s))",
+            root.qualified,
+            _log_safe(root_id),
+            len(plugin.tables) - 1,
+        )
+    return deleted
 
 
 def list_documents(conn, plugin: MetadataPlugin) -> list[dict]:
@@ -232,6 +294,6 @@ def list_documents(conn, plugin: MetadataPlugin) -> list[dict]:
         doc = {k: v for k, v in row[0].items() if v is not None}
         doc = _unflatten(doc, root)
         for table, count in zip(descendants, row[1:], strict=True):
-            doc[table.name] = count
+            doc[table.field_name] = count
         summaries.append(doc)
     return summaries

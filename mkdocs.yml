@@ -17,6 +17,8 @@ theme:
   features:
     - navigation.sections
     - content.code.copy
+hooks:
+  - scripts/generate_model_schema_docs.py
 markdown_extensions:
   - admonition
   - tables
@@ -28,6 +30,7 @@ nav:
   - API reference: api.md
   - JSON API: json-api.md
   - Metadata plugins: plugins.md
+  - Generated model schemas: model-schemas.md
   - Deployment: deployment.md
   - Development: development.md
   - Roadmap: roadmap.md

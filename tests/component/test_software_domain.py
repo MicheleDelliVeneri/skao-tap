@@ -1,6 +1,6 @@
 """Component tests for the software discovery metadata plugin: ingest with
 the ska-src-sdm model, TAP/ADQL queryability of the generated software
-schema, document roundtrip with flattened nested objects, amendments."""
+schema, document roundtrip with flattened nested objects, amendments, and deletion."""
 
 import httpx
 import pytest
@@ -50,7 +50,7 @@ def test_software_ingest_built_with_the_model(tap_service):
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["uri"] == PAYLOAD["uri"]
-    assert body["rows"] == {"software.software": 1, "software.artifacts": 2}
+    assert body["rows"] == {"srcnet.software": 1, "srcnet.software_artifacts": 2}
     again = httpx.post(f"{_api(tap_service)}/software", json=PAYLOAD, timeout=30)
     assert again.status_code == 201
     assert again.json()["rows"] == body["rows"]
@@ -79,8 +79,8 @@ def test_software_queryable_via_tap_adql(tap_service):
         data={
             "QUERY": (
                 "SELECT s.uri, s.status, a.location"
-                " FROM software.software AS s"
-                " JOIN software.artifacts AS a ON a.uri = s.uri"
+                " FROM srcnet.software AS s"
+                " JOIN srcnet.software_artifacts AS a ON a.uri = s.uri"
                 " WHERE a.kind = 'DOCKER'"
             ),
             "LANG": "ADQL",
@@ -111,6 +111,33 @@ def test_software_amend_flattened_column(tap_service):
         url, json={"table": "software", "values": {"status": "SHINY"}}, timeout=10
     )
     assert bad_enum.status_code == 400
+
+
+def test_software_delete_cascades_to_artifacts(tap_service):
+    payload = {**PAYLOAD, "uri": "ska:delete-demo:0.0.1"}
+    url = f"{_api(tap_service)}/software/{payload['uri']}"
+    created = httpx.post(f"{_api(tap_service)}/software", json=payload, timeout=30)
+    assert created.status_code == 201, created.text
+
+    deleted = httpx.delete(url, timeout=30)
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json() == {"status": "deleted", "uri": payload["uri"]}
+    fetched_after_delete = httpx.get(url, timeout=10)
+    deleted_again = httpx.delete(url, timeout=10)
+    assert fetched_after_delete.status_code == 404
+    assert deleted_again.status_code == 404
+
+    artifacts = httpx.post(
+        f"{tap_service}/sync",
+        data={
+            "QUERY": (f"SELECT uri FROM srcnet.software_artifacts WHERE uri = '{payload['uri']}'"),
+            "LANG": "ADQL",
+            "RESPONSEFORMAT": "csv",
+        },
+        timeout=30,
+    )
+    assert artifacts.status_code == 200, artifacts.text
+    assert artifacts.text.strip().splitlines() == ["uri"]
 
 
 def test_software_validation_rejected(tap_service):

@@ -152,6 +152,47 @@ def test_notification_roundtrip(tap_service):
     assert missing.json()["error"] == "NotFoundError"
 
 
+def test_notification_delete_cascades_through_the_hierarchy(tap_service, database_url):
+    """DELETE removes the root row; the generated FKs clear every level below."""
+    import psycopg
+
+    payload = copy.deepcopy(SRC_INGESTION_EXAMPLE)
+    payload["project_id"] = "delete-cascade-demo"
+    api = _api(tap_service)
+    created = httpx.post(f"{api}/notifications", json=payload, timeout=30)
+    assert created.status_code == 201, created.text
+    levels = list(created.json()["rows"])
+    # the whole hierarchy, not just root + artifacts, must be exercised here
+    assert len(levels) == 6
+
+    with psycopg.connect(database_url) as conn:
+        before = {
+            table: conn.execute(
+                f"SELECT count(*) FROM {table} WHERE project_id = %s", (payload["project_id"],)
+            ).fetchone()[0]
+            for table in levels
+        }
+    assert all(count > 0 for count in before.values()), before
+
+    url = f"{api}/notifications/{payload['project_id']}"
+    deleted = httpx.delete(url, timeout=30)
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json() == {"status": "deleted", "project_id": payload["project_id"]}
+    fetched_after_delete = httpx.get(url, timeout=10)
+    deleted_again = httpx.delete(url, timeout=10)
+    assert fetched_after_delete.status_code == 404
+    assert deleted_again.status_code == 404
+
+    with psycopg.connect(database_url) as conn:
+        after = {
+            table: conn.execute(
+                f"SELECT count(*) FROM {table} WHERE project_id = %s", (payload["project_id"],)
+            ).fetchone()[0]
+            for table in levels
+        }
+    assert after == dict.fromkeys(levels, 0)
+
+
 def test_ingested_metadata_queryable_via_tap_adql(tap_service):
     """The generated srcnet tables are TAP_SCHEMA-registered: PyVO + ADQL work."""
     httpx.post(f"{_api(tap_service)}/notifications", json=SRC_INGESTION_EXAMPLE)

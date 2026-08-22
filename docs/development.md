@@ -54,6 +54,50 @@ uv run --group docs mkdocs serve   # live preview
 uv run --group docs mkdocs build --strict
 ```
 
+Every MkDocs build runs `scripts/generate_model_schema_docs.py` as a hook.
+It loads the installed metadata plugins and regenerates
+`docs/model-schemas.md` directly from their pydantic models, keeping the
+published table/column reference aligned with the service's generated SQL
+and `TAP_SCHEMA` metadata. Run the script directly to refresh the checked-in
+page without building the full site.
+
+The PyVO notebook in `demo/srcnet_metadata_tap.ipynb` can be launched with:
+
+```bash
+docker compose up --build -d
+uv run --group dev --with jupyter jupyter lab demo/srcnet_metadata_tap.ipynb
+```
+
+## Upgrading an existing deployment
+
+The generated DDL migrates a database forward automatically as long as the
+change is additive — a newer model release that adds fields gets
+`ADD COLUMN IF NOT EXISTS`, existing rows are untouched. **Renames are not
+automatic**: additive DDL cannot move rows, so a metadata domain that moves
+to another schema or table name leaves the old tables, their `TAP_SCHEMA`
+registration and their read grant in place.
+
+That matters beyond tidiness: rows stranded in a pre-rename table are
+invisible to the JSON API (ingest, fetch, list, amend) and are *not* removed
+by `DELETE /api/v1/<mount>/{root_id}`, yet they stay queryable through TAP —
+so a deleted document appears to come back. Startup logs a warning for every
+legacy table it still finds (declared per plugin as `legacy_tables`).
+
+The `software` domain moved into the shared `srcnet` schema
+(`software.software` → `srcnet.software`, `software.artifacts` →
+`srcnet.software_artifacts`). Deployments created before that move should run
+the one-off migration, which carries the rows forward (matching on column
+name, so an older column order still migrates), unregisters the legacy tables
+from `TAP_SCHEMA` and drops the old schema:
+
+```bash
+docker compose exec -T postgres psql -U postgres -d tap -v ON_ERROR_STOP=1 \
+    -f - < scripts/migrate_legacy_tables.sql
+```
+
+It deletes data, so take a backup first. It is idempotent, and a no-op on
+databases that never had the old layout.
+
 ## CI/CD
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every push/PR:

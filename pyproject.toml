@@ -61,6 +61,13 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011"]
 
+[tool.pyright]
+# resolve the workspace's editable installs (and their third-party deps)
+# from the uv venv, so imports are not reported missing per file
+venvPath = "."
+venv = ".venv"
+extraPaths = ["libs/tapcore", "services/tap-api", "services/tap-executor"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

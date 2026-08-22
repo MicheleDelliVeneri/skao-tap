@@ -50,7 +50,7 @@ hard parts:
 Three services (see `docker-compose.yml`):
 
 | Service | Code | Role |
-|---|---|---|
+| --- | --- | --- |
 | `db` | `db/` | PostgreSQL 16 + pg_sphere; init scripts create `TAP_SCHEMA`, a sample `ska.continuum_sources` catalogue, the `uws.jobs` table and a read-only `tap_reader` role used for all user queries |
 | `tap-api` | `services/tap-api` | All TAP/UWS/VOSI HTTP endpoints |
 | `tap-executor` | `services/tap-executor` | Asynchronous (UWS) query execution; multiple replicas can run concurrently |
@@ -62,7 +62,7 @@ and XML rendering.
 ## Endpoints (TAP 1.1 / UWS 1.1 / VOSI / DALI)
 
 | Endpoint | Standard | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `GET/POST /tap/sync` | TAP | `LANG=ADQL`, `QUERY=...`, optional `RESPONSEFORMAT`, `MAXREC`; DALI error VOTables; `OVERFLOW` flagged |
 | `GET/POST /tap/async` | TAP/UWS | job list (with `PHASE` filter) / job creation (303 → job URI); `PHASE=RUN` at creation queues immediately |
 | `GET/POST/DELETE /tap/async/{id}` | UWS | job summary XML / `ACTION=DELETE` / delete |
@@ -159,15 +159,21 @@ the tables, registers them in TAP_SCHEMA (so the metadata is queryable
 through ordinary ADQL), migrates them when the model gains fields, and
 serves ingest/fetch/amend endpoints. Two ship built in — **observatory
 data products** ([ska-src-mm-notification](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification),
-`srcnet` schema, `POST /api/v1/notifications`) and **software discovery**
+`srcnet.projects` … `srcnet.artifacts`, `POST /api/v1/notifications`) and **software discovery**
 ([ska-src-sdm](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model),
-`software` schema, `POST /api/v1/software`).
+`srcnet.software`, `POST /api/v1/software`).
 
 Third-party model packages register through the `skao_tap.models`
 entry-point group — installed alongside the services, no changes here —
 and `TAP_MODEL_PLUGINS` selects which plugins a deployment activates
 (`all`, or a subset for dedicated per-model systems). See
-[`docs/plugins.md`](docs/plugins.md).
+[`docs/plugins.md`](docs/plugins.md); the
+[generated model-schema reference](docs/model-schemas.md) lists every
+column directly from the installed data models.
+
+A runnable [PyVO notebook](demo/srcnet_metadata_tap.ipynb) populates
+`srcnet.data_products` and `srcnet.software` against the Docker Compose
+service and queries both through TAP.
 
 ## Development
 
@@ -214,8 +220,17 @@ Follow-up work is tracked as numbered packages in `docs/roadmap.md`.
 - UWS `WAIT` (blocking requests, 1.1) and job list `AFTER` filtering are
   not implemented; `ABORT` marks the job but does not cancel the running
   backend statement — package 3.
-- **No authentication** — all jobs are anonymous; `ownerId` is nil — and
-  registry registration (VOResource records) is not done — package 4.
+- **No authentication** — every request is anonymous, all jobs have a nil
+  `ownerId`, and the mutating metadata endpoints (`POST`/`PATCH`/`DELETE`)
+  are open, so a deployment must not be exposed to untrusted networks yet.
+  Package 4 wires in the SRCNet flow: INDIGO IAM bearer tokens plus the
+  [SKA SRC Permissions API](https://gitlab.com/ska-telescope/src/src-service-apis/ska-src-permissions-api)
+  for route authorisation and group membership. Registry registration
+  (VOResource records) is also part of package 4.
+- **Service-local logging** — logs are plain `logging` records, outside the
+  shared SRCNet observability stack; package 8 adopts
+  [`ska-src-logging`](https://gitlab.com/ska-telescope/src/src-api/ska-src-api-logging)
+  for structured logs, `X-Request-ID` correlation, traces and metrics.
 
 Resolved by package 1: results now stream from server-side cursors (never
 fully materialized), columns are typed from the cursor and carry

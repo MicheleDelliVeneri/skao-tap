@@ -76,6 +76,13 @@ class TableSpec:
     parent: TableSpec | None
     id_column: str
     columns: list[ColumnSpec] = field(default_factory=list)
+    # the model field this level comes from; differs from ``name`` when a
+    # child_prefix is applied (srcnet.software_artifacts <- .artifacts)
+    field_name: str = ""
+
+    def __post_init__(self):
+        if not self.field_name:
+            self.field_name = self.name
 
     @property
     def qualified(self) -> str:
@@ -246,17 +253,26 @@ def build_tables(
     schema: str,
     root_table: str,
     id_overrides: dict[str, str] | None = None,
+    child_prefix: str = "",
 ) -> list[TableSpec]:
-    """Walk the model hierarchy and produce table specs in creation order."""
+    """Walk the model hierarchy and produce table specs in creation order.
+
+    ``child_prefix`` is prepended to the child tables' names (the root keeps
+    ``root_table``), which is how domains sharing one SQL schema avoid
+    colliding on generic level names such as ``artifacts``.
+    """
     tables: list[TableSpec] = []
 
-    def walk(model: type[BaseModel], name: str, parent: TableSpec | None) -> None:
+    def walk(
+        model: type[BaseModel], name: str, parent: TableSpec | None, field_name: str = ""
+    ) -> None:
         table = TableSpec(
             schema=schema,
             name=name,
             model=model,
             parent=parent,
             id_column=_identity_field(model, id_overrides),
+            field_name=field_name or name,
         )
         # inherited key columns first, own identity column included naturally
         for key in table.pk_columns[:-1]:
@@ -279,7 +295,7 @@ def build_tables(
                 table.columns.append(column)
         tables.append(table)
         for fname, child in children:
-            walk(child, fname, table)
+            walk(child, f"{child_prefix}{fname}", table, fname)
 
     walk(root_model, root_table, None)
     return tables

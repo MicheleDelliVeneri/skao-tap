@@ -44,7 +44,8 @@ def test_builtin_plugins_are_discovered_via_entry_points():
     plugins = discovered_plugins()
     assert plugins["odp"].sql_schema == "srcnet"
     assert plugins["odp"].mount == "notifications"
-    assert plugins["software"].sql_schema == "software"
+    assert plugins["software"].sql_schema == "srcnet"
+    assert plugins["software"].mount == "software"
 
 
 def test_selection_all_and_subset(plugin_selection):
@@ -57,15 +58,23 @@ def test_selection_all_and_subset(plugin_selection):
     plugin_selection("cheese")
     with pytest.raises(LookupError, match="unknown plugin 'cheese'"):
         active_plugins()
+    plugin_selection("odp,odp")
+    with pytest.raises(ValueError, match="selects plugin 'odp' more than once"):
+        active_plugins()
 
 
 def test_identity_overrides_and_flattening():
     from ska_src_sdm import Software
 
     tables = build_tables(
-        Software, "software", "software", {"Software": "uri", "Artifact": "location"}
+        Software,
+        "srcnet",
+        "software",
+        {"Software": "uri", "Artifact": "location"},
+        child_prefix="software_",
     )
     root, artifacts = tables
+    assert [t.qualified for t in tables] == ["srcnet.software", "srcnet.software_artifacts"]
     assert root.pk_columns == ["uri"]
     assert artifacts.pk_columns == ["uri", "location"]
     by_name = {c.name: c for c in root.columns}
@@ -97,7 +106,7 @@ def test_software_ingest_list_fetch_amend(client, fake_db):
     body = response.json()
     assert body["status"] == "ingested"
     assert body["uri"] == SOFTWARE_PAYLOAD["uri"]
-    assert body["rows"] == {"software.software": 1, "software.artifacts": 1}
+    assert body["rows"] == {"srcnet.software": 1, "srcnet.software_artifacts": 1}
 
     listing = client.get("/api/v1/software").json()
     (entry,) = listing["software"]
@@ -131,17 +140,166 @@ def test_software_ingest_list_fetch_amend(client, fake_db):
 
 def test_software_validation_rejects_bad_payload(client):
     bad = dict(SOFTWARE_PAYLOAD, uri="not-a-valid-uri")
-    assert client.post("/api/v1/software", json=bad).status_code == 422
+    bad_response = client.post("/api/v1/software", json=bad)
     missing = {k: v for k, v in SOFTWARE_PAYLOAD.items() if k != "artifacts"}
-    assert client.post("/api/v1/software", json=missing).status_code == 422
+    missing_response = client.post("/api/v1/software", json=missing)
+    assert bad_response.status_code == 422
+    assert missing_response.status_code == 422
 
 
 def test_unknown_software_document_is_404(client):
-    assert client.get("/api/v1/software/ska:nope:0.0.1").status_code == 404
+    url = "/api/v1/software/ska:nope:0.0.1"
+    fetched = client.get(url)
+    deleted = client.delete(url)
+    assert fetched.status_code == 404
+    assert deleted.status_code == 404
+
+
+def test_openapi_documents_metadata_delete(client):
+    spec = client.get("/openapi.json").json()
+    path = spec["paths"]["/api/v1/software/{root_id}"]
+    assert "delete" in path
+
+
+def test_software_delete_document(client, fake_db):
+    created = client.post("/api/v1/software", json=SOFTWARE_PAYLOAD)
+    assert created.status_code == 201
+
+    url = f"/api/v1/software/{SOFTWARE_PAYLOAD['uri']}"
+    deleted = client.delete(url)
+    assert deleted.status_code == 200
+    assert deleted.json() == {"status": "deleted", "uri": SOFTWARE_PAYLOAD["uri"]}
+    assert not fake_db.srcnet["srcnet.software"]
+    assert not fake_db.srcnet["srcnet.software_artifacts"]
+
+
+def test_delete_is_audited(client, caplog):
+    """Deletion is destructive and cascades: it must leave a log record."""
+    import logging
+
+    client.post("/api/v1/software", json=SOFTWARE_PAYLOAD)
+    with caplog.at_level(logging.INFO, logger="tapcore"):
+        deleted = client.delete(f"/api/v1/software/{SOFTWARE_PAYLOAD['uri']}")
+    assert deleted.status_code == 200
+    assert f"deleted srcnet.software '{SOFTWARE_PAYLOAD['uri']}'" in caplog.text
+    assert "cascading to 1 descendant table(s)" in caplog.text
+
+
+def test_delete_audit_log_cannot_be_forged_through_the_id(caplog):
+    """The id comes from the request path: no newline may reach the log."""
+    import logging
+
+    from tap_api.plugins.software import PLUGIN
+    from tapcore.metadata import ingest
+
+    class Conn:
+        def execute(self, statement, params):
+            return type("Result", (), {"rowcount": 1})()
+
+    forged = "nope\nINFO:tapcore:deleted everything"
+    with caplog.at_level(logging.INFO, logger="tapcore"):
+        deleted = ingest.delete_document(Conn(), PLUGIN, forged)
+    assert deleted
+    assert "deleted everything" in caplog.text  # only as part of the quoted id
+    assert len(caplog.records) == 1
+    assert "\n" not in caplog.records[0].getMessage()
+
+
+def test_log_safe_flattens_and_caps_caller_text():
+    from tapcore.metadata.ingest import _log_safe
+
+    assert _log_safe("ska:demo:1.0.0") == "'ska:demo:1.0.0'"
+    assert _log_safe("two\nlines\tand  spaces") == "'two lines and spaces'"
+    assert _log_safe("x" * 300).endswith("...'")
+
+
+def test_legacy_tables_are_reported_until_migrated(caplog):
+    """A pre-rename table still holding rows is warned about at startup."""
+    import logging
+
+    from tap_api.plugins.software import PLUGIN
+    from tapcore.metadata import ingest
+
+    assert PLUGIN.legacy_tables == ("software.software", "software.artifacts")
+
+    class Conn:
+        def __init__(self, present):
+            self._present = present
+
+        def execute(self, statement, params=None):
+            assert statement == "SELECT to_regclass(%s)"
+            name = params[0]
+            return _Row((name,) if name in self._present else (None,))
+
+    class _Row:
+        def __init__(self, row):
+            self._row = row
+
+        def fetchone(self):
+            return self._row
+
+    with caplog.at_level(logging.WARNING, logger="tapcore"):
+        ingest._warn_legacy_tables(Conn({"software.artifacts"}), PLUGIN)
+    assert "legacy table software.artifacts still exists" in caplog.text
+    assert "software.software still exists" not in caplog.text
+    assert "srcnet.software" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="tapcore"):
+        ingest._warn_legacy_tables(Conn(set()), PLUGIN)
+    assert caplog.text == ""
+
+
+def test_delete_document_targets_the_plugin_root():
+    from tap_api.plugins.software import PLUGIN
+    from tapcore.metadata import ingest
+
+    class Result:
+        rowcount = 1
+
+    class Connection:
+        def __init__(self):
+            self.statement = None
+            self.params = None
+
+        def execute(self, statement, params):
+            self.statement = statement
+            self.params = params
+            return Result()
+
+    conn = Connection()
+    deleted = ingest.delete_document(conn, PLUGIN, "ska:demo:1.0.0")
+    assert deleted
+    assert conn.statement == "DELETE FROM srcnet.software WHERE uri = %s"
+    assert conn.params == ("ska:demo:1.0.0",)
 
 
 def test_ingested_datetime_roundtrip(client, fake_db):
     client.post("/api/v1/software", json=SOFTWARE_PAYLOAD)
-    stored = next(iter(fake_db.srcnet["software.software"].values()))
+    stored = next(iter(fake_db.srcnet["srcnet.software"].values()))
     assert isinstance(stored["release_date"], datetime.datetime)
     assert stored["release_date"].year == 2026
+
+
+def test_colliding_table_names_are_rejected(plugin_selection, monkeypatch):
+    """Two active domains must never generate the same qualified table."""
+    from ska_src_sdm import Software
+    from tapcore.metadata import plugins as plugins_module
+    from tapcore.metadata.plugins import MetadataPlugin
+
+    clash = MetadataPlugin(
+        name="clash",
+        model=Software,
+        sql_schema="srcnet",
+        root_table="software",  # same as the built-in software plugin
+        description="clashing domain",
+        mount="clash",
+        id_fields={"Software": "uri", "Artifact": "location"},
+        child_table_prefix="software_",
+    )
+    combined = {**plugins_module.discovered_plugins(), "clash": clash}
+    monkeypatch.setattr(plugins_module, "discovered_plugins", lambda: combined)
+    for selection in ("all", "software,clash"):
+        plugin_selection(selection)
+        with pytest.raises(ValueError, match=r"both generate srcnet\.software"):
+            active_plugins()

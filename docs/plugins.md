@@ -7,17 +7,28 @@ lives, and the framework does everything else.
 
 Two domains ship built in:
 
-| Plugin | Model package | SQL schema | JSON mount |
-|---|---|---|---|
-| `odp` | [ska-src-mm-notification](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification) — observatory data products (`Project → Observation → SchedulingBlock → ExecutionBlock → DataProduct → Artifact`) | `srcnet` | `/api/v1/notifications` |
-| `software` | [ska-src-sdm](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model) — software discovery (`Software → Artifact`, with embedded discovery/resources/provenance objects) | `software` | `/api/v1/software` |
+| Plugin | Model package | Tables | JSON mount |
+| --- | --- | --- | --- |
+| `odp` | [ska-src-mm-notification](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification) — observatory data products (`Project → Observation → SchedulingBlock → ExecutionBlock → DataProduct → Artifact`) | `srcnet.projects`, …, `srcnet.data_products`, `srcnet.artifacts` | `/api/v1/notifications` |
+| `software` | [ska-src-sdm](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model) — software discovery (`Software → Artifact`, with embedded discovery/resources/provenance objects) | `srcnet.software`, `srcnet.software_artifacts` | `/api/v1/software` |
+
+All SRC metadata lives in the one **`srcnet`** SQL schema, distinguished
+by table name — so a future user-data-product domain lands as
+`srcnet.user_data_products`, and ADQL queries can join freely across
+domains. Domains sharing the schema set `child_table_prefix` to keep
+generic level names distinct (`artifacts` belongs to the ODP hierarchy,
+so the software domain's artifacts are `srcnet.software_artifacts`);
+overlapping table names are rejected at startup rather than silently
+colliding.
 
 Third-party model packages join the same way, without changing this
 codebase (see [Writing a plugin](#writing-a-plugin)).
 
 ## What a plugin gets for free
 
-From the model alone, the framework derives and maintains:
+From the model alone, the framework derives and maintains (the complete,
+automatically generated column reference is available on the
+[Generated model schemas](model-schemas.md) page):
 
 - **Relational tables** — every `list[Model]` level becomes a child table
   with a composite primary key following the identity chain and a
@@ -29,10 +40,14 @@ From the model alone, the framework derives and maintains:
   `/tap/tables`.
 - **Automatic migration** — a newer model release that adds fields gains
   the columns at startup (`ADD COLUMN IF NOT EXISTS`, nullable); nothing
-  is ever dropped.
+  is ever dropped. Renames are the exception: additive DDL cannot move
+  rows, so a domain that changes schema or table name declares the old
+  names in `legacy_tables` and startup warns until the one-off
+  [migration](development.md#upgrading-an-existing-deployment) is run.
 - **A JSON endpoint set** under `/api/v1/<mount>`: `POST` (validate and
   upsert), `GET` (root summary with per-table counts), `GET /{id}`
-  (nested document), `PATCH /{id}` (amend stored rows).
+  (nested document), `PATCH /{id}` (amend stored rows), and `DELETE /{id}`
+  (delete the root document and cascade through its child rows).
 
 ## Selecting plugins per deployment
 
@@ -40,7 +55,7 @@ From the model alone, the framework derives and maintains:
 *installed* plugins a deployment activates:
 
 | Value | Result |
-|---|---|
+| --- | --- |
 | `all` (default) | One combined archive serving every installed domain |
 | `odp` | Only the observatory data product domain |
 | `odp,software` | An explicit subset |
@@ -64,12 +79,18 @@ from my_package.models import MyRootModel
 PLUGIN = MetadataPlugin(
     name="mydomain",  # selection key in TAP_MODEL_PLUGINS
     model=MyRootModel,  # root of the pydantic hierarchy
-    sql_schema="mydomain",  # SQL schema for the generated tables
+    sql_schema="srcnet",  # SQL schema for the generated tables
     root_table="things",  # name of the root table
     description="My metadata domain",  # TAP_SCHEMA schema description
     mount="mydomain",  # JSON API mount: /api/v1/mydomain
     # optional: identity fields for models without a required '*_id' field
     id_fields={"MyRootModel": "uri"},
+    # optional: prefix for child tables, so generic level names stay unique
+    # within the shared schema (srcnet.things_parts, not srcnet.parts)
+    child_table_prefix="things_",
+    # optional: qualified tables this domain used before a rename; startup
+    # warns while they still hold rows the API no longer serves or deletes
+    legacy_tables=("mydomain.things",),
 )
 ```
 
@@ -121,7 +142,20 @@ corresponding pydantic field. Key columns cannot be changed, and the
 update is always scoped to the given root document. Re-`POST`ing a full
 document remains the way to amend everything at once.
 
+## Deleting ingested metadata
+
+`DELETE /api/v1/<mount>/{root_id}` removes the root document. Every generated
+child-table foreign key uses `ON DELETE CASCADE`, so deleting a project also
+removes its observations, scheduling/execution blocks, data products, and
+artifacts; deleting software likewise removes `srcnet.software_artifacts`.
+Unknown identifiers return HTTP 404.
+
 ## Querying across domains
+
+The runnable [`demo/srcnet_metadata_tap.ipynb`](https://github.com/MicheleDelliVeneri/skao-tap/blob/main/demo/srcnet_metadata_tap.ipynb)
+populates 100 positioned rows in `srcnet.data_products` plus
+`srcnet.software` against the Docker Compose deployment, then demonstrates
+PyVO discovery, spatial and asynchronous queries, amendment, and deletion.
 
 Because every plugin registers in TAP_SCHEMA, all domains are queryable
 through the same ADQL endpoints — including joins across them when the
@@ -129,15 +163,20 @@ metadata relates:
 
 ```sql
 SELECT s.uri, s.status, a.location
-FROM software.software AS s
-JOIN software.artifacts AS a ON a.uri = s.uri
+FROM srcnet.software AS s
+JOIN srcnet.software_artifacts AS a ON a.uri = s.uri
 WHERE a.kind = 'DOCKER'
 ```
+
+Note that `TAP_MODEL_PLUGINS` governs what a deployment *bootstraps and
+mounts*, not what ADQL can read: tables already present in the database
+stay queryable. Genuine per-domain isolation means separate databases —
+which is exactly what a one-system-per-model topology gives you.
 
 ## Where the code lives
 
 | Path | Role |
-|---|---|
+| --- | --- |
 | `libs/tapcore/tapcore/metadata/plugins.py` | The `MetadataPlugin` contract, entry-point discovery, deployment selection |
 | `libs/tapcore/tapcore/metadata/schema_gen.py` | Models → tables, constraints, TAP_SCHEMA registration, migrations |
 | `libs/tapcore/tapcore/metadata/ingest.py` | Generic ingest / fetch / list / amend |
