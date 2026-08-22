@@ -39,13 +39,17 @@ def new_job_id() -> str:
 def job_results_dir(job_id: str) -> str:
     """The job's directory under the results volume.
 
-    Validates the id against the server-generated format before it is used
-    in any filesystem path, so a crafted id can never traverse outside the
-    results directory.
+    Validates the id against the server-generated format, then normalizes
+    the joined path and verifies it stays inside the results directory, so
+    a crafted id can never traverse outside it.
     """
     if not JOB_ID_RE.fullmatch(job_id):
         raise NotFoundError(f"job {job_id} not found")
-    return os.path.join(settings.results_dir, job_id)
+    base = os.path.abspath(settings.results_dir)
+    path = os.path.normpath(os.path.join(base, job_id))
+    if not path.startswith(base + os.sep):
+        raise NotFoundError(f"job {job_id} not found")
+    return path
 
 
 def _iso(dt: datetime.datetime | None) -> str | None:
