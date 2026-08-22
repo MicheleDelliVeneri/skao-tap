@@ -1,5 +1,12 @@
 name: Security
 
+# NOTE: this repository is currently private. CodeQL, dependency review and
+# SARIF upload to code scanning require GitHub Advanced Security on private
+# repositories, so those jobs are gated: they run automatically when the
+# repository is public, or when a repository variable ENABLE_GHAS=true is set
+# after enabling Advanced Security. pip-audit and the Trivy scan itself run
+# regardless.
+
 on:
   push:
     branches: [main]
@@ -14,6 +21,7 @@ permissions:
 jobs:
   codeql:
     name: CodeQL (Python)
+    if: ${{ !github.event.repository.private || vars.ENABLE_GHAS == 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -30,7 +38,7 @@ jobs:
 
   dependency-review:
     name: Dependency review
-    if: github.event_name == 'pull_request'
+    if: ${{ github.event_name == 'pull_request' && (!github.event.repository.private || vars.ENABLE_GHAS == 'true') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -53,22 +61,33 @@ jobs:
           inputs: requirements.txt
 
   trivy:
-    name: Trivy filesystem scan
+    name: Trivy scan (vuln, secrets, misconfig)
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       security-events: write
     steps:
       - uses: actions/checkout@v4
-      - uses: aquasecurity/trivy-action@0.29.0
+      - name: Scan (results in job log; fails on CRITICAL)
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+      - name: Scan to SARIF
+        if: ${{ always() && (!github.event.repository.private || vars.ENABLE_GHAS == 'true') }}
+        uses: aquasecurity/trivy-action@0.29.0
         with:
           scan-type: fs
           scanners: vuln,secret,misconfig
           format: sarif
           output: trivy.sarif
           severity: CRITICAL,HIGH
-      - uses: github/codeql-action/upload-sarif@v3
-        if: always()
+      - name: Upload SARIF to code scanning
+        if: ${{ always() && (!github.event.repository.private || vars.ENABLE_GHAS == 'true') }}
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
           category: trivy-fs
