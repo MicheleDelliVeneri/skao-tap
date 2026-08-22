@@ -15,3 +15,4 @@ data:
   TAP_ASYNC_EXEC_DURATION: {{ .Values.config.asyncExecDurationSeconds | int64 | quote }}
   TAP_JOB_RETENTION: {{ .Values.config.jobRetentionSeconds | int64 | quote }}
   TAP_WAIT_MAX: {{ .Values.config.waitMaxSeconds | int64 | quote }}
+  TAP_MODEL_PLUGINS: {{ .Values.config.modelPlugins | quote }}

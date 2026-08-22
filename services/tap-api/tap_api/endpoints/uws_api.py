@@ -12,12 +12,12 @@ from tapcore import uws
 from tapcore.config import settings
 from tapcore.db import pool
 from tapcore.errors import NotFoundError, UsageError
-from tapcore.upload import save_upload_sources
-from tapcore.votable import error_votable
+from tapcore.query.upload import save_upload_sources
+from tapcore.query.votable import error_votable
 
-from .params import gather_params
-from .query import prepare_query
-from .uploads import gather_upload_files, parse_uploads, resolve_upload_sources
+from ..queries.params import gather_params
+from ..queries.query import prepare_query
+from ..queries.uploads import gather_upload_files, parse_uploads, resolve_upload_sources
 
 router = APIRouter()
 

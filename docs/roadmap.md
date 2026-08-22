@@ -11,7 +11,14 @@ inline multipart and http(s) `UPLOAD` on /sync and /async, per-query
 configurable limits), and package 3 (UWS completeness: `WAIT` blocking
 requests on the job and phase resources, `AFTER` job-list filtering, and
 real `ABORT` that cancels the executing statement via the backend PID and
-`pg_cancel_backend()`).
+`pg_cancel_backend()`), and package 6 (plugin-based metadata databases:
+domains bind a pydantic model package to a SQL schema and mount point via
+a small contract, the shared machinery in `tapcore.metadata`
+does the rest, third-party packages register through the
+`skao_tap.models` entry-point group, and `TAP_MODEL_PLUGINS` selects what
+a deployment activates; the ODP/srcnet and software-discovery domains
+ship built in — the user data product domain follows when its model
+package exists).
 
 ## Package 4 — Identity and registry — *current*
 
@@ -40,36 +47,6 @@ real `ABORT` that cancels the executing statement via the backend PID and
   metadata), snapshot or object-storage backup of the results volume with a
   retention policy aligned to `TAP_JOB_RETENTION`, and documented,
   regularly exercised restore procedures.
-
-## Package 6 — Plugin-based metadata databases
-
-Beyond the observatory data product metadata (the `srcnet` schema,
-generated from ska-src-mm-notification), publish additional metadata
-domains through the same TAP/ADQL and JSON machinery — as **plugins**, so
-one deployment can serve all domains, a fleet can run one system per
-model, and third parties can bring their own data models without
-touching this codebase.
-
-- **Planned domains**: a **software database** (pipelines, containers,
-  versions, provenance used by SRCNet processing) and a **user data
-  product database** (user-generated products, as opposed to
-  observatory-generated ones). Each ships its own upstream data-model
-  package, like the notification library does for ODP metadata.
-- **Plugin contract**: a metadata-domain plugin declares its root
-  pydantic model, SQL schema name, root table name, schema description,
-  and API mount point. Everything downstream is generic and moves from
-  `tap_api` into the shared library: `schema_gen` (models → tables +
-  TAP_SCHEMA registration), automatic column migration, and the
-  ingest/fetch/amend endpoints, instantiated once per active plugin.
-- **Discovery via entry points**: plugins register through a Python
-  entry-point group (e.g. `skao_tap.models`), so an external package
-  becomes available simply by being installed alongside the services —
-  no changes to this repository required.
-- **Per-deployment selection**: a config setting (env var, exposed as a
-  Helm value) chooses which discovered plugins a deployment activates —
-  `all` for a single combined archive, or a single domain for dedicated
-  per-model systems. Bootstrap, TAP_SCHEMA registration, and the JSON
-  API mount only what is enabled.
 
 ## Package 7 — Queryable region footprints (`s_region`)
 

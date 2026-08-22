@@ -1,24 +1,30 @@
-"""Automatic relational schema generation from the ska-src-mm-notification
-pydantic models.
+"""Automatic relational schema generation from pydantic data models.
 
-The notification hierarchy (Project -> Observation -> SchedulingBlock ->
-ExecutionBlock -> DataProduct -> Artifact) is walked generically:
+A metadata-domain model hierarchy (see :mod:`tapcore.metadata.plugins`) is walked
+generically:
 
 - every ``list[BaseModel]`` field becomes a child table named after the field;
+- a singular nested ``BaseModel`` field is flattened into prefixed columns
+  (``resources.min_memory`` -> ``resources_min_memory``), recursively;
 - scalar fields become columns (str->text, int->bigint, float->double
-  precision, bool->boolean, Enum->text + CHECK, list[scalar]->jsonb);
+  precision, bool->boolean, datetime->timestamptz, Enum->text + CHECK,
+  list[scalar]->jsonb);
 - numeric Ge/Gt/Le/Lt constraints on the pydantic fields become CHECKs, so
-  the database enforces the same invariants the library validates;
-- each table's primary key is the chain of ``*_id`` identity fields down the
-  hierarchy, with a foreign key to its parent;
+  the database enforces the same invariants the model validates;
+- each table's primary key is the chain of identity fields down the
+  hierarchy — a required ``*_id`` string field by default, overridable per
+  model class for hierarchies with different identity conventions — with a
+  foreign key to the parent;
 - every generated table is registered in TAP_SCHEMA (including keys), which
   makes the ingested metadata immediately queryable through TAP/ADQL and
   visible in the VOSI /tables document.
 
-The DDL is idempotent (CREATE IF NOT EXISTS / ON CONFLICT) and is applied at
-tap-api startup under an advisory lock.
+The DDL is idempotent (CREATE IF NOT EXISTS / ON CONFLICT) and existing
+deployments are migrated forward for new model fields with ADD COLUMN IF
+NOT EXISTS; it is applied at tap-api startup under an advisory lock.
 """
 
+import datetime
 import types
 import typing
 from dataclasses import dataclass, field
@@ -28,13 +34,20 @@ import annotated_types
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
-SQL_TYPES = {str: "text", int: "bigint", float: "double precision", bool: "boolean"}
+SQL_TYPES = {
+    str: "text",
+    int: "bigint",
+    float: "double precision",
+    bool: "boolean",
+    datetime.datetime: "timestamptz",
+}
 TAP_DATATYPES = {
     "text": ("char", "*"),
     "bigint": ("long", None),
     "double precision": ("double", None),
     "boolean": ("boolean", None),
     "jsonb": ("char", "*"),
+    "timestamptz": ("char", "*"),
 }
 
 
@@ -46,6 +59,13 @@ class ColumnSpec:
     checks: list[str] = field(default_factory=list)
     description: str | None = None
     is_key: bool = False
+    # attribute path from the model instance to the value; longer than one
+    # element for columns flattened out of singular nested models
+    path: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if not self.path:
+            self.path = (self.name,)
 
 
 @dataclass
@@ -68,6 +88,24 @@ class TableSpec:
             chain.extend(self.parent.pk_columns)
         chain.append(self.id_column)
         return chain
+
+    def field_for_column(self, name: str) -> FieldInfo | None:
+        """The pydantic field a column maps to (through flattening)."""
+        for col in self.columns:
+            if col.name != name:
+                continue
+            model = self.model
+            info = None
+            for step in col.path:
+                if model is None:
+                    return None
+                info = model.model_fields.get(step)
+                if info is None:
+                    return None
+                base, _ = _unwrap(info.annotation)
+                model = base if isinstance(base, type) and issubclass(base, BaseModel) else None
+            return info
+        return None
 
 
 def _unwrap(annotation, collected: list | None = None):
@@ -111,6 +149,14 @@ def _child_model(annotation) -> type[BaseModel] | None:
     return None
 
 
+def _nested_model(annotation) -> type[BaseModel] | None:
+    """Return the model when the annotation is a singular nested BaseModel."""
+    base, _ = _unwrap(annotation)
+    if isinstance(base, type) and issubclass(base, BaseModel):
+        return base
+    return None
+
+
 def _numeric_checks(name: str, metadata: list) -> list[str]:
     checks = []
     for meta in metadata:
@@ -125,15 +171,25 @@ def _numeric_checks(name: str, metadata: list) -> list[str]:
     return checks
 
 
-def _identity_field(model: type[BaseModel]) -> str:
+def _identity_field(model: type[BaseModel], overrides: dict[str, str] | None) -> str:
+    if overrides and model.__name__ in overrides:
+        name = overrides[model.__name__]
+        if name not in model.model_fields:
+            raise ValueError(f"{model.__name__} has no field {name!r} (identity override)")
+        return name
     for name, info in model.model_fields.items():
         base, _ = _unwrap(info.annotation)
         if name.endswith("_id") and base is str and info.is_required():
             return name
-    raise ValueError(f"{model.__name__} has no required '*_id' identity field")
+    raise ValueError(
+        f"{model.__name__} has no required '*_id' identity field"
+        " (declare one in the plugin's id_fields)"
+    )
 
 
-def _scalar_column(name: str, info: FieldInfo, force_not_null: bool) -> ColumnSpec | None:
+def _scalar_column(
+    name: str, info: FieldInfo, force_not_null: bool, path: tuple[str, ...]
+) -> ColumnSpec | None:
     collected: list = list(info.metadata)
     base, nullable = _unwrap(info.annotation, collected)
     if base is None:
@@ -160,16 +216,47 @@ def _scalar_column(name: str, info: FieldInfo, force_not_null: bool) -> ColumnSp
         nullable=nullable and not force_not_null,
         checks=checks,
         description=description,
+        path=path,
     )
 
 
-def build_tables(root_model: type[BaseModel], schema: str, root_table: str) -> list[TableSpec]:
+def _flatten(model: type[BaseModel], prefix: str, path: tuple[str, ...]) -> list[ColumnSpec]:
+    """Columns for a singular nested model, prefixed with its field name."""
+    columns: list[ColumnSpec] = []
+    for fname, info in model.model_fields.items():
+        if _child_model(info.annotation) is not None:
+            continue  # list-of-model children inside embedded models: unsupported
+        nested = _nested_model(info.annotation)
+        if nested is not None:
+            columns.extend(_flatten(nested, f"{prefix}_{fname}", (*path, fname)))
+            continue
+        # built under the flattened name so CHECK constraints reference the
+        # actual column, not the model-level field name
+        column = _scalar_column(
+            f"{prefix}_{fname}", info, force_not_null=False, path=(*path, fname)
+        )
+        if column is not None:
+            column.nullable = True  # the whole embedded object may be absent
+            columns.append(column)
+    return columns
+
+
+def build_tables(
+    root_model: type[BaseModel],
+    schema: str,
+    root_table: str,
+    id_overrides: dict[str, str] | None = None,
+) -> list[TableSpec]:
     """Walk the model hierarchy and produce table specs in creation order."""
     tables: list[TableSpec] = []
 
     def walk(model: type[BaseModel], name: str, parent: TableSpec | None) -> None:
         table = TableSpec(
-            schema=schema, name=name, model=model, parent=parent, id_column=_identity_field(model)
+            schema=schema,
+            name=name,
+            model=model,
+            parent=parent,
+            id_column=_identity_field(model, id_overrides),
         )
         # inherited key columns first, own identity column included naturally
         for key in table.pk_columns[:-1]:
@@ -180,7 +267,11 @@ def build_tables(root_model: type[BaseModel], schema: str, root_table: str) -> l
             if child is not None:
                 children.append((fname, child))
                 continue
-            column = _scalar_column(fname, info, force_not_null=fname == table.id_column)
+            nested = _nested_model(info.annotation)
+            if nested is not None:
+                table.columns.extend(_flatten(nested, fname, (fname,)))
+                continue
+            column = _scalar_column(fname, info, force_not_null=fname == table.id_column, path=())
             if column is not None:
                 if fname == table.id_column:
                     column.nullable = False
@@ -200,7 +291,7 @@ def ddl_statements(tables: list[TableSpec], query_role: str) -> list[str]:
     Existing deployments are migrated forward automatically for the common
     model evolution — new fields: after each CREATE TABLE IF NOT EXISTS, an
     ADD COLUMN IF NOT EXISTS is emitted per column, so a table created by an
-    older library release gains the new columns without losing any stored
+    older model release gains the new columns without losing any stored
     metadata. Columns added this way are nullable regardless of the model
     (existing rows predate the field; the pydantic layer still validates new
     payloads), and columns dropped from the model are left in place.

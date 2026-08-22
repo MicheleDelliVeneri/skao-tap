@@ -1,7 +1,7 @@
-"""Unit tests for tap_api.query parameter validation and sync execution."""
+"""Unit tests for tap_api.queries.query parameter validation and sync execution."""
 
 import pytest
-from tap_api.query import prepare_query, run_sync
+from tap_api.queries.query import prepare_query, run_sync
 from tapcore.config import settings
 from tapcore.errors import UsageError
 

@@ -2,7 +2,7 @@
 
 import pytest
 from tapcore.errors import UsageError
-from tapcore.upload import (
+from tapcore.query.upload import (
     UploadedTable,
     create_upload_tables,
     parse_upload_param,

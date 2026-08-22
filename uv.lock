@@ -1109,6 +1109,15 @@ wheels = [
 ]
 
 [[package]]
+name = "ska-src-sdm"
+version = "1.0.1"
+source = { git = "https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model.git?rev=cfb341ec307ce35f463065455b11317dc1a0ead9#cfb341ec307ce35f463065455b11317dc1a0ead9" }
+dependencies = [
+    { name = "jsonschema" },
+    { name = "pydantic" },
+]
+
+[[package]]
 name = "skao-tap"
 version = "0.1.0"
 source = { virtual = "." }
@@ -1175,6 +1184,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "python-multipart" },
     { name = "ska-src-mm-notification" },
+    { name = "ska-src-sdm" },
     { name = "tapcore" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1184,6 +1194,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "ska-src-mm-notification", specifier = ">=0.1.7" },
+    { name = "ska-src-sdm", git = "https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model.git?rev=cfb341ec307ce35f463065455b11317dc1a0ead9" },
     { name = "tapcore", editable = "libs/tapcore" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
 ]
@@ -1204,15 +1215,19 @@ name = "tapcore"
 version = "0.1.0"
 source = { editable = "libs/tapcore" }
 dependencies = [
+    { name = "annotated-types" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pyarrow" },
+    { name = "pydantic" },
     { name = "queryparser-python3" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "annotated-types", specifier = ">=0.6" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.1" },
     { name = "pyarrow", specifier = ">=17.0" },
+    { name = "pydantic", specifier = ">=2.0" },
     { name = "queryparser-python3", specifier = ">=0.7" },
 ]
 

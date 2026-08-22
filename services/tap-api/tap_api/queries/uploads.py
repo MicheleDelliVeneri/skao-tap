@@ -7,7 +7,7 @@ from fastapi import Request
 from starlette.datastructures import UploadFile
 from tapcore.config import settings
 from tapcore.errors import UsageError
-from tapcore.upload import UploadedTable, parse_upload_param, parse_votable
+from tapcore.query.upload import UploadedTable, parse_upload_param, parse_votable
 
 FETCH_TIMEOUT_S = 15
 

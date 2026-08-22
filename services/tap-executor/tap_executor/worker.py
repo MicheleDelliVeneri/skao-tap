@@ -15,17 +15,17 @@ import threading
 import time
 
 from tapcore import uws
-from tapcore.adql import apply_maxrec, touched_tables
 from tapcore.config import settings
 from tapcore.db import pool
-from tapcore.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
-from tapcore.upload import (
+from tapcore.query.adql import apply_maxrec, touched_tables
+from tapcore.query.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
+from tapcore.query.upload import (
     create_upload_tables,
     load_uploads,
     parse_upload_param,
     rewrite_upload_refs,
 )
-from tapcore.votable import normalize_format
+from tapcore.query.votable import normalize_format
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("tap-executor")

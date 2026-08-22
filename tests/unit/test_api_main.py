@@ -86,24 +86,25 @@ def test_bootstrap_retries_then_succeeds(fake_db, monkeypatch):
 
     calls = {"n": 0}
 
-    def flaky(conn):
+    def flaky(conn, plugin):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("db not ready")
 
-    monkeypatch.setattr(main, "ensure_schema", flaky)
+    monkeypatch.setattr(main.ingest, "ensure_schema", flaky)
     monkeypatch.setattr(main.time, "sleep", lambda s: None)
-    main._bootstrap_srcnet(attempts=3)
-    assert calls["n"] == 2
+    main._bootstrap_metadata(attempts=3)
+    # one failed call on the first attempt, then one call per active plugin
+    assert calls["n"] == 1 + len(main.active_plugins())
 
 
 def test_bootstrap_fails_after_attempts(fake_db, monkeypatch):
     from tap_api import main
 
-    def broken(conn):
+    def broken(conn, plugin):
         raise RuntimeError("db never ready")
 
-    monkeypatch.setattr(main, "ensure_schema", broken)
+    monkeypatch.setattr(main.ingest, "ensure_schema", broken)
     monkeypatch.setattr(main.time, "sleep", lambda s: None)
-    with pytest.raises(RuntimeError, match="srcnet bootstrap failed after 2 attempts"):
-        main._bootstrap_srcnet(attempts=2)
+    with pytest.raises(RuntimeError, match="metadata bootstrap failed after 2 attempts"):
+        main._bootstrap_metadata(attempts=2)

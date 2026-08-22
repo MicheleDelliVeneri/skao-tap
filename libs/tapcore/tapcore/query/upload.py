@@ -16,8 +16,8 @@ import re
 from dataclasses import dataclass
 from xml.etree import ElementTree as ET
 
-from .errors import UsageError
-from .uws import job_results_dir
+from ..errors import UsageError
+from ..uws import job_results_dir
 
 UPLOAD_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 

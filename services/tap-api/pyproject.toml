@@ -15,7 +15,20 @@ dependencies = [
     # SKA SRC notification data models: drive the srcnet DB schema and
     # validate /api/v1/notifications payloads.
     "ska-src-mm-notification>=0.1.7",
+    # SKA Software Discovery metadata model, for the built-in "software"
+    # metadata plugin. Pinned to a commit until published to a public index.
+    "ska-src-sdm",
 ]
+
+[tool.uv.sources.ska-src-sdm]
+git = "https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model.git"
+rev = "cfb341ec307ce35f463065455b11317dc1a0ead9"
+
+# Metadata-domain plugins shipped by this service; third-party model
+# packages register in the same group (see tapcore.plugins).
+[project.entry-points."skao_tap.models"]
+odp = "tap_api.plugins.odp:PLUGIN"
+software = "tap_api.plugins.software:PLUGIN"
 
 [tool.uv.sources]
 tapcore = { workspace = true }

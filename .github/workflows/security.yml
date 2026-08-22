@@ -60,7 +60,9 @@ jobs:
         with:
           enable-cache: true
       - name: Export locked requirements
-        run: uv export --frozen --no-dev --no-emit-project --no-emit-workspace --no-emit-package ska-src-mm-notification -o requirements.txt
+        # git-pinned packages are excluded: pip-audit's hash-checked dry-run
+        # cannot resolve them (their own deps stay in the export)
+        run: uv export --frozen --no-dev --no-emit-project --no-emit-workspace --no-emit-package ska-src-mm-notification --no-emit-package ska-src-sdm -o requirements.txt
       - uses: pypa/gh-action-pip-audit@v1.1.0
         with:
           inputs: requirements.txt
