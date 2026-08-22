@@ -92,7 +92,7 @@ def test_discovery_is_cached(iam_verifier, make_token):
 
 def test_verifier_refuses_to_run_without_an_audience(iam_issuer):
     """One IAM serves many services: no audience check means cross-service replay."""
-    with pytest.raises(ValueError, match="audience is required"):
+    with pytest.raises(ServiceError, match="audience is required"):
         IAMTokenVerifier(issuer=iam_issuer, audience=None)
 
 
@@ -311,3 +311,32 @@ def test_both_shipped_plugins_are_discoverable():
 def test_authorization_error_is_403_and_authentication_is_401():
     assert AuthenticationError("x").http_status == 401
     assert AuthorizationError("x").http_status == 403
+
+
+def test_missing_issuer_is_a_service_error_not_a_bare_valueerror():
+    """Configuration faults must render through the service's error handler."""
+    from tapcore.errors import TAPError
+
+    with pytest.raises(ServiceError, match="TAP_IAM_ISSUER"):
+        IAMTokenVerifier(issuer="", audience="x")
+    assert issubclass(ServiceError, TAPError)
+
+
+def test_roles_reject_a_string_where_a_list_belongs():
+    """A bare string would iterate into characters and grant nothing, quietly."""
+    from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
+
+    with pytest.raises(ServiceError, match="must be a list"):
+        IAMGroupsPlugin(roles={"metadata.ingest": {"groups": "/ska/oper"}})
+    with pytest.raises(ServiceError, match="must be a list"):
+        IAMGroupsPlugin(roles={"metadata.ingest": {"scopes": "sm:write"}})
+
+
+def test_a_failed_plugin_resolve_is_not_cached_as_auth_off(auth_settings):
+    """A misconfiguration must keep raising, never degrade into an open service."""
+    from tap_api import auth as api_auth
+
+    auth_settings(auth_enabled=True, auth_plugin="nope")
+    for _ in range(2):
+        with pytest.raises(LookupError):
+            api_auth.plugin()

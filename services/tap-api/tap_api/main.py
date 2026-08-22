@@ -15,6 +15,7 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
+from tapcore.auth import verifier
 from tapcore.config import settings
 from tapcore.db import close_pool, pool
 from tapcore.errors import AuthenticationError, TAPError
@@ -46,7 +47,13 @@ def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
     """Create/refresh the tables generated from the active metadata plugins."""
     plugins = active_plugins()
     log.info("active metadata plugins: %s", ", ".join(p.name for p in plugins) or "none")
-    auth.plugin()  # resolve and report the authorisation policy at startup
+    # Resolve the policy and build the token verifier now, so a bad auth
+    # configuration stops the pod at startup instead of turning every
+    # request into a 500. Neither call touches the network: discovery and
+    # JWKS are fetched on first use, so the service still starts when the
+    # IAM is briefly unavailable.
+    if auth.plugin() is not None:
+        verifier()
     for attempt in range(1, attempts + 1):
         try:
             with pool().connection() as conn, conn.transaction():

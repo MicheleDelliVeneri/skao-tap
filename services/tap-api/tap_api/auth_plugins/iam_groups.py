@@ -95,11 +95,25 @@ def _parse_roles(raw) -> dict[str, tuple[tuple[str, ...], tuple[str, ...], bool]
             raise ServiceError("TAP_AUTH_ROLES is not valid JSON") from exc
     if not isinstance(raw, dict):
         raise ServiceError("TAP_AUTH_ROLES must be a JSON object keyed by operation")
+
+    def _sequence(value, operation, key):
+        """A bare string here would iterate into characters and silently
+        produce a policy of one-letter group names that grants nothing."""
+        if value is None:
+            return ()
+        if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+            raise ServiceError(
+                f"TAP_AUTH_ROLES[{operation!r}][{key!r}] must be a list, got {type(value).__name__}"
+            )
+        return value
+
     parsed = {}
     for operation, rule in raw.items():
         if not isinstance(rule, dict):
             raise ServiceError(f"TAP_AUTH_ROLES[{operation!r}] must be an object")
-        groups = tuple(f"/{str(g).lstrip('/')}" for g in rule.get("groups") or ())
-        scopes = tuple(str(s) for s in rule.get("scopes") or ())
+        raw_groups = _sequence(rule.get("groups"), operation, "groups")
+        raw_scopes = _sequence(rule.get("scopes"), operation, "scopes")
+        groups = tuple(f"/{str(g).lstrip('/')}" for g in raw_groups)
+        scopes = tuple(str(s) for s in raw_scopes)
         parsed[operation] = (groups, scopes, bool(rule.get("any_verified_token", False)))
     return parsed

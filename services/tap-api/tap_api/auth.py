@@ -17,30 +17,34 @@ from tapcore.errors import AuthenticationError, AuthorizationError
 
 log = logging.getLogger("tap_api")
 
-_PLUGIN = None
-_PLUGIN_LOADED = False
+# None is a legitimate resolved value (auth disabled), so "not resolved yet"
+# needs a sentinel of its own rather than a second flag
+_UNRESOLVED = object()
+_PLUGIN: object = _UNRESOLVED
 
 
 def plugin():
     """The active authorisation plugin, resolved once."""
-    global _PLUGIN, _PLUGIN_LOADED
-    if not _PLUGIN_LOADED:
-        _PLUGIN = active_auth_plugin()
-        _PLUGIN_LOADED = True
-        if _PLUGIN is None:
+    global _PLUGIN
+    if _PLUGIN is _UNRESOLVED:
+        resolved = active_auth_plugin()
+        if resolved is None:
             log.warning(
                 "authentication is DISABLED: every endpoint, including metadata"
                 " ingest, amendment and deletion, is open to anonymous callers"
             )
         else:
-            log.info("authorisation plugin: %s", _PLUGIN.describe())
+            log.info("authorisation plugin: %s", resolved.describe())
+        # assigned only after a successful resolve, so a misconfiguration
+        # keeps raising instead of being cached as "auth off"
+        _PLUGIN = resolved
     return _PLUGIN
 
 
 def reset_plugin() -> None:
     """Forget the resolved plugin (configuration changed; used by tests)."""
-    global _PLUGIN, _PLUGIN_LOADED
-    _PLUGIN, _PLUGIN_LOADED = None, False
+    global _PLUGIN
+    _PLUGIN = _UNRESOLVED
 
 
 def _bearer(request: Request) -> str | None:

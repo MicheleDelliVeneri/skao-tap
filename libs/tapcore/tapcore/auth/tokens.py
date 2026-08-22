@@ -83,13 +83,13 @@ class IAMTokenVerifier:
         group_claims: tuple[str, ...] = ("groups", "wlcg.groups"),
     ):
         if not issuer:
-            raise ValueError("an IAM issuer is required to verify tokens")
+            raise ServiceError("an IAM issuer is required to verify tokens (TAP_IAM_ISSUER)")
         if not audience and not allow_any_audience:
             # One IAM issues tokens to many services. Without an audience
             # check, a token minted for any other client of the same issuer
             # is accepted here as its bearer's credential, so skipping the
             # check has to be a deliberate, recorded choice.
-            raise ValueError(
+            raise ServiceError(
                 "an expected token audience is required (TAP_IAM_AUDIENCE);"
                 " set TAP_IAM_ALLOW_ANY_AUDIENCE=true to accept any token"
                 " from the issuer, which allows tokens issued to other"
