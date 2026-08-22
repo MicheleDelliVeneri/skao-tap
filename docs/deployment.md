@@ -139,7 +139,7 @@ To restore, stop the services, restore into a fresh database, and restart:
 
 ```bash
 kubectl scale deploy skao-tap-tap-api skao-tap-tap-executor --replicas=0
-kubectl run pg-restore --rm -it --image=<tap-db image>   --overrides='{"spec":{"containers":[{"name":"pg-restore","image":"<tap-db image>","stdin":true,"tty":true,"volumeMounts":[{"name":"backups","mountPath":"/backups"}]}],"volumes":[{"name":"backups","persistentVolumeClaim":{"claimName":"skao-tap-db-backups"}}]}}'   -- pg_restore --clean --if-exists -d "$TAP_DATABASE_URL" /backups/skao-tap-<stamp>.dump
+kubectl run pg-restore --rm -it --image=<tap-db image>   --overrides='{"spec":{"containers":[{"name":"pg-restore","image":"<tap-db image>","stdin":true,"tty":true,"env":[{"name":"TAP_DATABASE_URL","valueFrom":{"secretKeyRef":{"name":"skao-tap-db","key":"TAP_DATABASE_URL"}}}],"volumeMounts":[{"name":"backups","mountPath":"/backups"}]}],"volumes":[{"name":"backups","persistentVolumeClaim":{"claimName":"skao-tap-db-backups"}}]}}'   -- sh -c 'pg_restore --clean --if-exists -d "$TAP_DATABASE_URL" /backups/skao-tap-<stamp>.dump'
 kubectl scale deploy skao-tap-tap-api --replicas=1
 kubectl scale deploy skao-tap-tap-executor --replicas=1
 ```

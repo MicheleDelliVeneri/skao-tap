@@ -49,7 +49,7 @@ spec:
                   mv "${archive}.partial" "${archive}"
                   echo "pruning archives older than {{ .Values.backup.retentionDays }} day(s)"
                   find /backups -name 'skao-tap-*.dump' \
-                    -mtime +{{ sub (int .Values.backup.retentionDays) 1 }} -delete
+                    -mtime +{{ max 0 (sub (int .Values.backup.retentionDays) 1) }} -delete
                   find /backups -name '*.partial' -mtime +0 -delete
                   ls -lh /backups
               env:
