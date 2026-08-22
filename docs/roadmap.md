@@ -61,3 +61,22 @@ domains through the same TAP/ADQL and JSON machinery:
   registration), the ingestion/amendment endpoints, and the automatic
   column migration — to register multiple model packages, each mapping to
   its own SQL schema.
+
+## Package 7 — Queryable region footprints (`s_region`)
+
+The notification model carries `s_region` (STC-S/pgsphere-style strings,
+e.g. `CIRCLE 3.5867 -30.4 0.25`) on data products and artifacts, but the
+generated schema stores it as plain text — so ObsCore-style footprint
+queries (`INTERSECTS(s_region, CIRCLE('ICRS', ...))`) do not work on the
+ingested metadata.
+
+- **Parse at ingestion**: convert the STC-S string into a companion
+  pgsphere geometry column (`s_region_geom spoly`; circles converted to
+  polygon approximations), register it in TAP_SCHEMA, and index it with
+  GiST so ADQL `INTERSECTS`/`CONTAINS` over footprints are fast.
+- **Reject malformed regions at the API boundary**: the library accepts
+  any string for `s_region` today; until an upstream validator lands in
+  ska-src-mm-notification (tracked there), the ingestion endpoint should
+  validate the region syntax itself.
+- **Amendments follow**: `PATCH` updates to `s_region` re-derive the
+  geometry column.
