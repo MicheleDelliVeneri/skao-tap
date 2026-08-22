@@ -3,7 +3,7 @@
 # image ships the PGDG apt repository, so the pgsphere package is available.
 # Pinned to PostgreSQL 16 to match the pgsphere package below (and the CI
 # component-test environment); 18+ images also change the data-dir layout.
-FROM postgres:16
+FROM postgres:18
 RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-16-pgsphere \
     && rm -rf /var/lib/apt/lists/*
