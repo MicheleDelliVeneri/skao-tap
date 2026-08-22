@@ -1,11 +1,9 @@
 name: Security
 
-# NOTE: this repository is currently private. CodeQL, dependency review and
-# SARIF upload to code scanning require GitHub Advanced Security on private
-# repositories, so those jobs are gated: they run automatically when the
-# repository is public, or when a repository variable ENABLE_GHAS=true is set
-# after enabling Advanced Security. pip-audit and the Trivy scan itself run
-# regardless.
+# Code scanning integrations run automatically while this repository is public.
+# The ENABLE_GHAS gate preserves the same behaviour if it later becomes private:
+# set ENABLE_GHAS=true after enabling GitHub Advanced Security. pip-audit and the
+# Trivy scan itself run regardless.
 
 on:
   push:
@@ -45,6 +43,22 @@ jobs:
       - uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
+
+  zizmor:
+    name: zizmor (GitHub Actions)
+    if: ${{ !github.event.repository.private || vars.ENABLE_GHAS == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Audit workflows
+        uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
 
   pip-audit:
     name: pip-audit (known vulnerabilities)
