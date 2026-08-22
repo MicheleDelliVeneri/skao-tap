@@ -98,7 +98,7 @@ def fetch_notification(conn, project_id: str) -> dict | None:
     def load(table: TableSpec, key_chain: dict) -> list[dict]:
         where = " AND ".join(f"{k} = %s" for k in key_chain)
         rows = conn.execute(
-            f"SELECT to_jsonb(t) FROM {table.qualified} t WHERE {where}",
+            f"SELECT to_jsonb(t) FROM {table.qualified} t WHERE {where} ORDER BY {table.id_column}",
             tuple(key_chain.values()),
         ).fetchall()
         documents = []

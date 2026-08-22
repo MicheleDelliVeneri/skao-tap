@@ -33,6 +33,24 @@ def test_ingest_example_notification(tap_service):
     assert project["artifacts"] == 2
 
 
+def test_artifact_counts_not_inflated_by_multiple_products(tap_service):
+    doubled = copy.deepcopy(SRC_INGESTION_EXAMPLE)
+    doubled["project_id"] = "project-multi"
+    block = doubled["observations"][0]["scheduling_blocks"][0]["execution_blocks"][0]
+    second = copy.deepcopy(block["data_products"][0])
+    second["product_id"] = "SKAO-SECOND"
+    for artifact in second["artifacts"]:
+        artifact["artifact_id"] += "_b"
+    block["data_products"].append(second)
+
+    response = httpx.post(f"{_api(tap_service)}/notifications", json=doubled)
+    assert response.status_code == 201
+    listing = httpx.get(f"{_api(tap_service)}/notifications").json()
+    (project,) = [p for p in listing["projects"] if p["project_id"] == "project-multi"]
+    assert project["data_products"] == 2
+    assert project["artifacts"] == 4  # not 8: no join multiplication
+
+
 def test_invalid_notification_rejected_with_pydantic_errors(tap_service):
     bad = copy.deepcopy(SRC_INGESTION_EXAMPLE)
     del bad["group_ids"]  # required by the model
@@ -75,8 +93,9 @@ def test_ingested_metadata_queryable_via_tap_adql(tap_service):
     table = svc.search(
         "SELECT p.product_id, a.artifact_id, a.access_estsize "
         "FROM srcnet.data_products AS p "
-        "JOIN srcnet.artifacts AS a ON p.product_id = a.product_id "
-        "WHERE p.dataproduct_type = 'cube'"
+        "JOIN srcnet.artifacts AS a ON p.project_id = a.project_id "
+        "AND p.eb_id = a.eb_id AND p.product_id = a.product_id "
+        "WHERE p.dataproduct_type = 'cube' AND p.project_id = 'project12314'"
     ).to_table()
     assert len(table) == 2
     assert "srcnet.artifacts" in set(svc.tables.keys())

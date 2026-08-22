@@ -34,8 +34,10 @@ def _bootstrap_srcnet(attempts: int = 5, delay_s: float = 2.0) -> None:
             return
         except Exception as exc:
             if attempt == attempts:
-                log.error("srcnet bootstrap failed after %d attempts: %s", attempts, exc)
-                return
+                # Fail fast: a half-initialized service would only surface
+                # confusing errors later on /api/v1/notifications and
+                # srcnet.* queries; the orchestrator should restart us.
+                raise RuntimeError(f"srcnet bootstrap failed after {attempts} attempts") from exc
             log.warning("srcnet bootstrap attempt %d failed (%s), retrying", attempt, exc)
             time.sleep(delay_s)
 

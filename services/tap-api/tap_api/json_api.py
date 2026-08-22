@@ -253,11 +253,11 @@ async def list_notifications():
         rows = conn.execute(
             f"""
             SELECT p.project_id, p.project_title, p.data_rights,
-                   count(DISTINCT d.product_id), count(a.artifact_id)
+                   (SELECT count(*) FROM srcnet.data_products d
+                     WHERE d.project_id = p.project_id),
+                   (SELECT count(*) FROM srcnet.artifacts a
+                     WHERE a.project_id = p.project_id)
             FROM {TABLES[0].qualified} p
-            LEFT JOIN srcnet.data_products d USING (project_id)
-            LEFT JOIN srcnet.artifacts a USING (project_id)
-            GROUP BY p.project_id, p.project_title, p.data_rights
             ORDER BY p.project_id
             """
         ).fetchall()

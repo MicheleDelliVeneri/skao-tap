@@ -75,3 +75,18 @@ def test_tap_schema_registration_covers_all_tables_and_columns():
     assert len(key_rows) == len(TABLES) - 1  # one FK per child table
     # all registrations are idempotent
     assert all("ON CONFLICT" in s or "WHERE NOT EXISTS" in s for s in inserts)
+
+
+def test_required_optional_field_is_nullable():
+    """`x: str | None` without a default is required by pydantic but accepts
+    an explicit null — the column must therefore be nullable."""
+    from pydantic import BaseModel
+
+    class Demo(BaseModel):
+        demo_id: str
+        note: str | None
+
+    (table,) = build_tables(Demo, "s", "demos")
+    cols = {c.name: c for c in table.columns}
+    assert cols["note"].nullable
+    assert not cols["demo_id"].nullable

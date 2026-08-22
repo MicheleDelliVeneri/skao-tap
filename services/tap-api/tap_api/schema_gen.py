@@ -157,7 +157,7 @@ def _scalar_column(name: str, info: FieldInfo, force_not_null: bool) -> ColumnSp
     return ColumnSpec(
         name=name,
         sql_type=sql_type,
-        nullable=nullable and not info.is_required() and not force_not_null,
+        nullable=nullable and not force_not_null,
         checks=checks,
         description=description,
     )
