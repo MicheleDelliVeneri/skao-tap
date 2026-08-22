@@ -8,6 +8,12 @@ from tapcore.config import settings
 from tapcore.db import pool
 from tapcore.errors import UsageError
 from tapcore.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
+from tapcore.upload import (
+    UploadedTable,
+    create_upload_tables,
+    parse_upload_param,
+    rewrite_upload_refs,
+)
 from tapcore.votable import normalize_format
 
 from .params import require
@@ -24,8 +30,11 @@ def prepare_query(params: dict[str, str]) -> dict:
     request = params.get("REQUEST")  # required in TAP 1.0, deprecated in 1.1
     if request and request not in ("doQuery",):
         raise UsageError(f"REQUEST={request} is not supported")
-    if "UPLOAD" in params:
-        raise UsageError("table upload (UPLOAD) is not supported by this service")
+    upload_names = (
+        {name.lower() for name, _ in parse_upload_param(params["UPLOAD"])}
+        if params.get("UPLOAD")
+        else set()
+    )
 
     check_language(params.get("LANG", "ADQL"))
     query = require(params, "QUERY")
@@ -34,7 +43,11 @@ def prepare_query(params: dict[str, str]) -> dict:
     tables = touched_tables(sql)
     published = _published_tables()
     for table in tables:
-        if table.lower() not in published:
+        lower = table.lower()
+        if lower.startswith("tap_upload."):
+            if lower.removeprefix("tap_upload.") not in upload_names:
+                raise UsageError(f"table {table} was not uploaded with this request")
+        elif lower not in published:
             raise UsageError(f"table {table} is not published by this service")
 
     maxrec = params.get("MAXREC")
@@ -58,6 +71,7 @@ def prepare_query(params: dict[str, str]) -> dict:
     return {
         "sql": sql,
         "tables": tables,
+        "upload_names": upload_names,
         "maxrec": maxrec,
         "fmt_key": fmt_key,
         "mime": mime,
@@ -71,13 +85,17 @@ def _published_tables() -> set[str]:
     return {r[0].lower() for r in rows}
 
 
-def _result_chunks(prepared: dict) -> Iterator[bytes]:
+def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[bytes]:
     """Execute the prepared query on a server-side cursor and yield the
     serialized result chunk by chunk; the connection stays checked out
     until the stream is exhausted."""
     sql = apply_maxrec(prepared["sql"], prepared["maxrec"])
+    if uploads:
+        sql = rewrite_upload_refs(sql, {u.name for u in uploads})
     with pool().connection() as conn, conn.transaction():
         tap_meta = tap_schema_metadata(conn, prepared["tables"])
+        if uploads:
+            create_upload_tables(conn, uploads, settings.query_role)
         conn.execute(
             "SELECT set_config('statement_timeout', %s, true)",
             (str(settings.sync_timeout_s * 1000),),
@@ -91,13 +109,15 @@ def _result_chunks(prepared: dict) -> Iterator[bytes]:
             yield from stream(columns, limiter, prepared["fmt_key"])
 
 
-def run_sync(prepared: dict) -> tuple[Iterator[bytes], str]:
+def run_sync(
+    prepared: dict, uploads: list[UploadedTable] | None = None
+) -> tuple[Iterator[bytes], str]:
     """Start the query and return (chunk iterator, mime type).
 
     The first chunk is produced eagerly so translation/permission errors
     still surface as proper DALI/JSON error responses instead of dying
     mid-stream.
     """
-    chunks = _result_chunks(prepared)
+    chunks = _result_chunks(prepared, uploads or [])
     first = next(chunks, b"")
     return itertools.chain([first], chunks), prepared["mime"]

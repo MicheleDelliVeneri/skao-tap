@@ -10,10 +10,12 @@ from tapcore import uws
 from tapcore.config import settings
 from tapcore.db import pool
 from tapcore.errors import NotFoundError, UsageError
+from tapcore.upload import save_upload_sources
 from tapcore.votable import error_votable
 
 from .params import gather_params
 from .query import prepare_query
+from .uploads import gather_upload_files, parse_uploads, resolve_upload_sources
 
 router = APIRouter()
 
@@ -59,8 +61,13 @@ async def job_list(request: Request):
 async def create_job(request: Request):
     params = await gather_params(request)
     phase = params.pop("PHASE", None)
+    files = await gather_upload_files(request)
+    sources = resolve_upload_sources(params.get("UPLOAD"), files)
+    parse_uploads(sources)  # reject malformed uploads before storing the job
     with pool().connection() as conn:
         job = uws.create_job(conn, params)
+        if sources:
+            save_upload_sources(job["job_id"], sources)
         if phase and phase.upper() == "RUN":
             _queue(conn, job)
     return RedirectResponse(_job_url(job["job_id"]), status_code=303)

@@ -27,6 +27,12 @@ class Settings:
     job_retention_s: int = field(
         default_factory=lambda: int(os.getenv("TAP_JOB_RETENTION", str(7 * 24 * 3600)))
     )
+    upload_max_rows: int = field(
+        default_factory=lambda: int(os.getenv("TAP_UPLOAD_MAX_ROWS", "100000"))
+    )
+    upload_max_bytes: int = field(
+        default_factory=lambda: int(os.getenv("TAP_UPLOAD_MAX_BYTES", str(32 * 1024 * 1024)))
+    )
 
 
 settings = Settings()

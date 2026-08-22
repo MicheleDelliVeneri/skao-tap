@@ -54,6 +54,7 @@ class FakeServerCursor:
         return False
 
     def execute(self, sql, params=None):
+        self._db.statements.append(sql.strip())
         if self._db.result_error is not None:
             raise self._db.result_error
         self.description = self._db.result_description

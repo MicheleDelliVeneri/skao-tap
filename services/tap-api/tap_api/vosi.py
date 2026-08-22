@@ -47,12 +47,18 @@ def capabilities_xml() -> str:
     <outputFormat><mime>application/json</mime><alias>json</alias></outputFormat>
     <outputFormat><mime>application/vnd.apache.parquet</mime><alias>parquet</alias></outputFormat>
     <outputFormat><mime>application/vnd.apache.arrow.stream</mime><alias>arrow</alias></outputFormat>
+    <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-inline"/>
+    <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-http"/>
+    <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-https"/>
     <retentionPeriod><default>{settings.job_retention_s}</default></retentionPeriod>
     <executionDuration><default>{settings.default_exec_duration_s}</default></executionDuration>
     <outputLimit>
       <default unit="row">{settings.default_maxrec}</default>
       <hard unit="row">{settings.hard_maxrec}</hard>
     </outputLimit>
+    <uploadLimit>
+      <hard unit="row">{settings.upload_max_rows}</hard>
+    </uploadLimit>
   </capability>
   <capability standardID="ivo://ivoa.net/std/VOSI#capabilities">
     <interface xsi:type="vod:ParamHTTP" role="std">

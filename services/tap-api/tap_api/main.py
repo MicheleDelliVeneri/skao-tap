@@ -25,6 +25,7 @@ from .json_api import router as json_router
 from .params import gather_params
 from .query import prepare_query, run_sync
 from .srcnet import ensure_schema
+from .uploads import gather_upload_files, parse_uploads, resolve_upload_sources
 from .uws_api import router as uws_router
 
 log = logging.getLogger("tap-api")
@@ -101,8 +102,10 @@ async def sync(request: Request):
     params = await gather_params(request)
     if params.get("REQUEST") == "getCapabilities":  # TAP 1.0 compatibility
         return RedirectResponse(f"{settings.base_url}/capabilities", status_code=303)
+    files = await gather_upload_files(request)
+    uploads = parse_uploads(resolve_upload_sources(params.get("UPLOAD"), files))
     prepared = prepare_query(params)
-    chunks, mime = run_sync(prepared)
+    chunks, mime = run_sync(prepared, uploads)
     return StreamingResponse(chunks, media_type=mime)
 
 

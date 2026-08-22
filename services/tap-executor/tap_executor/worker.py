@@ -18,6 +18,12 @@ from tapcore.adql import apply_maxrec, touched_tables
 from tapcore.config import settings
 from tapcore.db import pool
 from tapcore.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
+from tapcore.upload import (
+    create_upload_tables,
+    load_uploads,
+    parse_upload_param,
+    rewrite_upload_refs,
+)
 from tapcore.votable import normalize_format
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -60,6 +66,14 @@ def execute_job(job: dict) -> None:
         fmt_key, mime, ext = normalize_format(params.get("RESPONSEFORMAT") or params.get("FORMAT"))
         sql = apply_maxrec(job["query_sql"], maxrec)
 
+        uploads = []
+        if params.get("UPLOAD"):
+            names = [name for name, _ in parse_upload_param(params["UPLOAD"])]
+            uploads = load_uploads(
+                job_id, names, settings.upload_max_rows, settings.upload_max_bytes
+            )
+            sql = rewrite_upload_refs(sql, {u.name for u in uploads})
+
         result_dir = uws.job_results_dir(job_id)
         os.makedirs(result_dir, exist_ok=True)
         result_path = os.path.join(result_dir, f"result.{ext}")
@@ -69,6 +83,8 @@ def execute_job(job: dict) -> None:
         result_size = 0
         with pool().connection() as conn, conn.transaction():
             tap_meta = tap_schema_metadata(conn, touched_tables(job["query_sql"]))
+            if uploads:
+                create_upload_tables(conn, uploads, settings.query_role)
             timeout_ms = int(job["execution_duration"]) * 1000
             if timeout_ms > 0:
                 conn.execute(
