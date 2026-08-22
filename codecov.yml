@@ -2,10 +2,13 @@ coverage:
   status:
     project:
       default:
-        informational: true
+        target: 80%
+        threshold: 0%        # hard floor, no drift allowance
+        if_not_found: success
+        if_ci_failed: error
     patch:
       default:
-        informational: true
+        informational: true  # advisory, as before
 comment:
   layout: "condensed_header, diff, flags"
   require_changes: true

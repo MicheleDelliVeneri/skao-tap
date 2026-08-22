@@ -6,21 +6,16 @@ build-backend = "setuptools.build_meta"
 name = "tap-api"
 version = "0.1.0"
 description = "SKAO TAP service HTTP frontend: /sync, /async (UWS), VOSI endpoints"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
     "tapcore",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "python-multipart>=0.0.9",
     # SKA SRC notification data models: drive the srcnet DB schema and
-    # validate /api/v1/notifications payloads. Pinned to a commit until the
-    # package is published to a public index.
-    "ska-src-mm-notification",
+    # validate /api/v1/notifications payloads.
+    "ska-src-mm-notification>=0.1.7",
 ]
-
-[tool.uv.sources.ska-src-mm-notification]
-git = "https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification.git"
-rev = "ab55c051825efd65490275cbdddef3418ef473ad"
 
 [tool.uv.sources]
 tapcore = { workspace = true }
