@@ -53,7 +53,7 @@ class TableSpec:
     schema: str
     name: str
     model: type[BaseModel]
-    parent: "TableSpec | None"
+    parent: TableSpec | None
     id_column: str
     columns: list[ColumnSpec] = field(default_factory=list)
 
