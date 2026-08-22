@@ -11,6 +11,8 @@ dependencies = [
     "psycopg[binary,pool]>=3.1",
     "pyarrow>=17.0",
     "queryparser-python3>=0.7",
+    "pydantic>=2.0",
+    "annotated-types>=0.6",
 ]
 
 [tool.setuptools.packages.find]
