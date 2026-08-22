@@ -4,17 +4,13 @@ Follow-up work is organized in numbered packages, referenced by number in
 issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
-Package 1 (typed, streaming result pipeline with Parquet/Arrow output) is
-delivered and no longer tracked here.
+Delivered and no longer tracked here: package 1 (typed, streaming result
+pipeline with Parquet/Arrow output) and package 2 (TAP table upload:
+inline multipart and http(s) `UPLOAD` on /sync and /async, per-query
+`TAP_UPLOAD` temp tables, `uploadMethods`/`uploadLimit` in capabilities,
+configurable limits).
 
-## Package 2 — TAP table upload (`UPLOAD`) — *current*
-
-- Inline uploads (multipart VOTable) and `http`/`https` URI uploads.
-- Per-job `TAP_UPLOAD` temporary tables; ADQL translation and the
-  published-table check made upload-aware.
-- `uploadMethods` declared in capabilities; upload limits configurable.
-
-## Package 3 — UWS completeness
+## Package 3 — UWS completeness — *current*
 
 - `WAIT` blocking requests (UWS 1.1) on the job and phase resources.
 - `AFTER` filtering in the job list.
