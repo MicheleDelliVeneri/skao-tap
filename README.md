@@ -1,5 +1,13 @@
 # skao-tap
 
+[![CI](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml)
+[![Security](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/security.yml)
+[![Docs](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/docs.yml)
+[![codecov](https://codecov.io/gh/MicheleDelliVeneri/skao-tap/branch/main/graph/badge.svg)](https://codecov.io/gh/MicheleDelliVeneri/skao-tap)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 A draft **IVOA TAP 1.1** (Table Access Protocol) server in Python, built as
 microservices on a PostgreSQL backend, reusing existing libraries for the
 hard parts:
