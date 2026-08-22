@@ -35,11 +35,12 @@ jobs:
       - run: uv sync --locked --all-groups
       - run: uv run pytest tests/unit -v --cov --cov-report=xml
       - name: Upload coverage to Codecov
+        # skip on forked PRs, where secrets (CODECOV_TOKEN) are unavailable
+        if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
         uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
           flags: unit
-          slug: MicheleDelliVeneri/skao-tap
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
@@ -64,11 +65,12 @@ jobs:
         env:
           TAP_TEST_ADMIN_URL: postgresql://tap:tap@127.0.0.1:5432/postgres
       - name: Upload coverage to Codecov
+        # skip on forked PRs, where secrets (CODECOV_TOKEN) are unavailable
+        if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
         uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
           flags: component
-          slug: MicheleDelliVeneri/skao-tap
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
