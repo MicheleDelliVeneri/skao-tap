@@ -42,16 +42,28 @@ created here is visible there and vice versa:
 `GET /api/v1/tables` returns TAP_SCHEMA as JSON (schemas, tables, columns
 with units/UCDs) — the machine-friendly twin of VOSI `/tap/tables`.
 
-## SRC ingestion notifications
+## Metadata-domain plugins
 
-The service consumes [ska-src-mm-notification](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification)
-documents (`Project → Observation → SchedulingBlock → ExecutionBlock →
-DataProduct → Artifact`):
+Metadata domains are **plugins**: each binds an upstream pydantic model
+package to a SQL schema and a mount point, and gets the same endpoint set.
+Two ship built in, and third-party model packages register through the
+`skao_tap.models` entry-point group — installed alongside the services,
+no changes to this codebase. `TAP_MODEL_PLUGINS` (Helm:
+`config.modelPlugins`) selects what a deployment activates: `all`, or a
+comma-separated subset for dedicated per-model systems.
+
+| Plugin | Model package | SQL schema | Mount |
+|---|---|---|---|
+| `odp` | [ska-src-mm-notification](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification) (`Project → … → DataProduct → Artifact`) | `srcnet` | `/api/v1/notifications` |
+| `software` | [ska-src-sdm](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model) (`Software → Artifact`, embedded discovery/resources/provenance) | `software` | `/api/v1/software` |
+
+Every active plugin serves (shown for `odp`; identically for
+`/api/v1/software/{uri}` etc.):
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/v1/notifications` | Validate (with the library's pydantic models) and store a notification; idempotent upsert |
-| `GET /api/v1/notifications` | Project-level summary of ingested metadata |
+| `POST /api/v1/notifications` | Validate (with the plugin's pydantic models) and store a document; idempotent upsert |
+| `GET /api/v1/notifications` | Root-level summary of ingested metadata, with per-table row counts |
 | `GET /api/v1/notifications/{project_id}` | Reconstruct the full nested document |
 | `PATCH /api/v1/notifications/{project_id}` | Amend already-ingested rows: `{"table", "match"?, "values"}` |
 
@@ -83,11 +95,16 @@ once (idempotent upsert).
 
 ### Model-driven database schema
 
-The `srcnet.*` tables that store notifications are **generated from the
-notification pydantic models at startup** (`tap_api/schema_gen.py`):
+Each plugin's tables are **generated from its pydantic models at startup**
+(`tapcore/schema_gen.py`):
 
 - each `list[Model]` level becomes a child table with a composite primary
-  key following the `*_id` identity chain and a cascading foreign key;
+  key following the identity chain (`*_id` fields by convention,
+  overridable per model class — the software plugin keys on `uri` and
+  artifact `location`) and a cascading foreign key;
+- singular nested models are flattened into prefixed columns
+  (`resources.min_memory` → `resources_min_memory`), reconstructed as
+  nested objects on fetch;
 - pydantic types map to PostgreSQL types; `Ge/Gt/Le/Lt` constraints and
   enums become `CHECK` constraints, so the database enforces the same
   invariants the library validates;

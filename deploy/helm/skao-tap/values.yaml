@@ -36,6 +36,9 @@ config:
   asyncExecDurationSeconds: 600
   jobRetentionSeconds: 604800
   waitMaxSeconds: 60
+  # -- Metadata-domain plugins to activate: "all" or a comma-separated
+  # subset (e.g. "odp" or "software") for dedicated per-model deployments.
+  modelPlugins: all
   queryRole: tap_reader
 
 # -- Shared volume where the executor writes job results and the API serves

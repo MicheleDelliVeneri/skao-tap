@@ -311,7 +311,7 @@ class FakeDB:
         if head.startswith("DELETE FROM UWS.JOBS"):
             return FakeResult(rowcount=1 if self.jobs.pop(params[0], None) else 0)
 
-        match = re.match(r"UPDATE (srcnet\.\S+) SET ", text)
+        match = re.match(r"UPDATE ((?:srcnet|software)\.\S+) SET ", text)
         if match:  # srcnet amend
             table = match.group(1)
             set_part, where_part = text.split(" WHERE ", 1)
@@ -329,7 +329,7 @@ class FakeDB:
                     updated += 1
             return FakeResult(rowcount=updated)
 
-        match = re.match(r"INSERT INTO (srcnet\.\S+) \(([^)]*)\) VALUES", text)
+        match = re.match(r"INSERT INTO ((?:srcnet|software)\.\S+) \(([^)]*)\) VALUES", text)
         if match and "ON CONFLICT" in text:  # srcnet upsert
             table, columns = match.group(1), [c.strip() for c in match.group(2).split(",")]
             pk = re.search(r"ON CONFLICT \(([^)]*)\)", text).group(1)
@@ -351,23 +351,22 @@ class FakeDB:
             ]
             return FakeResult(rows)
 
-        if re.search(r"FROM \S+ p\s+ORDER BY p.project_id", text):  # notifications listing
-            projects = next(
-                (rows for table, rows in self.srcnet.items() if table.endswith(".projects")),
-                {},
-            )
+        if text.startswith("SELECT to_jsonb(p)"):  # generic plugin listing
+            root = re.search(r"FROM (\S+) p ORDER BY p\.(\w+)", text).group(1)
+            descendants = re.findall(r"FROM (\S+) c WHERE c\.(\w+) = p\.", text)
             listing = []
-            for row in projects.values():
-                counts = []
-                for suffix in (".data_products", ".artifacts"):
-                    table = next((r for t, r in self.srcnet.items() if t.endswith(suffix)), {})
-                    counts.append(
-                        sum(1 for r in table.values() if r.get("project_id") == row["project_id"])
+            for row in self.srcnet.get(root, {}).values():
+                counts = tuple(
+                    sum(
+                        1 for r in self.srcnet.get(table, {}).values() if r.get(key) == row.get(key)
                     )
-                listing.append(
-                    (row["project_id"], row.get("project_title"), row.get("data_rights"), *counts)
+                    for table, key in descendants
                 )
-            return FakeResult(sorted(listing))
+                listing.append((dict(row), *counts))
+            listing.sort(
+                key=lambda entry: str(entry[0].get(descendants[0][1] if descendants else "id"))
+            )
+            return FakeResult(listing)
 
         # DDL and TAP_SCHEMA registration during srcnet bootstrap
         return FakeResult()
