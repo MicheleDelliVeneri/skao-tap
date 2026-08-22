@@ -124,6 +124,11 @@ def execute_job(job: dict) -> None:
         shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
         with pool().connection() as conn:
             current = uws.get_job(conn, job_id)
+            if current["phase"] != "ABORTED":
+                # grace re-read: an ABORT's phase commit can trail the
+                # cancellation signal by a moment
+                time.sleep(0.5)
+                current = uws.get_job(conn, job_id)
             if current["phase"] == "ABORTED":
                 # ABORT cancelled our statement mid-run: not an error
                 log.info("job %s aborted while executing", job_id)

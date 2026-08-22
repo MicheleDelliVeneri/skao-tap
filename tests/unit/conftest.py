@@ -75,6 +75,9 @@ class FakeConnection:
     def cursor(self, name=None):
         return FakeServerCursor(self._db)
 
+    def commit(self):
+        pass
+
     def execute(self, sql, params=None):
         return self._db.execute(sql, params)
 
@@ -182,6 +185,9 @@ class FakeDB:
         if head.startswith("SELECT PG_CANCEL_BACKEND"):
             self.cancelled.append(params[0])
             return FakeResult([(True,)])
+
+        if "FROM pg_stat_activity" in text:
+            return FakeResult()  # cancelled backend no longer active
 
         if text.startswith("SELECT table_name FROM tap_schema.tables"):
             return FakeResult(self.published)

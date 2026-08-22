@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import time
 from xml.etree import ElementTree as ET
 
 from .config import settings
@@ -123,14 +124,21 @@ def update_job(conn, job_id: str, **fields) -> None:
         raise NotFoundError(f"job {job_id} not found")
 
 
+CANCEL_RETRIES = 5
+CANCEL_RETRY_DELAY_S = 0.2
+
+
 def abort_job(conn, job: dict) -> None:
     """Move an active job to ABORTED and cancel its running statement.
 
-    The executor records the PostgreSQL backend PID while the query runs;
-    pg_cancel_backend() interrupts that statement, and the executor treats
-    the resulting cancellation as an abort rather than an error. The job is
-    re-read here so a PID already cleared by a finished execution is not
-    cancelled — that connection is back in the executor's pool.
+    The executor records the PostgreSQL backend PID while the query runs.
+    The phase update is committed *before* pg_cancel_backend() fires, so
+    the executor's cancellation handler always observes ABORTED (an
+    uncommitted update would read as EXECUTING and be misfiled as an
+    error). The job is re-read first so a PID already cleared by a
+    finished execution is never cancelled — that connection is back in the
+    executor's pool. A cancel that lands between statements is a silent
+    no-op, so the statement is re-cancelled while the backend stays active.
     """
     job = get_job(conn, job["job_id"])
     if job["phase"] in FINAL_PHASES:
@@ -141,8 +149,20 @@ def abort_job(conn, job: dict) -> None:
         phase="ABORTED",
         end_time=datetime.datetime.now(datetime.UTC),
     )
-    if job["backend_pid"]:
-        conn.execute("SELECT pg_cancel_backend(%s)", (job["backend_pid"],))
+    conn.commit()  # make ABORTED visible before the executor is interrupted
+    pid = job["backend_pid"]
+    if not pid:
+        return
+    for _ in range(CANCEL_RETRIES):
+        conn.execute("SELECT pg_cancel_backend(%s)", (pid,))
+        conn.commit()
+        time.sleep(CANCEL_RETRY_DELAY_S)
+        active = conn.execute(
+            "SELECT 1 FROM pg_stat_activity WHERE pid = %s AND state = 'active'",
+            (pid,),
+        ).fetchone()
+        if active is None:
+            return
 
 
 def delete_job(conn, job_id: str) -> None:

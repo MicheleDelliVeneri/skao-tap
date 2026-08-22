@@ -74,6 +74,10 @@ def tap_service(database_url, tmp_path_factory):
         "TAP_DEFAULT_MAXREC": "10000",
         "TAP_SYNC_TIMEOUT": "10",
     }
+    logs_dir = tmp_path_factory.mktemp("service-logs")
+    # handles stay open for the subprocesses' lifetime; closed in `finally`
+    api_log = open(logs_dir / "tap-api.log", "wb")  # noqa: SIM115
+    executor_log = open(logs_dir / "tap-executor.log", "wb")  # noqa: SIM115
     api = subprocess.Popen(
         [
             sys.executable,
@@ -89,9 +93,15 @@ def tap_service(database_url, tmp_path_factory):
         ],
         env=env,
         cwd=REPO_ROOT,
+        stdout=api_log,
+        stderr=subprocess.STDOUT,
     )
     executor = subprocess.Popen(
-        [sys.executable, "-m", "tap_executor.worker"], env=env, cwd=REPO_ROOT
+        [sys.executable, "-m", "tap_executor.worker"],
+        env=env,
+        cwd=REPO_ROOT,
+        stdout=executor_log,
+        stderr=subprocess.STDOUT,
     )
     try:
         deadline = time.monotonic() + 30
@@ -115,3 +125,12 @@ def tap_service(database_url, tmp_path_factory):
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
+        for handle in (api_log, executor_log):
+            handle.close()
+        # surface the service logs in the pytest/CI output for debugging
+        for name in ("tap-api.log", "tap-executor.log"):
+            path = logs_dir / name
+            text = path.read_text(errors="replace").strip()
+            if text:
+                print(f"\n----- {name} (tail) -----")
+                print("\n".join(text.splitlines()[-80:]))
