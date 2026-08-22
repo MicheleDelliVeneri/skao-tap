@@ -2,11 +2,15 @@
 
 import datetime
 import json
+import os
+import re
 import secrets
 from xml.etree import ElementTree as ET
 
 from .config import settings
 from .errors import NotFoundError
+
+JOB_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
 UWS_NS = "http://www.ivoa.net/xml/UWS/v1.0"
 XLINK_NS = "http://www.w3.org/1999/xlink"
@@ -30,6 +34,18 @@ def _row_to_job(row) -> dict:
 
 def new_job_id() -> str:
     return secrets.token_hex(8)
+
+
+def job_results_dir(job_id: str) -> str:
+    """The job's directory under the results volume.
+
+    Validates the id against the server-generated format before it is used
+    in any filesystem path, so a crafted id can never traverse outside the
+    results directory.
+    """
+    if not JOB_ID_RE.fullmatch(job_id):
+        raise NotFoundError(f"job {job_id} not found")
+    return os.path.join(settings.results_dir, job_id)
 
 
 def _iso(dt: datetime.datetime | None) -> str | None:

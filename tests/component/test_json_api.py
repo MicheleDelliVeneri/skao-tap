@@ -166,7 +166,8 @@ def test_json_job_lifecycle(tap_service):
     listing = httpx.get(f"{api}/jobs", params={"phase": "COMPLETED"}).json()
     assert job["job_id"] in {j["job_id"] for j in listing["jobs"]}
 
-    assert httpx.delete(url).status_code == 204
+    deleted = httpx.delete(url)
+    assert deleted.status_code == 204
     assert httpx.get(url).status_code == 404
 
 

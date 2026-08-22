@@ -150,7 +150,7 @@ def _scalar_column(name: str, info: FieldInfo, force_not_null: bool) -> ColumnSp
         sql_type = SQL_TYPES[base]
         if sql_type in ("bigint", "double precision"):
             checks.extend(_numeric_checks(name, collected))
-    elif typing.get_origin(base) is list or base in (list, dict):
+    elif typing.get_origin(base) in (list, dict) or base in (list, dict):
         sql_type = "jsonb"
     else:
         return None

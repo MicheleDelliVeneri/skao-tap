@@ -70,7 +70,10 @@ notification pydantic models at startup** (`tap_api/schema_gen.py`):
 ```sql
 SELECT p.product_id, a.artifact_id, a.access_url
 FROM srcnet.data_products AS p
-JOIN srcnet.artifacts AS a ON p.product_id = a.product_id
+JOIN srcnet.artifacts AS a
+  ON  p.project_id = a.project_id
+  AND p.eb_id      = a.eb_id
+  AND p.product_id = a.product_id
 WHERE p.dataproduct_type = 'cube'
 ```
 

@@ -90,3 +90,15 @@ def test_required_optional_field_is_nullable():
     cols = {c.name: c for c in table.columns}
     assert cols["note"].nullable
     assert not cols["demo_id"].nullable
+
+
+def test_dict_fields_map_to_jsonb():
+    from pydantic import BaseModel
+
+    class Demo(BaseModel):
+        demo_id: str
+        attrs: dict[str, str] | None = None
+
+    (table,) = build_tables(Demo, "s", "demos")
+    cols = {c.name: c for c in table.columns}
+    assert cols["attrs"].sql_type == "jsonb"

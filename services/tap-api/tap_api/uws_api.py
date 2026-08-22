@@ -79,7 +79,7 @@ async def job_action(job_id: str, request: Request):
 async def delete_job(job_id: str):
     with pool().connection() as conn:
         uws.delete_job(conn, job_id)
-    shutil.rmtree(os.path.join(settings.results_dir, job_id), ignore_errors=True)
+    shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
     return RedirectResponse(f"{settings.base_url}/async", status_code=303)
 
 
@@ -200,7 +200,7 @@ async def get_result(job_id: str):
         job = uws.get_job(conn, job_id)
     if job["phase"] != "COMPLETED":
         raise NotFoundError(f"job {job_id} has no result (phase {job['phase']})")
-    result_dir = os.path.join(settings.results_dir, job_id)
+    result_dir = uws.job_results_dir(job_id)
     for name in os.listdir(result_dir) if os.path.isdir(result_dir) else []:
         if name.startswith("result."):
             return FileResponse(
