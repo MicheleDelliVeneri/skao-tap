@@ -54,20 +54,41 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
-      - name: Install PostgreSQL with pg_sphere
+      # Run the database from the image the project ships, so the component
+      # tests and the deployed tap-db can never drift apart on the server
+      # major or the pgsphere build. Only the psql client comes from apt (the
+      # component fixtures shell out to it to load db/init/*.sql).
+      - name: Start the tap-db image
         run: |
+          sudo systemctl stop postgresql || true
           sudo apt-get update
-          sudo apt-get install -y postgresql postgresql-16-pgsphere postgresql-client
-          sudo systemctl start postgresql
-          sudo -u postgres psql -c "CREATE USER tap WITH PASSWORD 'tap' SUPERUSER"
-          sudo -u postgres psql -c "CREATE DATABASE tap OWNER tap"
+          sudo apt-get install -y postgresql-client
+          docker build -t skao-tap-ci/tap-db:ci db
+          docker run -d --name tap-db-ci \
+            -e POSTGRES_USER=tap -e POSTGRES_PASSWORD=tap -e POSTGRES_DB=tap \
+            -p 5432:5432 skao-tap-ci/tap-db:ci
+          for _ in $(seq 1 60); do
+            docker exec tap-db-ci pg_isready -U tap -d tap && break
+            sleep 2
+          done
+          # fail here, with the server's own logs, rather than further down
+          # with a confusing psql connection error
+          if ! docker exec tap-db-ci pg_isready -U tap -d tap; then
+            echo "::error::tap-db did not become ready within 120s"
+            docker logs --tail 100 tap-db-ci
+            exit 1
+          fi
+          docker exec tap-db-ci psql -U tap -d tap -c "ALTER USER tap WITH SUPERUSER"
+          docker exec tap-db-ci psql -U tap -d tap -tAc "SELECT version()"
       - run: uv sync --locked --all-groups
       - run: uv run pytest tests/component -v --cov --cov-report=xml
         env:
           TAP_TEST_ADMIN_URL: postgresql://tap:tap@127.0.0.1:5432/postgres
       - name: Service logs
         if: failure()
-        run: tail -n 150 .service-logs/*.log || true
+        run: |
+          tail -n 150 .service-logs/*.log || true
+          docker logs --tail 150 tap-db-ci || true
       - name: Upload coverage to Codecov
         # skip on forked PRs, where secrets (CODECOV_TOKEN) are unavailable
         if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}

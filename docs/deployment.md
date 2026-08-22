@@ -7,7 +7,7 @@ docker compose up --build -d
 ./scripts/smoke_test.sh
 ```
 
-Compose builds three images: `db` (PostgreSQL 16 + pg_sphere, initialized
+Compose builds three images: `db` (PostgreSQL 18 + pg_sphere, initialized
 from `db/init/*.sql`), `tap-api` and `tap-executor` (both installed with
 `uv sync --frozen` from the committed `uv.lock`).
 
@@ -222,6 +222,18 @@ misconfiguration.
     Volumes created by older root-based images keep root ownership; if the
     database or executor fails with permission errors after upgrading,
     recreate the volumes once with `docker compose down -v`.
+
+!!! warning "PostgreSQL 18"
+    The database image moved from PostgreSQL 16 to 18. A data directory
+    written by 16 cannot be started by 18, and the `postgres:18` image also
+    changed its default `PGDATA` (`/var/lib/postgresql/<major>/docker`, with
+    `/var/lib/postgresql` as the declared volume) — Compose and the chart
+    both pin `PGDATA` back under their mount. There is no production data to
+    migrate, so recreate the volume: `docker compose down -v` for Compose, or
+    delete the `data-<release>-postgres-0` PVC before upgrading the chart.
+    Should a future major bump need to preserve data, take a
+    `pg_dump --format=custom` archive beforehand and `pg_restore` it into the
+    new cluster.
 
 ## Configuration
 

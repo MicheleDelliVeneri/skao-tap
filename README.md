@@ -51,7 +51,7 @@ Three services (see `docker-compose.yml`):
 
 | Service | Code | Role |
 | --- | --- | --- |
-| `db` | `db/` | PostgreSQL 16 + pg_sphere; init scripts create `TAP_SCHEMA`, a sample `ska.continuum_sources` catalogue, the `uws.jobs` table and a read-only `tap_reader` role used for all user queries |
+| `db` | `db/` | PostgreSQL 18 + pg_sphere; init scripts create `TAP_SCHEMA`, a sample `ska.continuum_sources` catalogue, the `uws.jobs` table and a read-only `tap_reader` role used for all user queries |
 | `tap-api` | `services/tap-api` | All TAP/UWS/VOSI HTTP endpoints |
 | `tap-executor` | `services/tap-executor` | Asynchronous (UWS) query execution; multiple replicas can run concurrently |
 
@@ -208,7 +208,7 @@ helm test skao-tap -n skao-tap       # in-cluster VOSI + sync smoke test
 ```
 
 The chart deploys `tap-api` (+ Service/optional Ingress), `tap-executor`
-(scale-out safe), an optional in-chart PostgreSQL 16 + pg_sphere
+(scale-out safe), an optional in-chart PostgreSQL 18 + pg_sphere
 StatefulSet initialized from the same `db/init` SQL, and a shared results
 PVC (use a ReadWriteMany storage class for multi-node clusters). Resilience
 and operations are chart values: default anti-affinity/zone spread and
