@@ -101,6 +101,7 @@ class FakeDB:
     def __init__(self):
         now = datetime.datetime.now(datetime.UTC)
         self.closed = False
+        self.cancelled: list[int] = []
         self.jobs: dict[str, dict] = {}
         self.srcnet: dict[str, dict[tuple, dict]] = {}
         self.statements: list[str] = []
@@ -165,9 +166,22 @@ class FakeDB:
         head = text.upper()
 
         if head.startswith(
-            ("SELECT SET_CONFIG", "SET LOCAL ROLE", "SELECT PG_ADVISORY", "SELECT 1")
+            (
+                "SELECT SET_CONFIG",
+                "SET LOCAL ROLE",
+                "SELECT PG_ADVISORY",
+                "SELECT 1",
+                "ALTER TABLE uws.jobs".upper(),
+            )
         ):
             return FakeResult()
+
+        if head.startswith("SELECT PG_BACKEND_PID"):
+            return FakeResult([(4242,)])
+
+        if head.startswith("SELECT PG_CANCEL_BACKEND"):
+            self.cancelled.append(params[0])
+            return FakeResult([(True,)])
 
         if text.startswith("SELECT table_name FROM tap_schema.tables"):
             return FakeResult(self.published)
@@ -213,13 +227,18 @@ class FakeDB:
             return FakeResult([_job_row(job)] if job else [])
 
         if head.startswith("SELECT") and "FROM uws.jobs" in text:  # list
+            index = 0
             if "phase = ANY" in text:
-                jobs = [j for j in self.jobs.values() if j["phase"] in params[0]]
+                jobs = [j for j in self.jobs.values() if j["phase"] in params[index]]
+                index += 1
             else:
                 jobs = [j for j in self.jobs.values() if j["phase"] != "ARCHIVED"]
+            if "creation_time >" in text:
+                jobs = [j for j in jobs if j["creation_time"] > params[index]]
+                index += 1
             jobs.sort(key=lambda j: j["creation_time"], reverse=True)
             if "LIMIT" in text:
-                jobs = jobs[: params[-1]]
+                jobs = jobs[: params[index]]
             return FakeResult([_job_row(j) for j in jobs])
 
         if head.startswith("UPDATE UWS.JOBS SET"):
