@@ -60,8 +60,12 @@ def test_enum_check_on_dataproduct_type():
 def test_ddl_is_idempotent_and_grants_reader():
     statements = ddl_statements(TABLES, "tap_reader")
     assert statements[0] == "CREATE SCHEMA IF NOT EXISTS srcnet"
-    assert all("IF NOT EXISTS" in s for s in statements[1:7])
-    assert "FOREIGN KEY (project_id) REFERENCES srcnet.projects" in statements[2]
+    assert all("IF NOT EXISTS" in s for s in statements[1:-2])  # CREATEs and ALTERs
+    assert any(
+        s.startswith("CREATE TABLE IF NOT EXISTS srcnet.observations")
+        and "FOREIGN KEY (project_id) REFERENCES srcnet.projects" in s
+        for s in statements
+    )
     assert any("GRANT SELECT ON ALL TABLES IN SCHEMA srcnet TO tap_reader" in s for s in statements)
 
 
@@ -102,3 +106,21 @@ def test_dict_fields_map_to_jsonb():
     (table,) = build_tables(Demo, "s", "demos")
     cols = {c.name: c for c in table.columns}
     assert cols["attrs"].sql_type == "jsonb"
+
+
+def test_ddl_migrates_new_model_fields_into_existing_tables():
+    """A table created by an older library release gains new columns via
+    ADD COLUMN IF NOT EXISTS instead of breaking ingestion."""
+    statements = ddl_statements(TABLES, "tap_reader")
+    products = next(t for t in TABLES if t.name == "data_products")
+    alters = [
+        s
+        for s in statements
+        if s.startswith(f"ALTER TABLE {products.qualified} ADD COLUMN IF NOT EXISTS")
+    ]
+    non_key = [c for c in products.columns if not c.is_key]
+    assert len(alters) == len(non_key)
+    # migration-added columns are nullable: never NOT NULL or CHECK in ALTERs
+    assert all("NOT NULL" not in s and "CHECK" not in s for s in alters)
+    # key columns are structural (part of the PK) and never ALTERed in
+    assert not any(f"ADD COLUMN IF NOT EXISTS {products.id_column} " in s for s in alters)

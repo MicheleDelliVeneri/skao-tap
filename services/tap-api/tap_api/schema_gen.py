@@ -195,7 +195,16 @@ def build_tables(root_model: type[BaseModel], schema: str, root_table: str) -> l
 
 
 def ddl_statements(tables: list[TableSpec], query_role: str) -> list[str]:
-    """Idempotent DDL for the generated tables plus read grants."""
+    """Idempotent DDL for the generated tables plus read grants.
+
+    Existing deployments are migrated forward automatically for the common
+    model evolution — new fields: after each CREATE TABLE IF NOT EXISTS, an
+    ADD COLUMN IF NOT EXISTS is emitted per column, so a table created by an
+    older library release gains the new columns without losing any stored
+    metadata. Columns added this way are nullable regardless of the model
+    (existing rows predate the field; the pydantic layer still validates new
+    payloads), and columns dropped from the model are left in place.
+    """
     schema = tables[0].schema
     statements = [f"CREATE SCHEMA IF NOT EXISTS {schema}"]
     for table in tables:
@@ -215,6 +224,11 @@ def ddl_statements(tables: list[TableSpec], query_role: str) -> list[str]:
             )
         body = ",\n".join(lines)
         statements.append(f"CREATE TABLE IF NOT EXISTS {table.qualified} (\n{body}\n)")
+        statements.extend(
+            f"ALTER TABLE {table.qualified} ADD COLUMN IF NOT EXISTS {col.name} {col.sql_type}"
+            for col in table.columns
+            if not col.is_key
+        )
     statements.append(f"GRANT USAGE ON SCHEMA {schema} TO {query_role}")
     statements.append(f"GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO {query_role}")
     return statements
