@@ -136,11 +136,20 @@ def test_invalidation_forces_a_re_read(counting_pool):
     assert counting_pool["n"] == 2
 
 
-def test_a_table_published_after_the_window_becomes_queryable(client, fake_db):
-    """The window is what keeps an out-of-band publication from needing a
-    restart."""
+def test_a_table_published_out_of_band_appears_when_the_window_expires(counting_pool, monkeypatch):
+    """The window is the backstop for a publication this service did not make;
+    the refresh-on-miss path above is what makes it not matter in practice."""
+    now = [1000.0]
+    monkeypatch.setattr(query_module.time, "monotonic", lambda: now[0])
     query_module.forget_published_tables()
-    assert "ska.continuum_sources" in query_module._published_tables()
+    assert "ska.late_table" not in query_module._published_tables()
+
+    query_module._published_tables()  # still cached, still stale
+
+    now[0] += query_module._PUBLISHED_TTL_S + 1
+    before = counting_pool["n"]
+    query_module._published_tables()
+    assert counting_pool["n"] == before + 1, "expiry must force a re-read"
 
 
 def test_a_table_published_while_running_is_not_refused(counting_pool, client, fake_db):

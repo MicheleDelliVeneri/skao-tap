@@ -240,10 +240,16 @@ class PhaseRequest(BaseModel):
 @router.post("/jobs/{job_id}/phase", dependencies=[Depends(require("jobs.mutate"))])
 async def post_phase(job_id: str, body: PhaseRequest):
     phase = body.phase.upper()
+    prepared = None
+    if phase == "RUN":
+        # the job's own parameters, translated off the event loop
+        with pool().connection() as conn:
+            stored = uws.get_job(conn, job_id)
+        prepared = await run_in_threadpool(prepare_query, stored["parameters"])
     with pool().connection() as conn:
         job = uws.get_job(conn, job_id)
         if phase == "RUN":
-            _queue(conn, job)
+            _queue(conn, job, prepared)
         elif phase == "ABORT":
             uws.abort_job(conn, job)
         else:

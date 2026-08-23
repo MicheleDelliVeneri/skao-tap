@@ -8,6 +8,7 @@ import time
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
 from tapcore import uws
 from tapcore.config import settings
 from tapcore.db import pool
@@ -128,12 +129,16 @@ async def create_job(request: Request):
     files = await gather_upload_files(request)
     sources = resolve_upload_sources(params.get("UPLOAD"), files)
     parse_uploads(sources)  # reject malformed uploads before storing the job
+    # translated off the event loop, before the connection is held
+    prepared = (
+        await run_in_threadpool(prepare_query, params) if phase and phase.upper() == "RUN" else None
+    )
     with pool().connection() as conn:
         job = uws.create_job(conn, params, owner_id=owner_of(request))
         if sources:
             save_upload_sources(job["job_id"], sources)
         if phase and phase.upper() == "RUN":
-            _queue(conn, job)
+            _queue(conn, job, prepared)
     return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
 
@@ -170,10 +175,16 @@ async def get_phase(job_id: str, request: Request):
 async def post_phase(job_id: str, request: Request):
     params = await gather_params(request)
     phase = params.get("PHASE", "").upper()
+    prepared = None
+    if phase == "RUN":
+        # the job's own parameters, translated off the event loop
+        with pool().connection() as conn:
+            stored = uws.get_job(conn, job_id)
+        prepared = await run_in_threadpool(prepare_query, stored["parameters"])
     with pool().connection() as conn:
         job = uws.get_job(conn, job_id)
         if phase == "RUN":
-            _queue(conn, job)
+            _queue(conn, job, prepared)
         elif phase == "ABORT":
             uws.abort_job(conn, job)
         else:

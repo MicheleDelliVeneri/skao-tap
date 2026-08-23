@@ -50,8 +50,7 @@ def prepare_query(params: dict[str, str]) -> dict:
         # published when we last looked". A table registered a moment ago must
         # not be refused for up to the cache's lifetime, so refusing is what
         # forces a fresh read — rare, and cheap because it is rare.
-        forget_published_tables()
-        unpublished = _first_unpublished(tables, _published_tables(), upload_names)
+        unpublished = _first_unpublished(tables, _published_tables(refresh=True), upload_names)
     if unpublished is not None:
         raise UsageError(f"table {unpublished} is not published by this service")
 
@@ -112,16 +111,24 @@ _published_cache: tuple[float, frozenset[str]] | None = None
 _published_lock = threading.Lock()
 
 
-def _published_tables() -> frozenset[str]:
+def _published_tables(*, refresh: bool = False) -> frozenset[str]:
+    """The published table names, from the cache unless it is stale.
+
+    ``refresh`` re-reads under the lock rather than clearing and re-reading,
+    so a concurrent reader cannot slot a stale result in between the two —
+    which is what a caller asking for fresh data is trying to avoid.
+    """
     global _published_cache
-    now = time.monotonic()
     cached = _published_cache
-    if cached is not None and now - cached[0] < _PUBLISHED_TTL_S:
+    if not refresh and cached is not None and time.monotonic() - cached[0] < _PUBLISHED_TTL_S:
         return cached[1]
     with _published_lock:
-        # another thread may have refreshed it while this one waited
         cached = _published_cache
-        if cached is not None and time.monotonic() - cached[0] < _PUBLISHED_TTL_S:
+        # another thread may have refreshed while this one waited; on an
+        # explicit refresh only a read newer than this call will do
+        if cached is not None and time.monotonic() - cached[0] < (
+            0.0 if refresh else _PUBLISHED_TTL_S
+        ):
             return cached[1]
         with pool().connection() as conn:
             rows = conn.execute("SELECT table_name FROM tap_schema.tables").fetchall()
@@ -133,7 +140,8 @@ def _published_tables() -> frozenset[str]:
 def forget_published_tables() -> None:
     """Drop the cached table list, for when this service publishes a table."""
     global _published_cache
-    _published_cache = None
+    with _published_lock:
+        _published_cache = None
 
 
 def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[bytes]:

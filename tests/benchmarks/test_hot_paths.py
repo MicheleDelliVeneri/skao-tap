@@ -15,6 +15,7 @@ import pytest
 # an error on a plain `pytest` run. Skip the module instead.
 pytest.importorskip("pytest_benchmark", reason="benchmarks need pytest-benchmark")
 
+from queryparser.adql import ADQLQueryTranslator
 from tapcore.query.adql import adql_to_postgresql, touched_tables, translate
 from tapcore.query.results import ColumnMeta, RowLimiter, stream
 
@@ -48,8 +49,14 @@ ROWS = tuple(
 
 
 def _translate_and_inspect() -> set[str]:
-    """The old shape: translate, then re-parse the SQL to list the tables."""
-    return touched_tables(adql_to_postgresql(JOIN_QUERY))
+    """The old shape, spelled out rather than routed through translate().
+
+    adql_to_postgresql() now walks the parse tree as well, so calling it here
+    would measure today's work plus the re-parse and stop being comparable to
+    the historical baseline this exists to sit beside.
+    """
+    translator = ADQLQueryTranslator(JOIN_QUERY)
+    return touched_tables(translator.to_postgresql())
 
 
 def _translate_single_pass() -> set[str]:
