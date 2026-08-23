@@ -45,12 +45,10 @@
   "host": {
     "cpu_count": 14,
     "free_disk_bytes": 147130007552,
-    "hostname": "<redacted>",
     "machine": "arm64",
     "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
     "processor": "arm",
-    "python": "3.14.7",
-    "user": "<redacted>"
+    "python": "3.14.7"
   },
   "images": {},
   "recorded_at": 1787522497.732736,

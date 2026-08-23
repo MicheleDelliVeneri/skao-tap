@@ -16,7 +16,6 @@ Three rules, and each exists because of a way benchmark results go wrong:
 from __future__ import annotations
 
 import dataclasses
-import getpass
 import hashlib
 import json
 import logging
@@ -24,7 +23,6 @@ import os
 import pathlib
 import platform
 import shutil
-import socket
 import subprocess
 import time
 import typing
@@ -201,9 +199,10 @@ def environment(
             "describe": _git("describe", "--always", "--dirty"),
         },
         "images": image_digests,
+        # Deliberately no hostname or username: this file is published to
+        # GitHub Pages under docs/performance/, and neither is needed to judge
+        # whether two runs are comparable.
         "host": {
-            "hostname": socket.gethostname(),
-            "user": getpass.getuser(),
             "platform": platform.platform(),
             "machine": platform.machine(),
             "processor": platform.processor(),
