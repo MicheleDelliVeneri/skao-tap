@@ -110,6 +110,12 @@ def reset_plugin() -> None:
 ANONYMOUS_PATHS = frozenset(
     {
         "/",
+        # The probe endpoints. A kubelet has no token and no way to obtain one,
+        # so gating these would fail every probe the moment auth is enabled and
+        # Kubernetes would then kill every pod — an outage caused by turning on
+        # authentication.
+        "/health/live",
+        "/health/ready",
         "/tap/availability",
         "/tap/capabilities",
         "/tap/tables",

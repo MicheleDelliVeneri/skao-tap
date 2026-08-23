@@ -130,3 +130,62 @@ def test_pool_exhaustion_answers_503_with_retry_after(client, monkeypatch):
     assert response.status_code == 503
     assert response.headers["retry-after"] == "1"
     assert "connections are busy" in response.text
+
+
+# -- probes ------------------------------------------------------------------
+#
+# These exist because /tap/availability was used for both probes: it reports on
+# the database, so it queues for a pooled connection, and under load the
+# liveness probe's one-second default timeout expired and Kubernetes SIGKILLed
+# a busy-but-working API. Measured twice in a benchmark run at an offered rate
+# inside the service's own capacity.
+
+
+def test_liveness_touches_nothing_outside_the_process(client, monkeypatch):
+    """A wedged process is what liveness is for, and a restart is the remedy.
+    A saturated pool is neither, so this must not consult the database at all —
+    verified by making any pool access explode."""
+    from tap_api import main as main_module
+
+    def explode():
+        raise AssertionError("liveness must not touch the pool")
+
+    monkeypatch.setattr(main_module, "pool", explode)
+    response = client.get("/health/live")
+    assert response.status_code == 200
+
+
+def test_readiness_reports_a_busy_pool_as_still_ready(client, monkeypatch):
+    """A full pool is a healthy service under load. Answering "not ready" would
+    take a working pod out of the Service and push its share onto pods in
+    exactly the same state."""
+    from psycopg_pool import PoolTimeout
+    from tap_api import main as main_module
+
+    def timeout() -> None:
+        raise PoolTimeout("every connection is in use")
+
+    monkeypatch.setattr(main_module, "_probe_database", timeout)
+    response = client.get("/health/ready")
+    assert response.status_code == 200
+    assert "busy" in response.text
+
+
+def test_readiness_reports_an_unreachable_database_as_not_ready(client, monkeypatch):
+    """The case readiness exists for: this pod cannot serve, so it should stop
+    being sent traffic."""
+    from tap_api import main as main_module
+
+    def broken() -> None:
+        raise RuntimeError("could not connect to server")
+
+    monkeypatch.setattr(main_module, "_probe_database", broken)
+    response = client.get("/health/ready")
+    assert response.status_code == 503
+
+
+def test_availability_is_still_the_vosi_resource(client):
+    """The probes moved off it; the standard endpoint has not changed."""
+    response = client.get("/tap/availability")
+    assert response.status_code == 200
+    assert "<vosi:available>true</vosi:available>" in response.text

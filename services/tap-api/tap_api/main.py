@@ -22,7 +22,7 @@ from ska_src_logging.integrations.fastapi import setup_otel_fastapi, setup_uvico
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from tapcore.auth import invalid_token_challenge, verifier
 from tapcore.config import settings
-from tapcore.db import close_pool
+from tapcore.db import close_pool, pool
 from tapcore.db import connection as db_connection
 from tapcore.errors import AuthenticationError, OverloadedError, TAPError
 from tapcore.metadata import ingest
@@ -121,6 +121,66 @@ async def correlate(request: Request, call_next):
         response = await call_next(request)
     response.headers[REQUEST_ID_HEADER] = rid
     return response
+
+
+# Probes.
+#
+# Deliberately not /tap/availability, which is what they used to be pointed at
+# and which is a VOSI resource that reports on the *database*. Under load the
+# connection pool saturates, that endpoint queues for a connection, the probe's
+# one-second default timeout expires, and Kubernetes kills a process that is
+# busy rather than broken — turning an overload into an outage, and dropping
+# every in-flight request with it. Measured: at an offered rate well inside the
+# service's own closed-loop capacity, the API was SIGKILLed twice by its
+# liveness probe.
+#
+# So the two questions are asked separately, because their remedies differ.
+# Liveness asks "is this process wedged?", whose remedy is a restart, and it
+# must therefore not depend on anything outside the process. Readiness asks
+# "should this pod be sent traffic?", which does depend on the database — but a
+# full pool is not an unreachable database, and treating it as one removes a
+# working pod from the Service and concentrates the load on its peers.
+@app.get("/health/live", include_in_schema=False)
+async def live():
+    """The process is running and the event loop is turning.
+
+    Touches nothing else on purpose: no database, no disk, no pool. If this
+    cannot answer, the process really is stuck and restarting it is right.
+    """
+    return Response("ok\n", media_type="text/plain")
+
+
+@app.get("/health/ready", include_in_schema=False)
+async def ready():
+    """Whether this pod should be sent traffic.
+
+    A short, non-queueing look at the database. The distinction that matters is
+    between "the pool is busy" and "the database is gone": the first is a
+    healthy service under load and must stay in the Service, the second is a
+    pod that cannot serve and should leave it.
+    """
+    try:
+        await run_in_threadpool(_probe_database)
+    except PoolTimeout:
+        # Every connection is in use. That is what a busy service looks like,
+        # not a broken one — and taking this pod out of rotation now would push
+        # its share of the load onto pods in exactly the same state.
+        return Response("busy\n", media_type="text/plain")
+    except Exception as exc:
+        log.warning("readiness probe failed: %s", exc)
+        return Response(f"unavailable: {exc}\n", status_code=503, media_type="text/plain")
+    return Response("ready\n", media_type="text/plain")
+
+
+def _probe_database() -> None:
+    """One trivial statement, with its own short timeout.
+
+    A separate timeout from the query path's: a probe that waits as long as a
+    user query is a probe that reports on the queue rather than on the
+    database.
+    """
+    with pool().connection(timeout=settings.health_probe_timeout_s) as conn:
+        conn.execute("SELECT 1")
 
 
 # /metrics rather than the library's default /v1/metrics: this service's own

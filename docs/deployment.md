@@ -77,6 +77,24 @@ Set `tapApi.workers` to the pod's CPU limit and no higher: beyond that the
 workers compete for the same cores and only latency moves. `tapApi.replicas`
 does the same across pods, and the two combine.
 
+### Probes
+
+`/health/live` answers whether the process is turning and touches nothing else;
+`/health/ready` answers whether this pod should be sent traffic, and treats a
+full connection pool as *ready* — a busy service is not a broken one, and
+taking the pod out of the Service would push its share of the load onto pods in
+exactly the same state. Only an unreachable database makes it unready.
+
+!!! warning "Do not point probes at `/tap/availability`"
+    It is a VOSI resource that reports on the database, so it queues for a
+    pooled connection. With the probe default of `timeoutSeconds: 1` it cannot
+    answer under load, and the kubelet then restarts a service that is busy
+    rather than broken — measured, twice, at an offered rate inside the
+    service's own capacity. Both probes used to point there.
+
+Both paths are exempt from authentication: a kubelet has no token and cannot
+obtain one, so gating them would make enabling auth an outage.
+
 ### When every connection is busy
 
 The pool bounds how many queries a process runs at once, and it is smaller

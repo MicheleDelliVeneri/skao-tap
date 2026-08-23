@@ -41,6 +41,13 @@ class Settings:
         default_factory=lambda: os.getenv("TAP_BASE_URL", "http://localhost:8080/tap")
     )
     results_dir: str = field(default_factory=lambda: os.getenv("TAP_RESULTS_DIR", "/results"))
+    # How long the readiness probe waits for a connection before answering
+    # "busy". Short on purpose and separate from db_pool_timeout_s: a probe
+    # that waits as long as a user query reports on the queue depth rather
+    # than on whether the database is reachable.
+    health_probe_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("TAP_HEALTH_PROBE_TIMEOUT", "1.0"))
+    )
     query_role: str = field(default_factory=lambda: os.getenv("TAP_QUERY_ROLE", "tap_reader"))
     default_maxrec: int = field(
         default_factory=lambda: int(os.getenv("TAP_DEFAULT_MAXREC", "10000"))

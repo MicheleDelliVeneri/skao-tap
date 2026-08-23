@@ -49,18 +49,33 @@ spec:
               mountPath: /results
             - name: tmp
               mountPath: /tmp
+          # Both probes used to point at /tap/availability, which reports on
+          # the database and so queues for a pooled connection. Under load
+          # that endpoint cannot answer inside the probe's one-second default,
+          # and the liveness probe killed a service that was busy rather than
+          # broken — measured, twice, at an offered rate inside the service's
+          # own capacity. Liveness now asks only whether the process is
+          # turning; readiness still asks about the database, but distinguishes
+          # a full pool from an unreachable one.
           readinessProbe:
             httpGet:
-              path: /tap/availability
+              path: /health/ready
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /tap/availability
+              path: /health/live
               port: http
             initialDelaySeconds: 15
             periodSeconds: 30
+            # Explicit rather than inherited: the default is one second, and a
+            # probe whose timeout is shorter than a GC pause restarts healthy
+            # processes.
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.tapApi.resources | nindent 12 }}
       volumes:

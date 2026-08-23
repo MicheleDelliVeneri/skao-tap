@@ -179,3 +179,11 @@ def test_an_empty_policy_denies_every_write(
     deleted = client.delete(f"/api/v1/software/{software_payload['uri']}", headers=token)
     assert created.status_code == 403
     assert deleted.status_code == 403
+
+
+def test_the_probe_endpoints_are_reachable_without_a_token(client, secured):
+    """A kubelet has no token and cannot get one. If these were gated, enabling
+    authentication would fail every probe and Kubernetes would kill every pod —
+    an outage caused by turning on auth."""
+    for path in ("/health/live", "/health/ready"):
+        assert client.get(path).status_code == 200, path
