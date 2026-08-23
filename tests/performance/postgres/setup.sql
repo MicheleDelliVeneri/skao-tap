@@ -28,6 +28,8 @@ SELECT
 FROM generate_series(1, :scale_rows) AS series(id);
 
 CREATE INDEX perf_catalog_position_gist ON perf.catalog USING gist (position);
+CREATE INDEX perf_catalog_radec_gist ON perf.catalog
+USING gist (spoint(radians(ra), radians(dec)));
 CREATE INDEX perf_catalog_flux_btree ON perf.catalog (flux);
 ANALYZE perf.catalog;
 
