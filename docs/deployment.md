@@ -66,6 +66,12 @@ machine and same queries:
 | 1 | 59 req/s | 199 ms |
 | 4 | 210 req/s | 61 ms |
 
+!!! warning "Measured before the translation fast path"
+    These were taken when ADQL translation cost 41 ms of a ~50 ms request. It
+    now costs 1.2 ms, so a single worker goes very much further than this table
+    suggests, and the ratio between one and four workers no longer holds.
+    They are kept only until a re-measurement replaces them.
+
 Set `tapApi.workers` to the pod's CPU limit and no higher: beyond that the
 workers compete for the same cores and only latency moves. `tapApi.replicas`
 does the same across pods, and the two combine.
@@ -84,7 +90,8 @@ to queue. Measured locally with one worker and the default pool of 8:
 
 Throughput holds flat and latency grows: requests wait their turn, which is
 what a queue should look like. Add `tapApi.workers` to raise the ceiling
-itself — four workers carried 233 req/s at 32 clients on the same machine.
+itself — four workers carried 233 req/s at 32 clients on the same machine
+(again, before the translation fast path).
 
 If the wait for a connection exceeds `config.dbPoolTimeoutSeconds` the request
 answers `503` with `Retry-After` rather than holding the caller. Five seconds

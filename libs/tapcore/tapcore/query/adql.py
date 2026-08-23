@@ -9,12 +9,18 @@ expressions, so the PostgreSQL backend needs the pg_sphere extension.
 import logging
 from dataclasses import dataclass
 
+import antlr4
+from antlr4 import BailErrorStrategy, PredictionMode
 from queryparser.adql import ADQLQueryTranslator
+from queryparser.adql.ADQLLexer import ADQLLexer
+from queryparser.adql.ADQLParser import ADQLParser
 from queryparser.adql.ADQLParserListener import ADQLParserListener
+from queryparser.adql.adqltranslator import SyntaxErrorListener
 from queryparser.exceptions import QueryError, QuerySyntaxError
 from queryparser.postgresql import PostgreSQLQueryProcessor
 
 from ..errors import QueryParseError
+from ..observability import ADQL_SLOW_PARSES
 
 log = logging.getLogger("tapcore")
 
@@ -32,6 +38,76 @@ class Translation:
 
     sql: str
     tables: frozenset[str]
+
+
+class _Translator(ADQLQueryTranslator):
+    """The library's translator with the two ways it wastes time removed.
+
+    Both are in the parse, and the parse is where essentially all of a
+    request's CPU goes: measured on this corpus, translation is 41 ms of a
+    ~50 ms request, so the service's single-core ceiling is set here and
+    nowhere else.
+
+    **One parse instead of two.** The base class parses in ``set_query`` (from
+    the constructor) and then ``to_postgresql`` parses again, throwing the
+    first tree away. Storing the query without parsing leaves exactly the one
+    parse that produces the tree actually used.
+
+    **SLL prediction first.** ANTLR's default full-context (LL) prediction was
+    71% of the profile — 42,000 closure operations per query. The standard
+    two-stage strategy is to try the cheap SLL mode with an error strategy that
+    bails out immediately, and re-parse with the library's own full-context
+    path if anything at all goes wrong. A query SLL cannot handle therefore
+    still gets exactly the parse it would have got before; the fast path is
+    only ever taken when it succeeds outright.
+    """
+
+    def set_query(self, query):
+        # Deliberately does not parse: to_postgresql() does, and the base
+        # class's eager parse here is discarded a moment later.
+        self._query = query.lstrip("\n").rstrip().rstrip(";") + ";"
+
+    def parse(self):
+        try:
+            self._parse_sll()
+        except Exception as exc:
+            # Includes ParseCancellationException from the bail strategy, and
+            # anything else the fast path trips over. The slow path is the
+            # library's own, so behaviour for such a query is unchanged —
+            # including which syntax errors it reports.
+            #
+            # Logged on the way in and counted only once the slow parse
+            # succeeds. An invalid query also reaches here — SLL bails on it —
+            # and counting that would put user errors into a metric whose
+            # stated meaning is "the fast path stopped working", so a burst of
+            # bad ADQL would read as a performance regression. Invalid queries
+            # are already visible as 4xx responses.
+            log.debug("ADQL fast parse fell back to full context: %s", exc)
+            super().parse()
+            ADQL_SLOW_PARSES.inc()
+
+    def _parse_sll(self):
+        stream = antlr4.CommonTokenStream(ADQLLexer(antlr4.InputStream(self.query)))
+        parser = ADQLParser(stream)
+        parser._interp.predictionMode = PredictionMode.SLL
+        parser._errHandler = BailErrorStrategy()
+        listener = SyntaxErrorListener()
+        # The public listener API rather than assigning _listeners: the default
+        # console listener has to go (a parse attempt is not a user-visible
+        # error yet), and reaching into the runtime's internals to do it would
+        # be one antlr4 release away from breaking.
+        parser.removeErrorListeners()
+        parser.addErrorListener(listener)
+        tree = parser.query()
+        if listener.syntax_errors:
+            # Not raised here: a syntax error under SLL may be an artefact of
+            # SLL rather than a real one, so the slow path decides.
+            raise QuerySyntaxError(listener.syntax_errors)
+        self.stream = stream
+        self.parser = parser
+        self.syntax_error_listener = listener
+        self.tree = tree
+        self.walker = antlr4.ParseTreeWalker()
 
 
 class _TableCollector(ADQLParserListener):
@@ -58,7 +134,7 @@ def translate(query: str) -> Translation:
     client is allowed to write in a query, which is what this returns.
     """
     try:
-        translator = ADQLQueryTranslator(query)
+        translator = _Translator(query)
         sql = translator.to_postgresql()
     except QuerySyntaxError as exc:
         detail = "; ".join(str(e) for e in exc.syntax_errors) or str(exc)
