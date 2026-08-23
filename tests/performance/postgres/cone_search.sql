@@ -3,7 +3,7 @@
 \set radius_mdeg random(50, 1000)
 SELECT count(*)
 FROM perf.catalog
-WHERE position <@ scircle(
+WHERE spoint(radians(ra), radians(dec)) <@ scircle(
     spoint(radians(:lon::double precision), radians(:lat::double precision)),
     radians(:radius_mdeg::double precision / 1000.0)
 );
