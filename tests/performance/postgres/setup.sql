@@ -32,8 +32,8 @@ CREATE INDEX perf_catalog_radec_gist ON perf.catalog
 USING gist (spoint(radians(ra), radians(dec)));
 CREATE INDEX perf_catalog_flux_btree ON perf.catalog (flux);
 ANALYZE perf.catalog;
-GRANT USAGE ON SCHEMA perf TO tap_query;
-GRANT SELECT ON perf.catalog TO tap_query;
+GRANT USAGE ON SCHEMA perf TO tap_reader;
+GRANT SELECT ON perf.catalog TO tap_reader;
 
 INSERT INTO tap_schema.schemas (schema_name, description, schema_index)
 VALUES ('perf', 'Synthetic performance-test catalogue', 900)
