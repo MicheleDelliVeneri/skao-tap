@@ -115,6 +115,10 @@ ANONYMOUS_PATHS = frozenset(
         "/tap/registry",  # served once the VOResource work lands
         "/tap/examples",
         "/api/v1/auth",
+        # FastAPI registers these three itself, outside the app-level
+        # dependency, so they are exempt by construction as well as by this
+        # list — which is kept so the intent is written down rather than
+        # inferred from a framework detail
         "/openapi.json",
         "/docs",
         "/docs/oauth2-redirect",
@@ -175,7 +179,12 @@ def _bearer(request: Request) -> str | None:
         return None
     scheme, _, credential = header.partition(" ")
     if scheme.lower() != "bearer" or not credential.strip():
-        raise AuthenticationError("Authorization header must be 'Bearer <token>'")
+        # no usable credential was presented, so this is the discovery case:
+        # invalid_token would tell the client to refresh a token it never had
+        raise AuthenticationError(
+            "Authorization header must be 'Bearer <token>'",
+            challenge=missing_token_challenge("Malformed Authorization header"),
+        )
     return credential.strip()
 
 

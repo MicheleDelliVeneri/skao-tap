@@ -112,9 +112,29 @@ def test_the_vo_error_document_carries_the_challenge_too(
 # -- what stays reachable without one ---------------------------------------
 
 
+def test_a_malformed_authorization_header_is_the_discovery_case(client, secured):
+    """No usable credential was presented, so invalid_token would tell the
+    client to refresh a token it never had."""
+    for header in ("Basic abc", "Bearer", "Bearer   "):
+        response = client.get("/api/v1/software", headers={"Authorization": header})
+        challenge = response.headers["www-authenticate"]
+        assert response.status_code == 401, header
+        assert 'error="invalid_request"' in challenge, header
+        assert "discovery_url=" in challenge, header
+
+
 @pytest.mark.parametrize(
     "path",
-    ["/tap/availability", "/tap/capabilities", "/tap/tables", "/api/v1/auth", "/openapi.json"],
+    [
+        "/",
+        "/tap/availability",
+        "/tap/capabilities",
+        "/tap/tables",
+        "/tap/examples",
+        "/api/v1/auth",
+        "/openapi.json",
+        "/docs",
+    ],
 )
 def test_discovery_and_health_stay_open(client, secured, path):
     """A liveness probe, a registry harvester and a client looking for the IAM
@@ -251,6 +271,18 @@ def test_which_paths_need_a_token(path, required):
 def test_which_paths_need_a_token_with_anonymous_queries(auth_settings, path, required):
     auth_settings(auth_anonymous_queries=True)
     assert needs_token(path) is required
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/", "/tap/examples", "/tap/registry", "/docs", "/docs/oauth2-redirect", "/redoc"],
+)
+def test_the_remaining_exempt_paths_need_no_token(path):
+    """Asserted against the predicate rather than over HTTP: /tap/registry
+    arrives with the VOResource work, and FastAPI serves the doc routes
+    outside the app dependency — a regression in this list would still be a
+    regression."""
+    assert needs_token(path) is False
 
 
 def test_nothing_needs_a_token_when_the_requirement_is_off(auth_settings):
