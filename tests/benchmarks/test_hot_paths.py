@@ -8,6 +8,13 @@ covered by the separate PostgreSQL performance workflow.
 import datetime
 from decimal import Decimal
 
+import pytest
+
+# pytest collects everything under tests/ (see pyproject.toml testpaths), and
+# the benchmark fixture comes from the plugin — without it every test here is
+# an error on a plain `pytest` run. Skip the module instead.
+pytest.importorskip("pytest_codspeed", reason="benchmarks need pytest-codspeed")
+
 from tapcore.query.adql import adql_to_postgresql, touched_tables
 from tapcore.query.results import ColumnMeta, RowLimiter, stream
 
@@ -50,7 +57,7 @@ def _serialize(fmt: str) -> bytes:
 
 
 def test_benchmark_adql_geometry_translation(benchmark):
-    sql = benchmark(adql_to_postgresql, CONE_SEARCH)
+    sql = benchmark(adql_to_postgresql, CONE_SEARCH).lower()
     assert "spoint" in sql
     assert "scircle" in sql
 

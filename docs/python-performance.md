@@ -17,12 +17,18 @@ by the separate PostgreSQL performance workflow.
 
 ## Run locally
 
-Install the benchmark plugin into the project environment and run:
+Create the project environment if you do not have one, install the benchmark
+plugin into it, and run:
 
 ```console
+uv sync --all-groups
 uv pip install --python .venv/bin/python pytest-codspeed==5.0.3
 uv run --no-sync pytest tests/benchmarks -v --codspeed
 ```
+
+`--no-sync` is what keeps the plugin installed: a plain `uv run` would restore
+the environment to the lockfile and drop it again. Without the plugin the
+benchmark module skips itself rather than failing.
 
 A result is a regression signal, not an application service-level objective.
 Investigate meaningful changes in the CodSpeed comparison and flamegraph before
