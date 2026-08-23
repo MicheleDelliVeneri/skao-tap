@@ -113,9 +113,13 @@ def setup(cfg: dict, *, rebuild_images: bool = True) -> dict:
         # Keep measuring whatever the release already runs rather than
         # silently reverting to a mutable tag.
         tag, digests = cluster.deployed_image_tag(), {}
+    # Pinned globally, not just for this one install: set_autoscaling() and
+    # scale() upgrade the release again later, and an upgrade that forgets the
+    # tag redeploys whatever the values file says.
+    cluster.use_image_tag(tag)
     cluster.install_keda()
     cluster.install_monitoring()
-    cluster.install_chart({"image.tag": tag} if tag else None)
+    cluster.install_chart()
     if tag:
         cluster.verify_running_images(tag)
     prometheus = prom_mod.Prometheus(PROMETHEUS_URL)
