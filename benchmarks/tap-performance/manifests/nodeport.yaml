@@ -1,0 +1,24 @@
+# The load generator's way in.
+#
+# A NodePort mapped to the host by the kind config, rather than `kubectl
+# port-forward`: a forwarder is a single Go process proxying every byte of the
+# measurement, and it saturates well before the service does — which would
+# make this a benchmark of kubectl. The chart's own Service stays ClusterIP,
+# as a deployment's should; this one belongs to the benchmark.
+apiVersion: v1
+kind: Service
+metadata:
+  name: tapbench-api
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: tapbench
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/instance: skao-tap
+    app.kubernetes.io/component: tap-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30080

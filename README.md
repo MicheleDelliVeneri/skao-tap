@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/egernia-logo.svg" alt="egernia — IVOA TAP 1.1 for the SKA" width="640">
+</p>
+
 # skao-tap
 
 [![CI](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml)

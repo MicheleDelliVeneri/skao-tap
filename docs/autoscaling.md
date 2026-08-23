@@ -21,7 +21,8 @@ the signal, and it needs nothing beyond metrics-server:
 !!! note "The worker figures here predate the translation fast path"
     They were measured when translation cost 41 ms per request; it now costs
     1.2 ms. More workers still add capacity, but the numbers below understate
-    what one worker does and are being re-measured.
+    what one worker does and are being re-measured — see
+    [Performance](performance/index.md).
 
 ```yaml
 horizontalAutoscaling:

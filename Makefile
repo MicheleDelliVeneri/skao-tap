@@ -1,0 +1,59 @@
+# Benchmark suite entry points (benchmarks/tap-performance).
+#
+# Every target is resumable: pass RESUME=<results-dir-name> to continue an
+# interrupted run instead of starting a new one. Nothing here ever overwrites
+# an existing results directory.
+#
+#   make benchmark-smoke                  short end-to-end pass on D1
+#   make benchmark-db-scaling             concurrency sweep per dataset size
+#   make benchmark-fixed-scaling          replica scaling, autoscalers off
+#   make benchmark-keda                   autoscaling scenarios K1-K7
+#   make benchmark-full                   every family, every dataset
+#   make benchmark-report                 redraw plots and HTML for a run
+#   make benchmark-publish RUN=<dir>      publish graphs to the docs site
+#
+#   make benchmark-setup                  cluster + KEDA + monitoring + chart
+#   make benchmark-teardown               delete the kind cluster
+
+SHELL := /bin/bash
+PYTHON ?= $(CURDIR)/.venv/bin/python
+BENCH_DIR := $(CURDIR)/benchmarks/tap-performance
+BENCH := cd $(BENCH_DIR) && PYTHONPATH=$(BENCH_DIR):$(CURDIR) $(PYTHON) -m tapbench
+RESUME_ARG := $(if $(RESUME),--resume $(RESUME),)
+NO_BUILD_ARG := $(if $(NO_BUILD),--no-build,)
+
+.PHONY: benchmark-smoke benchmark-db-scaling benchmark-fixed-scaling \
+        benchmark-keda benchmark-full benchmark-report benchmark-setup \
+        benchmark-teardown benchmark-publish benchmark-help
+
+benchmark-help:
+	@sed -n '1,20p' $(firstword $(MAKEFILE_LIST))
+
+benchmark-setup:
+	$(BENCH) setup $(NO_BUILD_ARG)
+
+benchmark-smoke:
+	$(BENCH) smoke $(RESUME_ARG) $(NO_BUILD_ARG)
+
+benchmark-db-scaling:
+	$(BENCH) db-scaling $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASETS),--datasets $(DATASETS),)
+
+benchmark-fixed-scaling:
+	$(BENCH) fixed-scaling $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASET),--dataset $(DATASET),) $(if $(C1),--c1 $(C1),)
+
+benchmark-keda:
+	$(BENCH) keda $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASET),--dataset $(DATASET),) $(if $(SCENARIOS),--scenarios $(SCENARIOS),) $(if $(ASYNC_C1),--async-c1 $(ASYNC_C1),)
+
+benchmark-full:
+	$(BENCH) full $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASETS),--datasets $(DATASETS),)
+
+benchmark-report:
+	$(BENCH) report $(RUN)
+
+# Copies the graphs, the per-measurement CSV and the provenance into
+# docs/performance/, which the docs workflow already deploys to Pages.
+benchmark-publish:
+	$(BENCH) publish $(RUN)
+
+benchmark-teardown:
+	$(BENCH) teardown

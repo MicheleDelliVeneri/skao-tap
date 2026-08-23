@@ -218,3 +218,7 @@ __marimo__/
 .streamlit/secrets.toml
 site/
 .service-logs/
+benchmarks/tap-performance/results/
+
+# macOS finder metadata
+.DS_Store

@@ -70,7 +70,8 @@ machine and same queries:
     These were taken when ADQL translation cost 41 ms of a ~50 ms request. It
     now costs 1.2 ms, so a single worker goes very much further than this table
     suggests, and the ratio between one and four workers no longer holds.
-    They are kept only until a re-measurement replaces them.
+    They are kept only until the re-measurement lands in
+    [Performance](performance/index.md).
 
 Set `tapApi.workers` to the pod's CPU limit and no higher: beyond that the
 workers compete for the same cores and only latency moves. `tapApi.replicas`
