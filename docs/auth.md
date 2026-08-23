@@ -127,11 +127,13 @@ its own choice, set with `auth.gatedOperations`:
 | `jobs.delete` | `DELETE /tap/async/{job_id}`, `POST /tap/async/{job_id}` with `ACTION=DELETE`, `DELETE /api/v1/jobs/{job_id}` | no |
 | `query.sync` | `GET`/`POST /tap/sync`, `POST /api/v1/query` | no |
 
-The default enforces metadata mutation only, and every `GET` stays open
-whatever is configured. That default is deliberate: TAP clients send ADQL as
-a POST body, so gating "all writes" by HTTP method would lock PyVO, TOPCAT
-and every other standard VO client out of an authenticated deployment. What
-is protected by default is the data a caller can *change*.
+The default enforces metadata mutation only. That is about *authorisation* —
+which requests need a decision about the token they carry — and it is a
+separate question from whether a token is needed at all, which
+[`auth.requireToken` and `auth.anonymousQueries`](#what-needs-a-token) answer.
+Gating "all writes" by HTTP method would be no help here anyway: TAP clients
+send ADQL as a POST body, so what the gate set protects is the data a caller
+can *change*, not the verb they used.
 
 ### Requiring tokens for querying
 
@@ -169,10 +171,11 @@ and deletion are separately grantable, and typically separately granted.
 
 ### What a client can still do without a token
 
-Reads are never gated by this setting, whatever is enforced. `GET` on a job,
-its `/phase`, `/parameters`, `/results` and the job list all stay open, and
-what limits them is [ownership](#job-ownership): an anonymous caller sees
-jobs with no owner, and gets `403` on a job someone claimed. So with the
+No read is gated by *this* setting, whatever is enforced — but a read still
+needs a token unless the request is one `auth.anonymousQueries` opens or a
+discovery endpoint. Where reads are reachable, what limits them is
+[ownership](#job-ownership): an anonymous caller sees jobs with no owner, and
+gets `403` on a job someone claimed. So with `anonymousQueries: true` and the
 query operations enforced, an anonymous TOPCAT cannot create or start a job,
 and cannot see any job created with a token — but it can still read a job
 that was created anonymously, if any exist.
@@ -182,10 +185,11 @@ also be granted under `roles` — an enforced operation nobody is granted is
 denied to everyone, so the chart refuses to render that configuration rather
 than shipping a service that answers `403` to its own operators.
 
-Every other `GET` — the job resources, the metadata reads, the VOSI
-documents — stays open whatever is configured. The one exception is
-`GET /tap/sync`, which executes a query rather than reading a resource, so
-`query.sync` covers it in both verbs. What stops one user reading another
+No `GET` needs an authorisation decision, with one exception:
+`GET /tap/sync` executes a query rather than reading a resource, so
+`query.sync` covers it in both verbs. Needing a *token*, though, is decided
+elsewhere — the VOSI documents never do, job and metadata reads do unless
+`anonymousQueries` opens the TAP ones. What stops one user reading another
 user's job is [ownership](#job-ownership), enforced in the job store rather
 than at the endpoint.
 
