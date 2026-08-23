@@ -26,14 +26,31 @@ WORKLOAD = (
 WEIGHTS = (1, 6, 2, 1)
 
 
-def _percentile(values: list[float], percentile: float) -> float:
-    # 0.0, not NaN: the report is written with allow_nan=False, so a workload
-    # that recorded nothing would raise instead of reporting. The sibling
-    # "requests" count is what says the bucket was empty.
+def _percentiles(values: list[float]) -> dict[str, float]:
+    """p50/p95/p99 from a single sort.
+
+    All three come from one ordering rather than three: the sorting happens
+    after the run is measured, so it never skewed a number, but sorting the
+    same list three times to read three indices out of it was work for
+    nothing.
+
+    0.0 for an empty input, not NaN: the report is written with
+    allow_nan=False, so a workload that recorded nothing would raise instead
+    of reporting. The sibling "requests" count is what says it was empty.
+    """
     if not values:
-        return 0.0
-    index = min(len(values) - 1, math.ceil(percentile * len(values)) - 1)
-    return sorted(values)[index]
+        return {"p50_seconds": 0.0, "p95_seconds": 0.0, "p99_seconds": 0.0}
+    ordered = sorted(values)
+
+    def at(percentile: float) -> float:
+        index = min(len(ordered) - 1, math.ceil(percentile * len(ordered)) - 1)
+        return ordered[index]
+
+    return {
+        "p50_seconds": at(0.50),
+        "p95_seconds": at(0.95),
+        "p99_seconds": at(0.99),
+    }
 
 
 def _worker(
@@ -119,12 +136,7 @@ def main() -> int:
     by_workload = {}
     for name, _query in WORKLOAD:
         subset = [sample["seconds"] for sample in samples if sample["workload"] == name]
-        by_workload[name] = {
-            "requests": len(subset),
-            "p50_seconds": _percentile(subset, 0.50),
-            "p95_seconds": _percentile(subset, 0.95),
-            "p99_seconds": _percentile(subset, 0.99),
-        }
+        by_workload[name] = {"requests": len(subset), **_percentiles(subset)}
 
     report = {
         "clients": args.clients,
@@ -138,9 +150,7 @@ def main() -> int:
         "requests_per_second": successful / elapsed,
         "latency": {
             "mean_seconds": statistics.fmean(latencies) if latencies else 0.0,
-            "p50_seconds": _percentile(latencies, 0.50),
-            "p95_seconds": _percentile(latencies, 0.95),
-            "p99_seconds": _percentile(latencies, 0.99),
+            **_percentiles(latencies),
         },
         "by_workload": by_workload,
         "python_threads_at_completion": threading.active_count(),
