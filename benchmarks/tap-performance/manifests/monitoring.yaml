@@ -155,9 +155,21 @@ spec:
       labels: {app: prometheus}
     spec:
       serviceAccountName: prometheus
+      # 65534 is the image's own nobody; fsGroup so the emptyDir TSDB stays
+      # writable once the root filesystem is not.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
       containers:
         - name: prometheus
           image: prom/prometheus:v3.6.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
           args:
             - --config.file=/etc/prometheus/prometheus.yml
             - --storage.tsdb.retention.time=24h
@@ -247,9 +259,18 @@ spec:
       labels: {app: kube-state-metrics}
     spec:
       serviceAccountName: kube-state-metrics
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
       containers:
         - name: kube-state-metrics
           image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.15.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
           ports:
             - containerPort: 8080
           resources:

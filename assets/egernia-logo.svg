@@ -303,6 +303,7 @@
     <rect x="396" y="66" width="11" height="11" fill="#d2622e"/>
     <rect x="440" y="66" width="11" height="11" fill="#d2622e"/>
   </g>
-  <text x="542" y="196" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+  <text x="542" y="196"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
         font-size="24" fill="#808080" font-style="italic">spiny tail, wide sky</text>
 </svg>

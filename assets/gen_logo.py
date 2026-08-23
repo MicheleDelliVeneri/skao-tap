@@ -1,4 +1,8 @@
-# Generates the Egernia pixel-art logo (banner + square mark) as SVG.
+"""Generate the Egernia pixel-art logo (banner + square mark) as SVG."""
+
+import pathlib
+import sys
+
 CELL = 14
 
 PALETTE = {
@@ -77,7 +81,9 @@ def wordmark_rects(indent="    "):
     return "\n".join(out)
 
 
-banner = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="260" viewBox="0 0 1040 260">
+def banner_svg():
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="260"\
+ viewBox="0 0 1040 260">
   <title>egernia — IVOA TAP 1.1 for the SKA</title>
   <g transform="translate(40 38)" shape-rendering="crispEdges">
 {sprite_rects(CELL)}
@@ -85,22 +91,30 @@ banner = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="260" v
   <g transform="translate(540 76)" shape-rendering="crispEdges">
 {wordmark_rects()}
   </g>
-  <text x="542" y="196" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+  <text x="542" y="196"
+        font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
         font-size="24" fill="#808080" font-style="italic">spiny tail, wide sky</text>
 </svg>
-'''
+"""
 
-mark = f'''<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+
+def mark_svg():
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"\
+ viewBox="0 0 512 512">
   <title>egernia</title>
   <g transform="translate(32 165)" shape-rendering="crispEdges">
 {sprite_rects(CELL)}
   </g>
 </svg>
-'''
+"""
 
-import pathlib, sys
-outdir = pathlib.Path(sys.argv[1])
-outdir.mkdir(parents=True, exist_ok=True)
-(outdir / "egernia-logo.svg").write_text(banner)
-(outdir / "egernia-mark.svg").write_text(mark)
-print("wrote", outdir / "egernia-logo.svg", outdir / "egernia-mark.svg")
+
+def main(outdir):
+    outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "egernia-logo.svg").write_text(banner_svg())
+    (outdir / "egernia-mark.svg").write_text(mark_svg())
+    print("wrote", outdir / "egernia-logo.svg", outdir / "egernia-mark.svg")
+
+
+if __name__ == "__main__":
+    main(pathlib.Path(sys.argv[1]))
