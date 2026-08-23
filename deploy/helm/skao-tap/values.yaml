@@ -131,10 +131,16 @@ auth:
   # JSON API's own query and job facades, which are reached by clients that
   # *can* authenticate.
   #
-  # This is the switch that decides whether standard VO clients can use the
-  # service at all: PyVO, TOPCAT and the rest send no token, so with it off
-  # they get 401 on every query. Off by default, because who may read an
-  # archive is a decision to take rather than inherit.
+  # This is the authentication layer's bypass for the TAP read paths: PyVO,
+  # TOPCAT and the rest send no token, so with it off they get 401 on every
+  # query. Off by default, because who may read an archive is a decision to
+  # take rather than inherit.
+  #
+  # It is not the only thing that decides it. requireToken: false makes those
+  # paths anonymous whatever this says, and with this on the authorisation
+  # layer can still refuse a token-less caller if gatedOperations enforces the
+  # query operations. GET /api/v1/auth reports the combined answer as
+  # anonymous_tap_queries.
   anonymousQueries: false
   iam:
     # -- Token issuer, e.g. https://ska-iam.stfc.ac.uk. Required when enabled.

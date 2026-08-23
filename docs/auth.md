@@ -103,10 +103,23 @@ auth:
 ```
 
 PyVO, TOPCAT and the rest of the VO toolchain have no way to obtain or send a
-bearer token, so with `anonymousQueries: false` they get `401` on every
-query. Turning it on opens exactly two things: a synchronous query, and the
-UWS job that runs one — including the job's sub-resources (`/phase`,
-`/parameters`, `/results`, …), because they are branches of the same read.
+bearer token, so with `requireToken: true` and `anonymousQueries: false` they
+get `401` on every query. Turning `anonymousQueries` on opens exactly two
+things: a synchronous query, and the UWS job that runs one — including the
+job's sub-resources (`/phase`, `/parameters`, `/results`, …), because they are
+branches of the same read.
+
+Two qualifications, because three settings decide this between them:
+
+- `requireToken: false` makes those paths anonymous whatever
+  `anonymousQueries` says — it turns the whole authentication layer off.
+- `anonymousQueries: true` only settles the *authentication* layer. If
+  `gatedOperations` enforces the query operations, the authorisation layer
+  still refuses a caller whose token the plugin does not approve — and a
+  token-less caller has no token to approve, so it gets `401` there instead.
+
+`GET /api/v1/auth` reports the combined answer as `anonymous_tap_queries`, so
+a client does not have to work this out.
 
 It does **not** open the JSON API's own query and job facades
 (`/api/v1/query`, `/api/v1/jobs`). The switch exists for clients that cannot
@@ -219,15 +232,18 @@ discover it by trial:
 ```json
 {"enabled": true, "plugin": "permissions-api",
  "token_required": true, "anonymous_queries": false,
+ "anonymous_tap_queries": false,
  "discovery_url": "https://ska-iam.stfc.ac.uk/.well-known/openid-configuration",
  "issuer": "https://ska-iam.stfc.ac.uk", "audience": "science-metadata",
  "gated_operations": {"metadata.ingest": "POST /api/v1/<mount>", ...}}
 ```
 
-`token_required` and `anonymous_queries` answer "do I need a token?";
+`token_required` and `anonymous_queries` describe the authentication layer;
 `gated_operations` answers "which requests need my token to be *approved*?".
-A client that wants to know whether it can query anonymously reads the first
-two, not the third.
+A client that just wants to know whether it can query without a token reads
+**`anonymous_tap_queries`**, which combines all three — it is false when a
+token is required and the TAP paths are not reopened, and also false when
+they are reopened but the query operations are gated.
 
 ## Token verification
 

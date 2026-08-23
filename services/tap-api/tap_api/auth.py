@@ -37,6 +37,7 @@ from fastapi import Request
 from starlette.concurrency import run_in_threadpool
 from tapcore.auth import (
     ANONYMOUS,
+    QUERY_OPERATIONS,
     Principal,
     active_auth_plugin,
     clear_job_viewer,
@@ -307,6 +308,20 @@ def owner_of(request: Request) -> str | None:
     return who.subject if who is not None else None
 
 
+def anonymous_tap_queries() -> bool:
+    """Whether a caller with no token can read metadata through TAP.
+
+    Derived, because three settings decide it and a client should not have to
+    combine them: the token requirement can be off entirely, or on with
+    ``anonymous_queries`` reopening the TAP paths — and either way the gate can
+    still refuse a token-less caller if the query operations are enforced.
+    """
+    if plugin() is None:
+        return True
+    reachable = not settings.auth_require_token or settings.auth_anonymous_queries
+    return reachable and not any(name in gated() for name in QUERY_OPERATIONS)
+
+
 def auth_summary() -> dict:
     """What this deployment enforces, for the service's own metadata."""
     active = plugin()
@@ -317,6 +332,9 @@ def auth_summary() -> dict:
         "plugin": active.name,
         "token_required": settings.auth_require_token,
         "anonymous_queries": settings.auth_anonymous_queries,
+        # the answer to "can I query without a token?", so a client does not
+        # have to work it out from the three fields above
+        "anonymous_tap_queries": anonymous_tap_queries(),
         "discovery_url": discovery_url(),
         "issuer": settings.iam_issuer,
         "audience": settings.iam_audience or None,

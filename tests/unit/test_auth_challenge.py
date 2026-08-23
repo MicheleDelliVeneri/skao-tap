@@ -359,6 +359,52 @@ def test_authentication_disabled_leaves_everything_open(client):
     assert client.get("/api/v1/tables").status_code == 200
 
 
+# -- can I query without a token? -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "overrides", "expected"),
+    [
+        ("token required, TAP paths closed", {}, False),
+        ("TAP paths reopened", {"auth_anonymous_queries": True}, True),
+        ("token requirement off entirely", {"auth_require_token": False}, True),
+        (
+            "reopened, but the query surface is gated",
+            {
+                "auth_anonymous_queries": True,
+                "auth_gated_operations": "jobs.create,jobs.mutate,jobs.delete,query.sync",
+            },
+            False,
+        ),
+        (
+            "requirement off, but the query surface is gated",
+            {
+                "auth_require_token": False,
+                "auth_gated_operations": "jobs.create,jobs.mutate,jobs.delete,query.sync",
+            },
+            False,
+        ),
+    ],
+)
+def test_the_derived_answer_accounts_for_both_layers(
+    client, secured, auth_settings, label, overrides, expected
+):
+    """Three settings decide this between them, which is why the service
+    answers it rather than leaving a client to combine them."""
+    roles = {
+        name: {"groups": ["/ska/science-metadata/oper"]}
+        for name in ("jobs.create", "jobs.mutate", "jobs.delete", "query.sync")
+    }
+    auth_settings(auth_roles=json.dumps(roles), **overrides)
+    body = client.get("/api/v1/auth").json()
+    assert body["anonymous_tap_queries"] is expected, label
+
+
+def test_the_derived_answer_is_absent_when_authentication_is_off(client):
+    """Nothing is enforced, so the whole summary collapses to "disabled"."""
+    assert client.get("/api/v1/auth").json() == {"enabled": False, "gated_operations": {}}
+
+
 # -- reading the switches ---------------------------------------------------
 
 
