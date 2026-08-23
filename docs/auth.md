@@ -358,6 +358,10 @@ tell from it whether it needs a token to query at all.
 enforces — that is the authorisation layer. The rows above it are the
 authentication layer, which applies whether or not an operation is gated.
 
+The three metadata operations are enforced independently of one another; the
+four query operations are enforced as a group, so "enforcing `query.sync`"
+always means the whole query surface is enforced.
+
 | Request | Auth disabled | Auth enabled |
 | --- | --- | --- |
 | Discovery or health endpoint, no token | 200 | 200 |

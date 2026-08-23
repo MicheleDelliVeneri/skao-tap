@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   # 0.9.x knows the CPython 3.14 managed downloads (requires-python >= 3.14)
   UV_VERSION: "0.9.x"
@@ -15,11 +18,14 @@ jobs:
     name: Lint (ruff)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
+          cache-suffix: lint
       - run: uv sync --locked --all-groups
       - run: uv run ruff check --output-format github .
       - run: uv run ruff format --check .
@@ -28,17 +34,20 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
+          cache-suffix: unit
       - run: uv sync --locked --all-groups
       - run: uv run pytest tests/unit -v --cov --cov-report=xml
       - name: Upload coverage to Codecov
         # skip on forked PRs, where secrets (CODECOV_TOKEN) are unavailable
         if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: coverage.xml
           flags: unit
@@ -49,11 +58,14 @@ jobs:
     name: Component tests (PyVO vs IVOA TAP)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
+          cache-suffix: component
       # Run the database from the image the project ships, so the component
       # tests and the deployed tap-db can never drift apart on the server
       # major or the pgsphere build. Only the psql client comes from apt (the
@@ -92,7 +104,7 @@ jobs:
       - name: Upload coverage to Codecov
         # skip on forked PRs, where secrets (CODECOV_TOKEN) are unavailable
         if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: coverage.xml
           flags: component
@@ -103,11 +115,14 @@ jobs:
     name: Docs build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
+          cache-suffix: docs
       - run: uv sync --locked --group docs
       - run: uv run --group docs mkdocs build --strict
 
@@ -115,8 +130,10 @@ jobs:
     name: Helm chart
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - name: Chart DB init SQL matches db/init
         run: diff -ru db/init deploy/helm/skao-tap/files/db-init
       - run: helm lint deploy/helm/skao-tap
@@ -220,6 +237,16 @@ jobs:
                   --set auth.iam.audience=science-metadata \
                   --set 'auth.gatedOperations={jobs.rename}' \
                   --set 'auth.roles.jobs\.rename.groups={/ska/oper}'
+          # a rule that exists but grants nobody: same outcome as no rule,
+          # by a longer route
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
+                  --set auth.iam.audience=science-metadata \
+                  --set 'auth.gatedOperations={metadata.delete}' \
+                  --set-json 'auth.roles={"metadata.delete":{}}'
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
+                  --set auth.iam.audience=science-metadata \
+                  --set 'auth.gatedOperations={metadata.delete}' \
+                  --set 'auth.roles.metadata\.delete.groups={}'
           # "none" is only "enforce nothing" on its own
           refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
                   --set auth.iam.audience=science-metadata \
@@ -231,14 +258,16 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [helm]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build images
         run: |
           docker build -t skao-tap-e2e/tap-api:e2e -f services/tap-api/Dockerfile .
           docker build -t skao-tap-e2e/tap-executor:e2e -f services/tap-executor/Dockerfile .
           docker build -t skao-tap-e2e/tap-db:e2e db
       - name: Create kind cluster
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           cluster_name: skao-tap-e2e
       - name: Load images into kind

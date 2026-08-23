@@ -34,17 +34,17 @@ hard parts:
                  └─────┬──────────────┬─────┘
                        │ uws.jobs     │ results files
                        ▼              ▼
-                 ┌───────────┐  ┌───────────────┐
+                 ┌────────────┐  ┌───────────────┐
                  │ PostgreSQL │  │ shared volume │
                  │ + pg_sphere│  │   /results    │
                  │ TAP_SCHEMA │  └───────▲───────┘
                  │ science    │          │ writes result.{vot,csv,...}
                  │ uws.jobs   │          │
-                 └─────▲──────┘  ┌───────┴────────┐
+                 └─────▲──────┘  ┌───────┴─────────┐
                        └─────────│ tap-executor    │ claims QUEUED jobs
                                  │ (worker, scales │ (SKIP LOCKED), runs
                                  │  horizontally)  │ query, finalizes job
-                                 └────────────────┘
+                                 └─────────────────┘
 ```
 
 Three services (see `docker-compose.yml`):
