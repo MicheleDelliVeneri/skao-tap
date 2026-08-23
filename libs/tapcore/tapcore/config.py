@@ -75,6 +75,47 @@ class Settings:
     iam_jwks_cache_s: int = field(
         default_factory=lambda: int(os.getenv("TAP_IAM_JWKS_CACHE", "300"))
     )
+    # -- VO Registry publication -------------------------------------------
+    # The VOResource record served at /tap/registry. Off until a deployment
+    # has an IVOA authority to publish under: an identifier is a promise that
+    # this URI resolves to this service forever, so it cannot be defaulted.
+    registry_enabled: bool = field(
+        default_factory=lambda: (
+            os.getenv("TAP_REGISTRY_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+        )
+    )
+    registry_identifier: str = field(
+        default_factory=lambda: os.getenv("TAP_REGISTRY_IDENTIFIER", "")
+    )
+    registry_title: str = field(default_factory=lambda: os.getenv("TAP_REGISTRY_TITLE", ""))
+    # VOResource caps shortName at 16 characters
+    registry_short_name: str = field(
+        default_factory=lambda: os.getenv("TAP_REGISTRY_SHORT_NAME", "")
+    )
+    registry_description: str = field(
+        default_factory=lambda: os.getenv("TAP_REGISTRY_DESCRIPTION", "")
+    )
+    registry_reference_url: str = field(
+        default_factory=lambda: os.getenv("TAP_REGISTRY_REFERENCE_URL", "")
+    )
+    registry_publisher: str = field(default_factory=lambda: os.getenv("TAP_REGISTRY_PUBLISHER", ""))
+    registry_creator: str = field(default_factory=lambda: os.getenv("TAP_REGISTRY_CREATOR", ""))
+    registry_contact_name: str = field(
+        default_factory=lambda: os.getenv("TAP_REGISTRY_CONTACT_NAME", "")
+    )
+    registry_contact_email: str = field(
+        default_factory=lambda: os.getenv("TAP_REGISTRY_CONTACT_EMAIL", "")
+    )
+    # comma-separated; content requires at least one subject
+    registry_subjects: str = field(default_factory=lambda: os.getenv("TAP_REGISTRY_SUBJECTS", ""))
+    registry_content_levels: str = field(
+        default_factory=lambda: os.getenv("TAP_REGISTRY_CONTENT_LEVELS", "Research")
+    )
+    registry_types: str = field(default_factory=lambda: os.getenv("TAP_REGISTRY_TYPES", "Archive"))
+    # ISO-8601 dates carried on the record; updated defaults to created
+    registry_created: str = field(default_factory=lambda: os.getenv("TAP_REGISTRY_CREATED", ""))
+    registry_updated: str = field(default_factory=lambda: os.getenv("TAP_REGISTRY_UPDATED", ""))
+
     # SKA SRC Permissions API, for the permissions-api plugin
     permissions_api_url: str = field(
         default_factory=lambda: os.getenv("TAP_PERMISSIONS_API_URL", "")

@@ -191,6 +191,53 @@ jobs:
             --set 'auth.gatedOperations={none}' \
             --set 'auth.roles.metadata\.delete.groups={/ska/oper}' \
             | grep -q 'TAP_AUTH_GATED_OPERATIONS: "none"'
+      - name: Template with the VOResource record enabled
+        run: |
+          helm template skao-tap deploy/helm/skao-tap \
+            --set voRegistry.enabled=true \
+            --set voRegistry.authorityId=skao.int \
+            --set voRegistry.resourceKey=srcnet/tap \
+            --set voRegistry.title="SKAO SRCNet TAP service" \
+            --set voRegistry.shortName="SKAO TAP" \
+            --set voRegistry.description="Science metadata" \
+            --set voRegistry.referenceUrl=https://srcnet.example.org/tap \
+            --set voRegistry.publisher="SKA Observatory" \
+            --set voRegistry.created=2026-08-23 \
+            --set 'voRegistry.subjects={radio astronomy}' \
+            | grep -q 'TAP_REGISTRY_IDENTIFIER: "ivo://skao.int/srcnet/tap"'
+      # A record a publishing registry would reject must fail at deploy time.
+      - name: Incomplete VOResource configurations are refused
+        run: |
+          refuses() {
+            if helm template skao-tap deploy/helm/skao-tap "$@" >/dev/null 2>&1; then
+              echo "::error::chart rendered an incomplete VOResource config: $*"
+              exit 1
+            fi
+          }
+          complete=(--set voRegistry.enabled=true
+                    --set voRegistry.authorityId=skao.int
+                    --set voRegistry.resourceKey=srcnet/tap
+                    --set voRegistry.title=T --set voRegistry.shortName=S
+                    --set voRegistry.description=D
+                    --set voRegistry.referenceUrl=https://example.org
+                    --set voRegistry.publisher=P
+                    --set voRegistry.created=2026-08-23)
+          refuses "${complete[@]}"                                        # no subjects
+          refuses "${complete[@]}" --set 'voRegistry.subjects={radio}' \
+                  --set voRegistry.authorityId=""                         # no authority
+          refuses "${complete[@]}" --set 'voRegistry.subjects={radio}' \
+                  --set voRegistry.shortName="a-very-long-short-name"     # over 16 chars
+          # whitespace is not a value: these would pass a nil/empty check and
+          # then fail at runtime, which is what this validation exists to stop
+          refuses "${complete[@]}" --set 'voRegistry.subjects={radio}' \
+                  --set voRegistry.title="   "
+          refuses "${complete[@]}" --set-json 'voRegistry.subjects=[" "]'
+          # padding is trimmed on the way out, so it cannot reach the identifier
+          helm template skao-tap deploy/helm/skao-tap "${complete[@]}" \
+            --set 'voRegistry.subjects={radio}' \
+            --set voRegistry.authorityId="skao.int " \
+            | grep -q 'TAP_REGISTRY_IDENTIFIER: "ivo://skao.int/srcnet/tap"'
+
       # Each of these is a way to end up with auth "on" but nothing enforced.
       - name: Unsafe authentication configurations are refused
         run: |
