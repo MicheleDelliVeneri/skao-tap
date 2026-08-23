@@ -232,6 +232,11 @@ jobs:
           refuses "${complete[@]}" --set 'voRegistry.subjects={radio}' \
                   --set voRegistry.title="   "
           refuses "${complete[@]}" --set-json 'voRegistry.subjects=[" "]'
+          # padding is trimmed on the way out, so it cannot reach the identifier
+          helm template skao-tap deploy/helm/skao-tap "${complete[@]}" \
+            --set 'voRegistry.subjects={radio}' \
+            --set voRegistry.authorityId="skao.int " \
+            | grep -q 'TAP_REGISTRY_IDENTIFIER: "ivo://skao.int/srcnet/tap"'
 
       # Each of these is a way to end up with auth "on" but nothing enforced.
       - name: Unsafe authentication configurations are refused

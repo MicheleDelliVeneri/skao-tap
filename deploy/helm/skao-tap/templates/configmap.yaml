@@ -40,20 +40,24 @@ data:
   {{- if gt (len (trim .Values.voRegistry.shortName)) 16 }}
   {{- fail (printf "voRegistry.shortName is %d characters; VOResource allows at most 16" (len (trim .Values.voRegistry.shortName))) }}
   {{- end }}
-  TAP_REGISTRY_IDENTIFIER: {{ printf "ivo://%s/%s" .Values.voRegistry.authorityId .Values.voRegistry.resourceKey | quote }}
-  TAP_REGISTRY_TITLE: {{ .Values.voRegistry.title | quote }}
-  TAP_REGISTRY_SHORT_NAME: {{ .Values.voRegistry.shortName | quote }}
-  TAP_REGISTRY_DESCRIPTION: {{ .Values.voRegistry.description | quote }}
-  TAP_REGISTRY_REFERENCE_URL: {{ .Values.voRegistry.referenceUrl | quote }}
-  TAP_REGISTRY_PUBLISHER: {{ .Values.voRegistry.publisher | quote }}
-  TAP_REGISTRY_CREATOR: {{ .Values.voRegistry.creator | quote }}
-  TAP_REGISTRY_CONTACT_NAME: {{ .Values.voRegistry.contact.name | quote }}
-  TAP_REGISTRY_CONTACT_EMAIL: {{ .Values.voRegistry.contact.email | quote }}
+  {{- /* trimmed on the way out, like the service trims on the way in: a
+         padded authorityId would otherwise reach the identifier as
+         "ivo://skao.int /srcnet/tap", valid to this chart and rejected by a
+         registry */}}
+  TAP_REGISTRY_IDENTIFIER: {{ printf "ivo://%s/%s" (trim .Values.voRegistry.authorityId) (trim .Values.voRegistry.resourceKey) | quote }}
+  TAP_REGISTRY_TITLE: {{ trim .Values.voRegistry.title | quote }}
+  TAP_REGISTRY_SHORT_NAME: {{ trim .Values.voRegistry.shortName | quote }}
+  TAP_REGISTRY_DESCRIPTION: {{ trim .Values.voRegistry.description | quote }}
+  TAP_REGISTRY_REFERENCE_URL: {{ trim .Values.voRegistry.referenceUrl | quote }}
+  TAP_REGISTRY_PUBLISHER: {{ trim .Values.voRegistry.publisher | quote }}
+  TAP_REGISTRY_CREATOR: {{ trim .Values.voRegistry.creator | quote }}
+  TAP_REGISTRY_CONTACT_NAME: {{ trim .Values.voRegistry.contact.name | quote }}
+  TAP_REGISTRY_CONTACT_EMAIL: {{ trim .Values.voRegistry.contact.email | quote }}
   TAP_REGISTRY_SUBJECTS: {{ join "," .Values.voRegistry.subjects | quote }}
   TAP_REGISTRY_TYPES: {{ join "," .Values.voRegistry.types | quote }}
   TAP_REGISTRY_CONTENT_LEVELS: {{ join "," .Values.voRegistry.contentLevels | quote }}
-  TAP_REGISTRY_CREATED: {{ .Values.voRegistry.created | quote }}
-  TAP_REGISTRY_UPDATED: {{ .Values.voRegistry.updated | default .Values.voRegistry.created | quote }}
+  TAP_REGISTRY_CREATED: {{ trim .Values.voRegistry.created | quote }}
+  TAP_REGISTRY_UPDATED: {{ trim (.Values.voRegistry.updated | default .Values.voRegistry.created) | quote }}
   {{- end }}
   {{- /* authn/authz; disabled by default, see values.yaml */}}
   TAP_AUTH_ENABLED: {{ .Values.auth.enabled | quote }}
