@@ -157,69 +157,28 @@ def verify_running_images(expected_tag: str) -> None:
     """Refuse to measure pods that are not running the images just built.
 
     The check is on the pod spec rather than on an image id, because kind
-    rewrites ids on import — the id in a pod's status has no relation to the
-    one docker built. The tag is what the chart set and what the kubelet
-    resolved, so it is the thing that can actually be compared.
+    rewrites ids on import — the id in a pod's status bears no relation to the
+    one docker built, so comparing those would look like a check and verify
+    nothing.
+
+    Parsed from JSON rather than assembled with a jsonpath expression: the
+    quoting needed to get a newline into a jsonpath template is exactly the
+    kind of detail that turns a guard into a crash.
     """
-    running = kubectl(
-        "get",
-        "pods",
-        "-l",
-        "app.kubernetes.io/instance=" + RELEASE,
-        "-o",
-        "jsonpath={range .items[*]}{.metadata.name}={.spec.containers[*].image}{'\n'}{end}",
+    payload = json.loads(
+        kubectl("get", "pods", "-l", f"app.kubernetes.io/instance={RELEASE}", "-o", "json")
     )
-    wrong = [line for line in running.splitlines() if line.strip() and expected_tag not in line]
+    wrong = []
+    for item in payload.get("items", []):
+        for container in item["spec"]["containers"]:
+            if expected_tag not in container["image"]:
+                wrong.append(f"{item['metadata']['name']}: {container['image']}")
     if wrong:
         raise RuntimeError(
             "these pods are not running the images this run built "
             f"(expected tag {expected_tag}):\n  " + "\n  ".join(wrong)
         )
     log.info("all pods confirmed running %s", expected_tag)
-
-
-def install_keda() -> str:
-    """Install KEDA, pinned, and return the version actually running."""
-    if "keda" not in kubectl("get", "ns", "-o", "name", check=False):
-        run("helm", "repo", "add", "kedacore", "https://kedacore.github.io/charts", check=False)
-        run("helm", "repo", "update", "kedacore", check=False)
-        run(
-            "helm",
-            "install",
-            "keda",
-            "kedacore/keda",
-            "--namespace",
-            "keda",
-            "--create-namespace",
-            "--version",
-            KEDA_VERSION,
-            # 5-second polling is KEDA's own interval, left as the chart sets
-            # it; this only affects how often the operator publishes metrics.
-            "--set",
-            "prometheus.metricServer.enabled=true",
-            "--set",
-            "prometheus.operator.enabled=true",
-            "--wait",
-            "--timeout",
-            "5m",
-            capture=False,
-            timeout=600,
-        )
-    return kubectl(
-        "get",
-        "deploy",
-        "-n",
-        "keda",
-        "keda-operator",
-        "-o",
-        "jsonpath={.spec.template.spec.containers[0].image}",
-    ).strip()
-
-
-def install_monitoring() -> None:
-    kubectl("apply", "-f", str(SUITE / "manifests/monitoring.yaml"))
-    kubectl("rollout", "status", "-n", "benchmon", "deploy/prometheus", "--timeout=180s")
-    kubectl("rollout", "status", "-n", "benchmon", "deploy/kube-state-metrics", "--timeout=180s")
 
 
 def install_chart(overrides: dict[str, str] | None = None) -> None:
