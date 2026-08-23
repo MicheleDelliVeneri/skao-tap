@@ -322,15 +322,16 @@ def test_which_paths_need_a_token_with_anonymous_queries(auth_settings, path, re
     assert needs_token(path) is required
 
 
-@pytest.mark.parametrize(
-    "path",
-    ["/", "/tap/examples", "/tap/registry", "/docs", "/docs/oauth2-redirect", "/redoc"],
-)
-def test_the_remaining_exempt_paths_need_no_token(path):
-    """Asserted against the predicate rather than over HTTP: /tap/registry
-    arrives with the VOResource work, and FastAPI serves the doc routes
-    outside the app dependency — a regression in this list would still be a
-    regression."""
+def test_the_registry_record_is_not_gated(client, secured):
+    """404 because this deployment publishes no record, not 401: a harvester
+    cannot hold a token, so the endpoint must not ask for one."""
+    assert client.get("/tap/registry").status_code == 404
+
+
+@pytest.mark.parametrize("path", ["/docs/oauth2-redirect", "/redoc"])
+def test_the_doc_routes_need_no_token(path):
+    """Asserted against the predicate: FastAPI serves these outside the app
+    dependency, so a regression in the list would not show up over HTTP."""
     assert needs_token(path) is False
 
 

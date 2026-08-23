@@ -112,7 +112,7 @@ ANONYMOUS_PATHS = frozenset(
         "/tap/availability",
         "/tap/capabilities",
         "/tap/tables",
-        "/tap/registry",  # served once the VOResource work lands
+        "/tap/registry",
         "/tap/examples",
         "/api/v1/auth",
         # FastAPI registers these three itself, outside the app-level
