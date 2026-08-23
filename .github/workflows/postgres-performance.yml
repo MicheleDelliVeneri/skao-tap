@@ -61,10 +61,38 @@ jobs:
           cache-suffix: postgres-performance
 
       - name: Validate benchmark inputs
+        # Shape first, then size. The bounds are about what a GitHub-hosted
+        # runner can actually do — ~14 GB of disk, 4 vCPU, a 6 hour job cap —
+        # so an over-large dispatch says so here instead of filling the disk
+        # during the load or being killed hours into the sweep. Raise them
+        # deliberately if this ever runs somewhere bigger.
         run: |
-          [[ "$PERF_SCALE_ROWS" =~ ^[1-9][0-9]*$ ]]
-          [[ "$PERF_DURATION" =~ ^[1-9][0-9]*$ ]]
-          [[ "$PERF_CLIENTS" =~ ^[1-9][0-9]*(\ [1-9][0-9]*)*$ ]]
+          fail() { echo "::error::$1"; exit 1; }
+          [[ "$PERF_SCALE_ROWS" =~ ^[1-9][0-9]*$ ]] \
+            || fail "PERF_SCALE_ROWS must be a positive integer, got '$PERF_SCALE_ROWS'"
+          [[ "$PERF_DURATION" =~ ^[1-9][0-9]*$ ]] \
+            || fail "PERF_DURATION must be a positive integer, got '$PERF_DURATION'"
+          [[ "$PERF_CLIENTS" =~ ^[1-9][0-9]*(\ [1-9][0-9]*)*$ ]] \
+            || fail "PERF_CLIENTS must be space-separated positive integers, got '$PERF_CLIENTS'"
+
+          # ~50 bytes a row plus the GiST index; 20M keeps the load inside the
+          # runner's disk with room for artifacts
+          (( PERF_SCALE_ROWS <= 20000000 )) \
+            || fail "PERF_SCALE_ROWS=$PERF_SCALE_ROWS exceeds 20000000; the runner's disk will not hold it"
+          (( PERF_DURATION <= 900 )) \
+            || fail "PERF_DURATION=$PERF_DURATION exceeds 900s per level"
+
+          levels=0
+          for clients in $PERF_CLIENTS; do
+            levels=$(( levels + 1 ))
+            (( clients <= 256 )) \
+              || fail "PERF_CLIENTS entry $clients exceeds 256; that many client threads measures the client, not the service"
+          done
+          (( levels <= 8 )) || fail "PERF_CLIENTS lists $levels levels; at most 8"
+          # each level runs twice, database-only then end-to-end, and the job
+          # dies at 6 hours whatever it was measuring
+          (( PERF_DURATION * levels * 2 <= 10800 )) \
+            || fail "PERF_DURATION x levels would run past the runner's job limit"
           mkdir -p performance-results
 
       - name: Start instrumented PostgreSQL
