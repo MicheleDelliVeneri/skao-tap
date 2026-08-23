@@ -75,8 +75,18 @@ explicitly rather than defaulted. No token-exchange step is involved.
 | `/tap/availability` | no | a Kubernetes probe cannot hold one |
 | `/tap/capabilities`, `/tap/tables`, `/tap/registry`, `/tap/examples` | no | a registry harvester or a VO client browsing for services cannot hold one |
 | `/api/v1/auth`, `/openapi.json`, `/docs` | no | this is where a client works out how to authenticate |
+| `GET /tap/sync?REQUEST=getCapabilities` | no | TAP 1.0 capability discovery: the handler redirects it to the open `/capabilities`, so a token would guard nothing |
 | `/tap/sync`, `/tap/async` and its sub-resources | **configurable** | `auth.anonymousQueries` — off by default |
 | everything else — `/api/v1/<mount>` reads and writes, `/api/v1/query`, `/api/v1/jobs` | yes | a JSON client can authenticate, and is expected to |
+
+The capability-discovery exemption is deliberately narrower than it could be:
+`GET` only, compared exactly as the handler compares it. `gather_params`
+merges a POST form *over* the query string, so on a `POST` the query string
+does not decide what the handler does — and reading the body here to find out
+would consume it before the handler could. So `POST /tap/sync` with
+`REQUEST=getCapabilities` needs a token, while the `GET` form does not. An
+exemption wider than the redirect it exists for would be a way past the token
+requirement, not a convenience.
 
 ### Serving standard VO clients
 
@@ -382,6 +392,7 @@ always means the whole query surface is enforced.
 | TAP query or job, no token, `anonymousQueries: true`, query operations ungated | 200 | 200 |
 | TAP query or job, no token, `anonymousQueries: false` | 200 | `401` + AuthVO challenge |
 | `GET /tap/sync?REQUEST=getCapabilities`, no token | 303 | 303 — discovery, not a query, whatever is configured |
+| The same by `POST`, no token | 303 | `401` — the exemption is the `GET` form only (see below) |
 | Any other request, no token | 200 | `401` + AuthVO challenge |
 | Any request, forged/expired token | ignored | `401`, `error="invalid_token"` |
 | Metadata `GET`, valid token | 200 | 200 (no role needed) |

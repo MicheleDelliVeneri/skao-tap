@@ -255,6 +255,25 @@ def test_the_discovery_exemption_cannot_be_widened_into_a_query(
     assert response.status_code == 401, f"{label} bypassed the token requirement"
 
 
+def test_a_post_form_cannot_ride_in_on_a_discovery_query_string(client, secured, fake_db):
+    """gather_params merges the form *over* the query string, so on a POST the
+    query string does not decide what the handler does — this would otherwise
+    be exempted as discovery and then run as a query."""
+    response = client.post(
+        "/tap/sync?REQUEST=getCapabilities",
+        data={"REQUEST": "doQuery", "LANG": "ADQL", "QUERY": "SELECT 1"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 401
+
+
+def test_discovery_by_post_needs_a_token(client, secured, fake_db):
+    """A narrowing worth writing down: the exemption is the GET form only,
+    because reading a POST body here would consume it before the handler."""
+    response = client.post("/tap/sync", data={"REQUEST": "getCapabilities"}, follow_redirects=False)
+    assert response.status_code == 401
+
+
 def test_the_last_request_value_decides_like_the_handler(client, secured, fake_db):
     """Discovery last: the handler redirects, so the exemption applies too."""
     response = client.get(

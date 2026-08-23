@@ -138,25 +138,32 @@ ANONYMOUS_PATHS = frozenset(
 QUERY_PREFIXES = ("/tap/sync", "/tap/async")
 
 
-def _is_capability_discovery(path: str, query_params) -> bool:
+def _is_capability_discovery(method: str, path: str, query_params) -> bool:
     """A TAP 1.0 client discovering capabilities through /sync.
 
     ``GET /tap/sync?REQUEST=getCapabilities`` is not a query: the handler
     redirects it to /capabilities, which is open. Demanding a token for the
     redirect while its destination is public would break capability discovery
     for older clients, and tell them nothing they could act on.
+
+    The exemption must never be wider than the redirect it exists for, or it
+    becomes a way past the token requirement — a request the handler runs as a
+    query would have been let through as discovery. Two things keep it
+    narrower:
+
+    * ``GET`` only. ``gather_params`` merges the POST form *over* the query
+      string, so on a POST the query string does not decide what the handler
+      does: ``POST /tap/sync?REQUEST=getCapabilities`` with a form body of
+      ``REQUEST=doQuery&QUERY=...`` runs the query. Reading the body here to
+      find that out would mean consuming it before the handler can.
+    * The same comparison the handler makes — ``gather_params`` upper-cases
+      the key and keeps the last value, and ``sync()`` compares that value to
+      ``"getCapabilities"`` as-is.
     """
-    if path.rstrip("/") != "/tap/sync" or query_params is None:
+    if method.upper() != "GET" or path.rstrip("/") != "/tap/sync":
         return False
-    # The exemption must never be wider than the redirect it exists for, or it
-    # is a way past the token requirement: a request the handler treats as a
-    # query would have been let through as discovery. So mirror the handler
-    # exactly — gather_params upper-cases the key and keeps the last value,
-    # and sync() compares that value to "getCapabilities" as-is.
-    #
-    # Query string only, while gather_params also reads a POST form body. That
-    # is the safe direction: a form-encoded discovery request needs a token
-    # rather than a query slipping through as discovery.
+    if query_params is None:
+        return False
     request_value = None
     for key, value in query_params.multi_items():
         if key.upper() == "REQUEST":
@@ -164,18 +171,18 @@ def _is_capability_discovery(path: str, query_params) -> bool:
     return request_value == "getCapabilities"
 
 
-def needs_token(path: str, query_params=None) -> bool:
+def needs_token(path: str, query_params=None, method: str = "GET") -> bool:
     """Whether a request must carry a verified token.
 
-    ``query_params`` is the request's query string, needed only to recognise
-    capability discovery through /sync.
+    ``query_params`` and ``method`` are needed only to recognise capability
+    discovery through /sync.
     """
     if not settings.auth_require_token:
         return False
     trimmed = path.rstrip("/") or "/"
     if trimmed in ANONYMOUS_PATHS or path in ANONYMOUS_PATHS:
         return False
-    if _is_capability_discovery(path, query_params):
+    if _is_capability_discovery(method, path, query_params):
         return False
     return not (
         settings.auth_anonymous_queries
@@ -237,7 +244,7 @@ async def attach_principal(request: Request) -> None:
         clear_job_viewer()  # no ownership enforcement: behave as before
         return
     who = await run_in_threadpool(principal_of, request)
-    if who.is_anonymous and needs_token(request.url.path, request.query_params):
+    if who.is_anonymous and needs_token(request.url.path, request.query_params, request.method):
         # the challenge names the IAM, so a client that arrived with nothing
         # can go and get a token rather than guess which issuer to ask
         raise AuthenticationError(
@@ -257,7 +264,7 @@ def require(operation: str):
         active = plugin()
         if active is None:  # auth disabled: behave exactly as before
             return ANONYMOUS
-        if _is_capability_discovery(request.url.path, request.query_params):
+        if _is_capability_discovery(request.method, request.url.path, request.query_params):
             # same reasoning as the token requirement: this is discovery, not
             # a query, and its destination is public either way
             return getattr(request.state, "principal", ANONYMOUS)
