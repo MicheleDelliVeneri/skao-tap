@@ -171,3 +171,18 @@ def test_a_table_published_while_running_is_not_refused(counting_pool, client, f
     query_module.forget_published_tables()
     assert "ska.late_arrival" in query_module._published_tables()
     assert counting_pool["n"] > reads_before
+
+
+def test_queueing_a_job_cannot_translate_on_the_event_loop():
+    """Both facades require the caller to pass an already-translated query.
+
+    Optional would mean a future caller could omit it and put an ADQL parse
+    back on the event loop, which is the thing this change removed.
+    """
+    import inspect
+
+    from tap_api.endpoints import json_api, uws_api
+
+    for module in (json_api, uws_api):
+        parameter = inspect.signature(module._queue).parameters["prepared"]
+        assert parameter.default is inspect.Parameter.empty, module.__name__

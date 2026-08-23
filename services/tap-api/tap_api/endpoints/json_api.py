@@ -164,15 +164,15 @@ def _job_json(job: dict) -> dict:
     return body
 
 
-def _queue(conn, job: dict, prepared: dict | None = None) -> None:
-    """Move a job to QUEUED, translating its query unless already done.
+def _queue(conn, job: dict, prepared: dict) -> None:
+    """Move a job to QUEUED, using an already-translated query.
 
-    ``prepared`` lets a caller that has just validated the same parameters
-    hand the result over rather than pay a second ADQL parse for it.
+    ``prepared`` is required rather than optional: translating here would put
+    an ADQL parse back on the event loop, since every caller is an async
+    handler. Required means a future caller cannot reintroduce that quietly.
     """
     if job["phase"] not in ("PENDING", "HELD"):
         raise UsageError(f"cannot start job in phase {job['phase']}")
-    prepared = prepared or prepare_query(job["parameters"])
     uws.update_job(conn, job["job_id"], phase="QUEUED", query_sql=prepared["sql"])
 
 
