@@ -77,6 +77,7 @@ and XML rendering.
 | `GET /tap/availability` | VOSI | checks database connectivity |
 | `GET /tap/tables` | VOSI/VODataService | generated from `TAP_SCHEMA` |
 | `GET /tap/examples` | DALI | RDFa examples (picked up by TOPCAT) |
+| `GET /tap/registry` | VOResource | registration record; `404` until `voRegistry.enabled` |
 | `TAP_SCHEMA.schemas/tables/columns/keys/key_columns` | TAP | self-describing, queryable via ADQL |
 
 ## Quickstart
@@ -231,9 +232,13 @@ Follow-up work is tracked as numbered packages in `docs/roadmap.md`.
   verified bearer tokens, either from IAM group membership or via the
   [SKA SRC Permissions API](https://gitlab.com/ska-telescope/src/src-service-apis/ska-src-permissions-api)
   — see [docs/auth.md](docs/auth.md). Job creation, mutation, deletion and
-  synchronous querying can be gated too, off by default so anonymous VO
-  clients keep working. Registry registration (VOResource) remains open in
-  package 4.
+  synchronous querying can be gated too. Every request needs a verified token
+  by default, service discovery and the health check aside;
+  `auth.anonymousQueries=true` reopens reading metadata through `/tap/sync`
+  and the `/tap/async` job, which is what standard VO clients like PyVO and
+  TOPCAT need since they send no token. A request refused for want of one
+  answers an IVOA AuthVO challenge naming the IAM, so a client can go and get
+  a token.
 - **Service-local logging** — logs are plain `logging` records, outside the
   shared SRCNet observability stack; package 8 adopts
   [`ska-src-logging`](https://gitlab.com/ska-telescope/src/src-api/ska-src-api-logging)

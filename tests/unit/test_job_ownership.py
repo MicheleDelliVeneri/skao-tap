@@ -18,10 +18,17 @@ ROLES = json.dumps({"metadata.ingest": {"groups": ["/ska/science-metadata/oper"]
 
 @pytest.fixture
 def secured(auth_settings, stub_iam, iam_issuer, iam_audience):
+    """Authenticated, and serving standard VO clients.
+
+    Anonymous queries are on because that is the only way an *ownerless* job
+    comes into existence in an authenticated deployment, and half of what
+    ownership has to get right is how those behave.
+    """
     auth_settings(
         auth_enabled=True,
         auth_plugin="iam-groups",
         auth_roles=ROLES,
+        auth_anonymous_queries=True,
         iam_issuer=iam_issuer,
         iam_audience=iam_audience,
     )
@@ -36,6 +43,20 @@ def bearer(make_token):
 
 
 # -- the store layer --------------------------------------------------------
+
+
+def _anonymous_job(client):
+    """Create a job without a token.
+
+    Through /tap/async, not the JSON facade: reading metadata through TAP is
+    the one thing that stays open to an anonymous caller, so that is where an
+    ownerless job can still come from.
+    """
+    created = client.post(
+        "/tap/async", data={"LANG": "ADQL", "QUERY": QUERY}, follow_redirects=False
+    )
+    assert created.status_code == 303, created.text
+    return created.headers["location"].rsplit("/", 1)[-1]
 
 
 @pytest.fixture
@@ -98,9 +119,8 @@ def test_created_jobs_record_their_owner(client, secured, fake_db, bearer):
 
 
 def test_anonymous_jobs_stay_ownerless(client, secured, fake_db):
-    created = client.post("/api/v1/jobs", json={"query": QUERY})
-    assert created.status_code == 201
-    assert fake_db.jobs[created.json()["job_id"]]["owner_id"] is None
+    job_id = _anonymous_job(client)
+    assert fake_db.jobs[job_id]["owner_id"] is None
 
 
 def test_uws_jobs_record_their_owner(client, secured, fake_db, bearer):
@@ -142,9 +162,7 @@ def test_the_viewer_does_not_leak_between_requests(client, secured, fake_db, bea
     # bob, immediately after alice, must not inherit her view...
     assert client.get(f"/api/v1/jobs/{alice['job_id']}", headers=bearer("bob")).status_code == 403
     # ...nor may an anonymous caller inherit bob's
-    anonymous = client.post("/api/v1/jobs", json={"query": QUERY})
-    assert anonymous.status_code == 201
-    assert fake_db.jobs[anonymous.json()["job_id"]]["owner_id"] is None
+    assert fake_db.jobs[_anonymous_job(client)]["owner_id"] is None
 
 
 def test_one_user_cannot_read_anothers_job(client, secured, fake_db, bearer):
@@ -200,13 +218,13 @@ def test_one_user_cannot_download_anothers_result(client, secured, fake_db, bear
 def test_job_lists_show_only_your_own(client, secured, fake_db, bearer):
     alice = client.post("/api/v1/jobs", json={"query": QUERY}, headers=bearer("alice")).json()
     bob = client.post("/api/v1/jobs", json={"query": QUERY}, headers=bearer("bob")).json()
-    anonymous = client.post("/api/v1/jobs", json={"query": QUERY}).json()
+    anonymous_id = _anonymous_job(client)
 
     listed = {
         j["job_id"] for j in client.get("/api/v1/jobs", headers=bearer("alice")).json()["jobs"]
     }
     assert alice["job_id"] in listed
-    assert anonymous["job_id"] in listed  # ownerless: nothing to protect
+    assert anonymous_id in listed  # ownerless: nothing to protect
     assert bob["job_id"] not in listed
 
 

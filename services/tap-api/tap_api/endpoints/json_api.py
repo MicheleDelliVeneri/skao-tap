@@ -99,8 +99,11 @@ async def auth_info():
     """
     summary = auth_summary()
     # only what this deployment actually enforces: listing an operation it
-    # lets through would tell a client to send a token it does not need
-    summary["gated_operations"] = {name: OPERATION_ROUTES[name] for name in gated()}
+    # lets through would tell a client to send a token it does not need — and
+    # with authentication off it enforces nothing at all, whatever the gate
+    # set happens to say
+    enforced = gated() if summary["enabled"] else ()
+    summary["gated_operations"] = {name: OPERATION_ROUTES[name] for name in enforced}
     return summary
 
 

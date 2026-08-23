@@ -12,10 +12,11 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     StreamingResponse,
 )
-from tapcore.auth import verifier
+from tapcore.auth import invalid_token_challenge, verifier
 from tapcore.config import settings
 from tapcore.db import close_pool, pool
 from tapcore.errors import AuthenticationError, TAPError
@@ -99,17 +100,24 @@ async def tap_error_handler(request: Request, exc: TAPError):
     # DALI mandates VOTable error documents on the TAP endpoints; the JSON
     # API reports the same errors as JSON.
     headers = {}
+    message = exc.message
     if isinstance(exc, AuthenticationError):
-        # RFC 6750: a 401 has to say how to authenticate
-        headers["WWW-Authenticate"] = 'Bearer realm="skao-tap"'
+        # RFC 6750 wants a challenge on a 401; IVOA AuthVO wants one that
+        # names the IAM. Both go in the one header, in that order, so a
+        # client reading only the first still learns it needs a bearer token.
+        challenge = exc.challenge or invalid_token_challenge(exc.message)
+        headers["WWW-Authenticate"] = f'Bearer realm="skao-tap", {challenge}'
+        # and in the body too: that is where the SRCNet reference client (the
+        # DM product streamer's) reads the challenge from
+        message = f"{exc.message}. WWW-Authenticate: {challenge}"
     if request.url.path.startswith("/api/"):
         return JSONResponse(
-            {"error": type(exc).__name__, "message": exc.message},
+            {"error": type(exc).__name__, "message": message},
             status_code=exc.http_status,
             headers=headers,
         )
     return Response(
-        error_votable(exc.message),
+        error_votable(message),
         status_code=exc.http_status,
         media_type=VOTABLE_MIME,
         headers=headers,
@@ -119,6 +127,28 @@ async def tap_error_handler(request: Request, exc: TAPError):
 @app.get("/")
 async def root():
     return RedirectResponse("/tap/capabilities")
+
+
+@app.get("/tap/registry")
+async def registry():
+    """The VOResource record a publishing registry harvests or ingests.
+
+    404 until the deployment is configured to publish one: an IVOA
+    identifier is a permanent promise about a URI, so it cannot be defaulted.
+
+    Errors are answered as plain text rather than through the DALI VOTable
+    handler the TAP endpoints use. A harvester asking for a registry record
+    has no reason to parse a VOTable, and answering one with the
+    x-votable+xml content type would look like a malformed record rather than
+    a missing one.
+    """
+    try:
+        return Response(vosi.voresource_xml(), media_type="application/xml")
+    except TAPError as exc:
+        # exc.message, not str(exc): the message is ours (which chart value is
+        # unset), while stringifying the exception is how implementation
+        # detail leaks into a response
+        return PlainTextResponse(exc.message, status_code=exc.http_status)
 
 
 @app.get("/tap/availability")

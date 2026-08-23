@@ -15,6 +15,132 @@ When enabled, two separable things happen to a request:
    verified principal may proceed. That decision is where deployments differ,
    so it sits behind a plugin interface.
 
+The two are configured separately, because the answers differ. By default
+**every request needs a verified token** (`auth.requireToken`) except service
+discovery and the health check. Only some of those requests additionally need
+an authorisation *decision* — see [what is gated](#what-is-gated). So a
+metadata `GET` needs a token and nothing more; deleting a metadata document
+needs a token the plugin approves.
+
+Reading metadata through TAP — `/tap/sync` and the `/tap/async` job — can be
+reopened to token-less callers with `auth.anonymousQueries`. That switch is
+what decides whether standard VO clients can use the service at all.
+
+The environment variables behind these switches are read strictly: `1`,
+`true`, `yes`, `on`, `0`, `false`, `no`, `off`, in any case, and anything else
+refuses to start. Mapping an unrecognised value to false is how
+`TAP_AUTH_REQUIRE_TOKEN=flase` would turn the token requirement off without
+saying so.
+
+## Getting a token: the AuthVO challenge
+
+A bare `401` leaves a client guessing which IAM to talk to. A request refused
+for want of a token is answered with an IVOA AuthVO challenge naming the
+OIDC discovery document instead — the same shape the SRCNet
+[DM product streamer](https://gitlab.com/ska-telescope/src/src-dm/ska-src-dm-product-streamer-api)
+uses, so a client written against one works against the other:
+
+```http
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer realm="skao-tap",
+  ivoa_bearer error="invalid_request",
+  error_description="Missing access token",
+  discovery_url="https://ska-iam.stfc.ac.uk/.well-known/openid-configuration"
+```
+
+The RFC 6750 `Bearer` challenge comes first so a client reading only the
+first one still learns it needs a bearer token; the `ivoa_bearer` challenge
+carries the discovery URL. The same text is repeated in the error body — the
+JSON `message` on `/api/v1/*`, the DALI VOTable on `/tap/*` — because that is
+where the reference SRCNet client reads it from.
+
+A client then runs OIDC discovery and a device flow against the IAM, and
+comes back with the token. The service never talks to the IAM on the client's
+behalf; it only says where the IAM is.
+
+Two error codes are distinguished, because the remedy differs:
+
+| `error` | Means | What the client should do |
+| --- | --- | --- |
+| `invalid_request` | no credential was presented | discover the IAM, get a token |
+| `invalid_token` | a credential was presented and did not verify (expired, forged, wrong issuer) | get a *fresh* token; re-running discovery will not help |
+
+`GET /api/v1/auth` advertises the same `discovery_url`, so a client can find
+the IAM without provoking a `401` first.
+
+Audience: this service does not require tokens to carry a service-specific
+`aud`, provided `auth.iam.allowAnyAudience` is set — SRCNet IAM tokens are
+not minted per service here. That is a deliberate trade: any token the IAM
+issued to any of its clients is then accepted here, so the flag has to be set
+explicitly rather than defaulted. No token-exchange step is involved.
+
+## What needs a token
+
+| Requests | Token | Why |
+| --- | --- | --- |
+| `/tap/availability` | no | a Kubernetes probe cannot hold one |
+| `/tap/capabilities`, `/tap/tables`, `/tap/registry`, `/tap/examples` | no | a registry harvester or a VO client browsing for services cannot hold one |
+| `/api/v1/auth`, `/openapi.json`, `/docs` | no | this is where a client works out how to authenticate |
+| `GET /tap/sync?REQUEST=getCapabilities` | no | TAP 1.0 capability discovery: the handler redirects it to the open `/capabilities`, so a token would guard nothing |
+| `/tap/sync`, `/tap/async` and its sub-resources | **configurable** | `auth.anonymousQueries` — off by default |
+| everything else — `/api/v1/<mount>` reads and writes, `/api/v1/query`, `/api/v1/jobs` | yes | a JSON client can authenticate, and is expected to |
+
+The capability-discovery exemption is deliberately narrower than it could be:
+`GET` only, compared exactly as the handler compares it. `gather_params`
+merges a POST form *over* the query string, so on a `POST` the query string
+does not decide what the handler does — and reading the body here to find out
+would consume it before the handler could. So `POST /tap/sync` with
+`REQUEST=getCapabilities` needs a token, while the `GET` form does not. An
+exemption wider than the redirect it exists for would be a way past the token
+requirement, not a convenience.
+
+### Serving standard VO clients
+
+```yaml
+auth:
+  enabled: true
+  anonymousQueries: true    # PyVO, TOPCAT and friends carry no token
+```
+
+PyVO, TOPCAT and the rest of the VO toolchain have no way to obtain or send a
+bearer token, so with `requireToken: true` and `anonymousQueries: false` they
+get `401` on every query. Turning `anonymousQueries` on opens exactly two
+things: a synchronous query, and the UWS job that runs one — including the
+job's sub-resources (`/phase`, `/parameters`, `/results`, …), because they are
+branches of the same read.
+
+Two qualifications, because three settings decide this between them:
+
+- `requireToken: false` makes those paths anonymous whatever
+  `anonymousQueries` says — it turns the whole authentication layer off.
+- `anonymousQueries: true` only settles the *authentication* layer. If
+  `gatedOperations` enforces the query operations, the authorisation layer
+  still refuses a caller whose token the plugin does not approve — and a
+  token-less caller has no token to approve, so it gets `401` there instead.
+
+`GET /api/v1/auth` reports the combined answer as `anonymous_tap_queries`, so
+a client does not have to work this out.
+
+It does **not** open the JSON API's own query and job facades
+(`/api/v1/query`, `/api/v1/jobs`). The switch exists for clients that cannot
+authenticate; a JSON client can.
+
+That leaves a deliberate asymmetry when it is on: the same metadata is
+readable anonymously with an ADQL query over `/tap/sync` and token-gated when
+read as JSON from `/api/v1/<mount>`. What justifies it is the client
+population, not the data. Ownership still applies either way — an anonymous
+caller sees jobs with no owner and gets `403` on a job someone claimed.
+
+Two further notes for a deployment that opens queries:
+
+- Anonymous queries reach whatever the query role can read, so what protects
+  unpublished data is TAP_SCHEMA publication and the `tap_reader` grants, not
+  this switch.
+- The gated operations still apply on top. Adding `query.sync` and the
+  `jobs.*` operations to `auth.gatedOperations` re-closes the query surface
+  for callers whose token the plugin does not approve, which is a different
+  question from whether a token is needed at all.
+
 ## What is gated
 
 Seven operations can be gated. Which ones a deployment actually enforces is
@@ -30,11 +156,13 @@ its own choice, set with `auth.gatedOperations`:
 | `jobs.delete` | `DELETE /tap/async/{job_id}`, `POST /tap/async/{job_id}` with `ACTION=DELETE`, `DELETE /api/v1/jobs/{job_id}` | no |
 | `query.sync` | `GET`/`POST /tap/sync`, `POST /api/v1/query` | no |
 
-The default enforces metadata mutation only, and every `GET` stays open
-whatever is configured. That default is deliberate: TAP clients send ADQL as
-a POST body, so gating "all writes" by HTTP method would lock PyVO, TOPCAT
-and every other standard VO client out of an authenticated deployment. What
-is protected by default is the data a caller can *change*.
+The default enforces metadata mutation only. That is about *authorisation* —
+which requests need a decision about the token they carry — and it is a
+separate question from whether a token is needed at all, which
+[`auth.requireToken` and `auth.anonymousQueries`](#what-needs-a-token) answer.
+Gating "all writes" by HTTP method would be no help here anyway: TAP clients
+send ADQL as a POST body, so what the gate set protects is the data a caller
+can *change*, not the verb they used.
 
 ### Requiring tokens for querying
 
@@ -72,10 +200,11 @@ and deletion are separately grantable, and typically separately granted.
 
 ### What a client can still do without a token
 
-Reads are never gated by this setting, whatever is enforced. `GET` on a job,
-its `/phase`, `/parameters`, `/results` and the job list all stay open, and
-what limits them is [ownership](#job-ownership): an anonymous caller sees
-jobs with no owner, and gets `403` on a job someone claimed. So with the
+No read is gated by *this* setting, whatever is enforced — but a read still
+needs a token unless the request is one `auth.anonymousQueries` opens or a
+discovery endpoint. Where reads are reachable, what limits them is
+[ownership](#job-ownership): an anonymous caller sees jobs with no owner, and
+gets `403` on a job someone claimed. So with `anonymousQueries: true` and the
 query operations enforced, an anonymous TOPCAT cannot create or start a job,
 and cannot see any job created with a token — but it can still read a job
 that was created anonymously, if any exist.
@@ -85,10 +214,11 @@ also be granted under `roles` — an enforced operation nobody is granted is
 denied to everyone, so the chart refuses to render that configuration rather
 than shipping a service that answers `403` to its own operators.
 
-Every other `GET` — the job resources, the metadata reads, the VOSI
-documents — stays open whatever is configured. The one exception is
-`GET /tap/sync`, which executes a query rather than reading a resource, so
-`query.sync` covers it in both verbs. What stops one user reading another
+No `GET` needs an authorisation decision, with one exception:
+`GET /tap/sync` executes a query rather than reading a resource, so
+`query.sync` covers it in both verbs. Needing a *token*, though, is decided
+elsewhere — the VOSI documents never do, job and metadata reads do unless
+`anonymousQueries` opens the TAP ones. What stops one user reading another
 user's job is [ownership](#job-ownership), enforced in the job store rather
 than at the endpoint.
 
@@ -101,9 +231,19 @@ discover it by trial:
 
 ```json
 {"enabled": true, "plugin": "permissions-api",
+ "token_required": true, "anonymous_queries": false,
+ "anonymous_tap_queries": false,
+ "discovery_url": "https://ska-iam.stfc.ac.uk/.well-known/openid-configuration",
  "issuer": "https://ska-iam.stfc.ac.uk", "audience": "science-metadata",
  "gated_operations": {"metadata.ingest": "POST /api/v1/<mount>", ...}}
 ```
+
+`token_required` and `anonymous_queries` describe the authentication layer;
+`gated_operations` answers "which requests need my token to be *approved*?".
+A client that just wants to know whether it can query without a token reads
+**`anonymous_tap_queries`**, which combines all three — it is false when a
+token is required and the TAP paths are not reopened, and also false when
+they are reopened but the query operations are gated.
 
 ## Token verification
 
@@ -254,20 +394,31 @@ reached.
 
 ## Behaviour summary
 
-`gated_operations` lists only what this deployment enforces, so a client can
-tell from it whether it needs a token to query at all.
+`gated_operations` lists only the operations this deployment puts to the
+plugin for a decision, and it is empty when authentication is disabled,
+because then nothing is enforced whatever the gate set says. It does not on
+its own say whether a token is needed — `token_required` and
+`anonymous_queries` in the same response answer that.
 
 "Gated call" below means a request covered by an operation this deployment
-enforces. The three metadata operations are enforced independently of one
-another; the four query operations are enforced as a group, so "enforcing
-`query.sync`" always means the whole query surface is enforced.
+enforces — that is the authorisation layer. The rows above it are the
+authentication layer, which applies whether or not an operation is gated.
+
+The three metadata operations are enforced independently of one another; the
+four query operations are enforced as a group, so "enforcing `query.sync`"
+always means the whole query surface is enforced.
 
 | Request | Auth disabled | Auth enabled |
 | --- | --- | --- |
-| `GET`, other than `/tap/sync` | 200 | 200 (token verified if present) |
-| Query whose operation is not enforced | 200 | 200 (token verified if present) |
-| Gated call, no token | 200 | `401` + `WWW-Authenticate: Bearer` |
-| Gated call, forged/expired token | 200 | `401` |
+| Discovery or health endpoint, no token | 200 | 200 |
+| TAP query or job, no token, `anonymousQueries: true`, query operations ungated | 200 | 200 |
+| TAP query or job, no token, `anonymousQueries: false` | 200 | `401` + AuthVO challenge |
+| `GET /tap/sync?REQUEST=getCapabilities`, no token | 303 | 303 — discovery, not a query, whatever is configured |
+| The same by `POST`, no token | 303 | `401` — the exemption is the `GET` form only (see below) |
+| Any other request, no token | 200 | `401` + AuthVO challenge |
+| Any request, forged/expired token | ignored | `401`, `error="invalid_token"` |
+| Metadata `GET`, valid token | 200 | 200 (no role needed) |
+| Gated call, no token | 200 | `401` + AuthVO challenge |
 | Gated call, valid token without the role | 200 | `403` |
 | Gated call, valid token with the role | 200 | 200 |
 | Any call, unverifiable token | ignored | `401` |
