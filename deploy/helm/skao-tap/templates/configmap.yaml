@@ -43,6 +43,22 @@ data:
   {{- if not (hasKey $.Values.auth.roles $operation) }}
   {{- fail (printf "auth.gatedOperations enforces %s but auth.roles has no entry for it, so it would be denied to everyone. Grant it under auth.roles, or drop it from auth.gatedOperations." $operation) }}
   {{- end }}
+  {{- /* present but empty grants nobody, which is the same outcome by a
+         longer route: an unfinished policy rather than a decision */}}
+  {{- $rule := get $.Values.auth.roles $operation }}
+  {{- if not (kindIs "map" $rule) }}
+  {{- fail (printf "auth.roles.%s must be a mapping with groups, scopes or anyVerifiedToken" $operation) }}
+  {{- end }}
+  {{- if not (or $rule.groups $rule.scopes $rule.anyVerifiedToken) }}
+  {{- fail (printf "auth.roles.%s names no group or scope and does not set anyVerifiedToken, so %s would be denied to everyone while auth.gatedOperations enforces it. Grant it, or drop it from auth.gatedOperations." $operation $operation) }}
+  {{- end }}
+  {{- /* a blank entry is a grant to the group named "" — never intended,
+         and it makes a rule look populated while granting nobody */}}
+  {{- range $entry := concat (default (list) $rule.groups) (default (list) $rule.scopes) }}
+  {{- if not (trim (toString $entry)) }}
+  {{- fail (printf "auth.roles.%s has a blank group or scope entry, which grants nobody while looking like a grant" $operation) }}
+  {{- end }}
+  {{- end }}
   {{- end }}
   {{- end }}
   {{- end }}

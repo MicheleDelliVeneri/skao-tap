@@ -202,6 +202,16 @@ jobs:
                   --set auth.iam.audience=science-metadata \
                   --set 'auth.gatedOperations={jobs.rename}' \
                   --set 'auth.roles.jobs\.rename.groups={/ska/oper}'
+          # a rule that exists but grants nobody: same outcome as no rule,
+          # by a longer route
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
+                  --set auth.iam.audience=science-metadata \
+                  --set 'auth.gatedOperations={metadata.delete}' \
+                  --set-json 'auth.roles={"metadata.delete":{}}'
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
+                  --set auth.iam.audience=science-metadata \
+                  --set 'auth.gatedOperations={metadata.delete}' \
+                  --set 'auth.roles.metadata\.delete.groups={}'
           # "none" is only "enforce nothing" on its own
           refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
                   --set auth.iam.audience=science-metadata \
