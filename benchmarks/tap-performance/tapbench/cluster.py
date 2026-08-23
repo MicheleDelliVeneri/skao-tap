@@ -181,6 +181,50 @@ def verify_running_images(expected_tag: str) -> None:
     log.info("all pods confirmed running %s", expected_tag)
 
 
+def install_keda() -> str:
+    """Install KEDA, pinned, and return the version actually running."""
+    if "keda" not in kubectl("get", "ns", "-o", "name", check=False):
+        run("helm", "repo", "add", "kedacore", "https://kedacore.github.io/charts", check=False)
+        run("helm", "repo", "update", "kedacore", check=False)
+        run(
+            "helm",
+            "install",
+            "keda",
+            "kedacore/keda",
+            "--namespace",
+            "keda",
+            "--create-namespace",
+            "--version",
+            KEDA_VERSION,
+            # 5-second polling is KEDA's own interval, left as the chart sets
+            # it; this only affects how often the operator publishes metrics.
+            "--set",
+            "prometheus.metricServer.enabled=true",
+            "--set",
+            "prometheus.operator.enabled=true",
+            "--wait",
+            "--timeout",
+            "5m",
+            capture=False,
+            timeout=600,
+        )
+    return kubectl(
+        "get",
+        "deploy",
+        "-n",
+        "keda",
+        "keda-operator",
+        "-o",
+        "jsonpath={.spec.template.spec.containers[0].image}",
+    ).strip()
+
+
+def install_monitoring() -> None:
+    kubectl("apply", "-f", str(SUITE / "manifests/monitoring.yaml"))
+    kubectl("rollout", "status", "-n", "benchmon", "deploy/prometheus", "--timeout=180s")
+    kubectl("rollout", "status", "-n", "benchmon", "deploy/kube-state-metrics", "--timeout=180s")
+
+
 def install_chart(overrides: dict[str, str] | None = None) -> None:
     """Deploy the chart, always pinning the image tag this run is measuring.
 
