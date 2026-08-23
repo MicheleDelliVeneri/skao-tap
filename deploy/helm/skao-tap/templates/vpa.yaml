@@ -28,7 +28,7 @@ spec:
           {{- toYaml $spec.minAllowed | nindent 10 }}
         maxAllowed:
           {{- toYaml $spec.maxAllowed | nindent 10 }}
-        controlledResources: ["cpu", "memory"]
+        controlledResources: {{ toJson $.Values.verticalAutoscaling.controlledResources }}
 ---
 {{- end }}
 {{- end }}

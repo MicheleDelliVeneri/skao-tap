@@ -95,7 +95,9 @@ describes better.
 
 Mind the connections. Each worker opens its own pool, so a pod holds up to
 `tapApi.workers × config.dbPoolMax` connections, and the deployment holds that
-multiplied by `tapApi.replicas`. With the defaults that is `1 × 8 = 8` per pod.
+multiplied by `tapApi.replicas` (or by `horizontalAutoscaling.tapApi.maxReplicas`
+when an autoscaler is in charge — see [Autoscaling](autoscaling.md), which
+checks this sum for you). With the defaults that is `1 × 8 = 8` per pod.
 Keep the total under the server's `max_connections` —
 `postgresql.tuning.max_connections` raises it for the in-chart database, and a
 managed server has its own limit.
@@ -133,6 +135,14 @@ override the defaults wholesale. Components with more than one replica also
 get a PodDisruptionBudget (`maxUnavailable: 1`), keeping the service up
 through node drains and cluster upgrades.
 
+### Automatic scaling
+
+Those replica counts can be handed to an autoscaler instead: tap-api on CPU,
+tap-executor on the age of the oldest queued job. Both are off by default and
+have their own page — [Autoscaling](autoscaling.md) — including the
+combinations the chart refuses, among them the connection ceiling that a
+maximum replica count makes reachable.
+
 ### Vertical scaling
 
 `verticalAutoscaling.enabled=true` creates a VerticalPodAutoscaler per
@@ -141,7 +151,10 @@ CRDs](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscal
 in the cluster). It starts in recommendation mode — read the suggestions
 with `kubectl describe vpa` — and moves to live resizing with
 `verticalAutoscaling.updateMode=Auto` once the `minAllowed`/`maxAllowed`
-bounds are trusted.
+bounds are trusted. `verticalAutoscaling.controlledResources` narrows what it
+sizes — set it to `["memory"]` to run a live VPA next to a CPU-based
+HorizontalPodAutoscaler, since two controllers driving the same resource is
+what does not work (see [Autoscaling](autoscaling.md)).
 
 The in-chart PostgreSQL is sized through `postgresql.resources` plus
 `postgresql.tuning`, a map rendered as `-c key=value` server arguments:

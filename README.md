@@ -213,8 +213,10 @@ The chart deploys `tap-api` (+ Service/optional Ingress), `tap-executor`
 StatefulSet initialized from the same `db/init` SQL, and a shared results
 PVC (use a ReadWriteMany storage class for multi-node clusters). Resilience
 and operations are chart values: default anti-affinity/zone spread and
-PodDisruptionBudgets for multi-replica services, opt-in
-VerticalPodAutoscalers, `postgresql.tuning` server arguments, and a
+PodDisruptionBudgets for multi-replica services, opt-in horizontal
+autoscaling (tap-api on CPU, tap-executor on queue backlog — see
+[docs/autoscaling.md](docs/autoscaling.md)) and VerticalPodAutoscalers,
+`postgresql.tuning` server arguments, and a
 scheduled `pg_dump` backup CronJob — with HA-PostgreSQL, PITR and restore
 procedures documented in `docs/deployment.md`.
 

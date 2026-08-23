@@ -23,7 +23,13 @@ soft anti-affinity/zone-spread and PodDisruptionBudgets for multi-replica
 services, opt-in VerticalPodAutoscalers per service, `postgresql.tuning`
 server arguments for right-sizing the in-chart database, a scheduled
 `pg_dump` backup CronJob with retention, and documented HA-PostgreSQL,
-PITR and restore procedures — see the deployment guide), and package 4
+PITR and restore procedures — see the deployment guide), and package 8
+(unified SRCNet logging and observability: `ska-src-logging` in every
+service, `X-Request-ID` correlation carried from the API through the job row
+and the SQL itself into the executor's records, seven Prometheus metrics
+chosen from what recent performance work needed and did not have, an opt-in
+in-chart Prometheus for trying them out, and OTLP tracing when a collector is
+configured — see the observability guide), and package 4
 (identity and registry: INDIGO IAM bearer tokens verified against the
 issuer's JWKS, authorisation behind a plugin with the SRCNet Permissions API
 and local IAM groups shipped, seven gateable operations with the query surface
@@ -60,32 +66,24 @@ ingested metadata.
 - **Amendments follow**: `PATCH` updates to `s_region` re-derive the
   geometry column.
 
-## Package 8 — Unified SRCNet logging and observability — *current*
+## Package 9 — Horizontal autoscaling — *current*
 
-The services currently use ad-hoc `logging.getLogger("tap_api")` /
-`"tapcore"` loggers with the default formatting, so their output does not
-join up with the rest of SRCNet.
+Package 8 exported the queue backlog and called it "what to autoscale
+executors on"; this package is the consumer.
 
-- **Adopt `ska-src-logging`**: replace the local logger setup with the
-  shared
-  [SKA SRC API logging library](https://gitlab.com/ska-telescope/src/src-api/ska-src-api-logging)
-  (`get_logger(app_name=...)`) in `tapcore`, `tap-api` and `tap-executor`,
-  so every record carries the standard structured fields and JSON output
-  in deployments (colourised console locally).
-- **Request correlation**: propagate `X-Request-ID` across tap-api →
-  PostgreSQL → tap-executor so one user query, its UWS job and the
-  executor's statements share a correlation id; wrap per-job work in the
-  library's `LogContext` to attach `job_id`, `owner_id` and the metadata
-  domain to every record in scope.
-- **OpenTelemetry and metrics**: `setup_uvicorn_logging()` in the FastAPI
-  lifespan, `setup_otel_fastapi(app, service_name=...)` for traces and log
-  shipping, and `setup_metrics_endpoint(app)` for Prometheus scraping —
-  mounted so it does not collide with the TAP/VOSI resource paths, and
-  exposed through the Helm chart (endpoint, service annotations,
-  opt-out for air-gapped sites).
-- **Redaction**: use the library's sensitive-data redaction on the paths
-  that handle tokens and user-supplied identifiers, keeping the log-safe
-  rendering already applied to metadata ids.
-- **Consistency pass**: audit existing log statements for level and
-  message shape while porting, and cover the correlation-id propagation
-  with a component test.
+- **tap-api on CPU**: an opt-in HorizontalPodAutoscaler on CPU utilisation,
+  which needs nothing beyond metrics-server. CPU is the honest signal for a
+  service whose work is GIL-held ANTLR translation.
+- **tap-executor on the queue**: `tap_oldest_queued_job_seconds` divided by
+  a configured seconds-of-backlog-per-replica, through a KEDA `ScaledObject`
+  by default (the PromQL then ships with the chart) or a plain HPA on an
+  external metric for clusters already serving one.
+- **Refuse the configurations that do not work**: scale-to-zero on a metric
+  the executor itself exports, a CPU HPA beside a VPA in `Auto`, a CPU target
+  with no CPU request, and a maximum replica count whose pools would exceed
+  `postgresql.tuning.max_connections`.
+- **Still to do**: per-identity quotas so one user cannot occupy every
+  executor a scaler adds, and `EXPLAIN`-based rejection of synchronous
+  queries too expensive to run at all — autoscaling answers "not enough
+  capacity", not "this query should never have been accepted".
+

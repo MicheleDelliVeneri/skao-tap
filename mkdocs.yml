@@ -36,4 +36,5 @@ nav:
   - Authentication: auth.md
   - VO Registry: registry.md
   - Observability: observability.md
+  - Autoscaling: autoscaling.md
   - Roadmap: roadmap.md
