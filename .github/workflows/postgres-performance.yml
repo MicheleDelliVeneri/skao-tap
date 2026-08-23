@@ -62,6 +62,7 @@ jobs:
           [[ "$PERF_SCALE_ROWS" =~ ^[1-9][0-9]*$ ]]
           [[ "$PERF_DURATION" =~ ^[1-9][0-9]*$ ]]
           [[ "$PERF_CLIENTS" =~ ^[1-9][0-9]*(\ [1-9][0-9]*)*$ ]]
+          mkdir -p performance-results
 
       - name: Start instrumented PostgreSQL
         run: |
@@ -82,17 +83,21 @@ jobs:
             docker logs --tail 200 tap-db-performance
             exit 1
           fi
+          docker cp db/init/. tap-db-performance:/tmp/init/
           docker cp tests/performance/postgres/. tap-db-performance:/tmp/performance/
 
       - name: Load synthetic sky catalogue
         run: |
+          docker exec tap-db-performance sh -c \
+            'for script in /tmp/init/*.sql; do
+               psql -U tap -d tap -v ON_ERROR_STOP=1 -f "$script" || exit 1
+             done'
           docker exec -i tap-db-performance psql \
             -U tap -d tap -v ON_ERROR_STOP=1 -v scale_rows="$PERF_SCALE_ROWS" \
             -f /tmp/performance/setup.sql
 
       - name: Run database-only concurrency sweep
         run: |
-          mkdir -p performance-results
           for clients in $PERF_CLIENTS; do
             jobs=$(( clients < 8 ? clients : 8 ))
             docker exec tap-db-performance psql -U tap -d tap \
@@ -153,6 +158,10 @@ jobs:
       - name: Record application flamegraph under load
         if: always()
         run: |
+          if [[ ! -x .venv/bin/py-spy ]]; then
+            echo "Profiler was not installed because an earlier step failed."
+            exit 0
+          fi
           .venv/bin/py-spy record \
             --output performance-results/tap-python-flamegraph.svg \
             --format flamegraph --rate 100 --subprocesses \
@@ -193,7 +202,7 @@ jobs:
       - name: Summarise likely bottlenecks
         if: always()
         run: |
-          .venv/bin/python tests/performance/analyse_results.py performance-results \
+          python3 tests/performance/analyse_results.py performance-results \
             > performance-results/bottleneck-summary.md
           cat performance-results/bottleneck-summary.md >> "$GITHUB_STEP_SUMMARY"
 
