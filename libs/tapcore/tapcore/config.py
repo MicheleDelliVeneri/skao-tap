@@ -63,6 +63,17 @@ class Settings:
     model_plugins: str = field(default_factory=lambda: os.getenv("TAP_MODEL_PLUGINS", "all"))
     log_level: str = field(default_factory=lambda: os.getenv("TAP_LOG_LEVEL", "INFO"))
 
+    # -- database connection pool ------------------------------------------
+    # The pool bounds how many queries a process can have in flight, so it is
+    # the service's real concurrency limit. Waiting for a connection is
+    # bounded too: a request that cannot get one should be told so, not left
+    # hanging while the client, and anything proxying for it, stack up behind.
+    db_pool_min: int = field(default_factory=lambda: int(os.getenv("TAP_DB_POOL_MIN", "1")))
+    db_pool_max: int = field(default_factory=lambda: int(os.getenv("TAP_DB_POOL_MAX", "8")))
+    db_pool_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("TAP_DB_POOL_TIMEOUT", "5"))
+    )
+
     # -- authentication and authorisation ----------------------------------
     # Off by default: a deployment without an IAM keeps working exactly as it
     # did, which is what local development and the demo notebook rely on.

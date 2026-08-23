@@ -27,6 +27,17 @@ class ServiceError(TAPError):
     http_status = 500
 
 
+class OverloadedError(TAPError):
+    """Every connection is busy and waiting for one timed out.
+
+    503 rather than 500: nothing is broken, the service is full. The
+    distinction matters to whatever is in front of it — a proxy or client can
+    retry a 503 and should not retry a 500.
+    """
+
+    http_status = 503
+
+
 class AuthenticationError(TAPError):
     """No usable credential: missing, malformed, expired or unverifiable token.
 

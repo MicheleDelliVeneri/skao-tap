@@ -38,6 +38,8 @@ Key values (see `values.yaml` for the full list):
 | `verticalAutoscaling.enabled` | `false` | VPA per service (recommendation mode first) |
 | `postgresql.tuning` | `{}` | postgresql.conf overrides as `-c` server arguments |
 | `backup.enabled` | `false` | Nightly `pg_dump` CronJob to a dedicated PVC |
+| `config.dbPoolMax` | `8` | Database connections per process — the real limit on concurrent queries |
+| `config.dbPoolTimeoutSeconds` | `5` | How long a request waits for one before answering `503` |
 | `tapApi.workers` | `1` | Uvicorn processes per pod; ADQL translation holds the GIL, so this is what lets a pod use more than one core |
 | `auth.enabled` | `false` | Require verified tokens and gate the mutating metadata endpoints ([guide](auth.md)) |
 | `auth.requireToken` | `true` | With `auth.enabled`, every request needs a verified token — discovery and the health check aside |
@@ -64,10 +66,35 @@ Set `tapApi.workers` to the pod's CPU limit and no higher: beyond that the
 workers compete for the same cores and only latency moves. `tapApi.replicas`
 does the same across pods, and the two combine.
 
-Mind the connections. Each worker opens its own pool of up to 8, so a pod can
-hold `workers × 8` and the deployment `workers × 8 × replicas`. Keep that
-under the server's `max_connections` — `postgresql.tuning.max_connections`
-raises it for the in-chart database, and a managed server has its own limit.
+### When every connection is busy
+
+The pool bounds how many queries a process runs at once, and it is smaller
+than the number of connections uvicorn accepts, so concurrency above it has
+to queue. Measured locally with one worker and the default pool of 8:
+
+| concurrent clients | throughput | p95 | errors |
+| ---: | ---: | ---: | ---: |
+| 8 | 66 req/s | 169 ms | 0 |
+| 12 | 66 req/s | 238 ms | 0 |
+| 16 | 66 req/s | 318 ms | 0 |
+
+Throughput holds flat and latency grows: requests wait their turn, which is
+what a queue should look like. Add `tapApi.workers` to raise the ceiling
+itself — four workers carried 233 req/s at 32 clients on the same machine.
+
+If the wait for a connection exceeds `config.dbPoolTimeoutSeconds` the request
+answers `503` with `Retry-After` rather than holding the caller. Five seconds
+is deliberately short: a synchronous query may run for up to
+`config.syncTimeoutSeconds`, so a queue of slow queries could otherwise leave
+a client waiting a minute for a connection that a fast, retryable refusal
+describes better.
+
+Mind the connections. Each worker opens its own pool, so a pod holds up to
+`tapApi.workers × config.dbPoolMax` connections, and the deployment holds that
+multiplied by `tapApi.replicas`. With the defaults that is `1 × 8 = 8` per pod.
+Keep the total under the server's `max_connections` —
+`postgresql.tuning.max_connections` raises it for the in-chart database, and a
+managed server has its own limit.
 
 !!! warning "Results volume access mode"
     The results volume is shared between the API and the executor. With more

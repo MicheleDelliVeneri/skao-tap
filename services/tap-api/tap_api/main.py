@@ -16,11 +16,12 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
-from starlette.concurrency import run_in_threadpool
+from psycopg_pool import PoolTimeout
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from tapcore.auth import invalid_token_challenge, verifier
 from tapcore.config import settings
 from tapcore.db import close_pool, pool
-from tapcore.errors import AuthenticationError, TAPError
+from tapcore.errors import AuthenticationError, OverloadedError, TAPError
 from tapcore.metadata import ingest
 from tapcore.metadata.plugins import active_plugins
 from tapcore.query.votable import error_votable
@@ -97,6 +98,24 @@ app.include_router(uws_router, prefix="/tap/async")
 app.include_router(json_router)
 
 VOTABLE_MIME = "application/x-votable+xml"
+
+
+@app.exception_handler(PoolTimeout)
+async def pool_timeout_handler(request: Request, exc: PoolTimeout):
+    """Every connection is busy: answer 503 rather than hanging or 500-ing.
+
+    The pool is the service's concurrency limit, and reaching it is a capacity
+    condition, not a fault. Retry-After lets a client or proxy back off instead
+    of retrying immediately into the same wall.
+    """
+    log.warning("connection pool exhausted serving %s", request.url.path)
+    overloaded = OverloadedError(
+        "all database connections are busy; retry shortly"
+        " (raise TAP_DB_POOL_MAX, or add API workers and replicas)"
+    )
+    response = await tap_error_handler(request, overloaded)
+    response.headers["Retry-After"] = "1"
+    return response
 
 
 @app.exception_handler(TAPError)
@@ -185,8 +204,12 @@ async def sync(request: Request):
     # the event loop it stalls every other request for that long, which is why
     # throughput stopped rising with concurrency
     prepared = await run_in_threadpool(prepare_query, params)
-    chunks, mime = run_sync(prepared, uploads)
-    return StreamingResponse(chunks, media_type=mime)
+    # run_sync takes a pool connection and produces the first chunk, and the
+    # iterator does blocking reads for the rest. On the event loop that means
+    # one slow query — or one wait for a busy pool — stalls every other
+    # request in this worker, including ones ready to send.
+    chunks, mime = await run_in_threadpool(run_sync, prepared, uploads)
+    return StreamingResponse(iterate_in_threadpool(chunks), media_type=mime)
 
 
 @app.get("/tap/examples")
