@@ -19,7 +19,10 @@ CREATE TABLE uws.jobs (
     error_message       text,
     result_mime         text,
     result_size         bigint,
-    backend_pid         integer                             -- executing backend, for ABORT
+    backend_pid         integer,                            -- executing backend, for ABORT
+    -- the API request that created the job, so its records, the executor's
+    -- and the SQL in pg_stat_activity all carry one id
+    request_id          text
 );
 
 CREATE INDEX jobs_phase_creation ON uws.jobs (phase, creation_time);

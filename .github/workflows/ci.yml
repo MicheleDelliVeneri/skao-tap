@@ -171,6 +171,19 @@ jobs:
           helm template skao-tap deploy/helm/skao-tap \
             --show-only templates/api-deployment.yaml \
             | grep -A2 'envFrom:' | grep -q 'configMapRef'
+      - name: Template with the metrics stack
+        run: |
+          # annotations on by default, so an existing Prometheus finds the pods
+          helm template skao-tap deploy/helm/skao-tap \
+            | grep -q 'prometheus.io/scrape: "true"'
+          # and the bundled Prometheus stays out unless asked for
+          helm template skao-tap deploy/helm/skao-tap \
+            | grep -q 'kind: Role' && { echo "::error::bundled Prometheus rendered by default"; exit 1; }
+          helm template skao-tap deploy/helm/skao-tap --set prometheus.enabled=true \
+            | grep -q 'name: skao-tap-prometheus'
+          helm template skao-tap deploy/helm/skao-tap \
+            --set tracing.otlpEndpoint=http://collector:4317 \
+            | grep -q 'OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4317"'
       - name: Template with authentication enabled
         run: |
           helm template skao-tap deploy/helm/skao-tap \

@@ -6,8 +6,9 @@ import time
 from collections.abc import Iterator
 
 from tapcore.config import settings
-from tapcore.db import pool
+from tapcore.db import connection as db_connection
 from tapcore.errors import UsageError
+from tapcore.observability import QUERY_DURATION, tag_sql
 from tapcore.query.adql import apply_maxrec, check_language, translate
 from tapcore.query.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
 from tapcore.query.upload import (
@@ -137,7 +138,7 @@ def _published_tables(*, refresh: bool = False) -> frozenset[str]:
             )
             if fresh_enough:
                 return cached[1]
-        with pool().connection() as conn:
+        with db_connection() as conn:
             rows = conn.execute("SELECT table_name FROM tap_schema.tables").fetchall()
         tables = frozenset(r[0].lower() for r in rows)
         _published_cache = (time.monotonic(), tables)
@@ -158,7 +159,10 @@ def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[byt
     sql = apply_maxrec(prepared["sql"], prepared["maxrec"])
     if uploads:
         sql = rewrite_upload_refs(sql, {u.name for u in uploads})
-    with pool().connection() as conn, conn.transaction():
+    # tagged with the request id: a statement in pg_stat_activity, or in the
+    # server log, then names the request it came from
+    sql = tag_sql(sql)
+    with db_connection() as conn, conn.transaction():
         tap_meta = tap_schema_metadata(conn, prepared["tables"])
         if uploads:
             create_upload_tables(conn, uploads, settings.query_role)
@@ -185,6 +189,22 @@ def run_sync(
     still surface as proper DALI/JSON error responses instead of dying
     mid-stream.
     """
+    started = time.perf_counter()
     chunks = _result_chunks(prepared, uploads or [])
     first = next(chunks, b"")
-    return itertools.chain([first], chunks), prepared["mime"]
+    return _timed(itertools.chain([first], chunks), started), prepared["mime"]
+
+
+def _timed(chunks: Iterator[bytes], started: float) -> Iterator[bytes]:
+    """Record the query's duration when its stream ends.
+
+    Observed at the end, not after the first chunk: the metric says "to the
+    last row", and stopping at the first would have made it time-to-first-byte
+    and under-reported exactly the long streams worth knowing about. Recorded
+    in a finally, so a client that disconnects halfway is still measured
+    rather than silently dropped.
+    """
+    try:
+        yield from chunks
+    finally:
+        QUERY_DURATION.labels(kind="sync").observe(time.perf_counter() - started)

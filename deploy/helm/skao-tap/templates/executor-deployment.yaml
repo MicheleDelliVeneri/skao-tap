@@ -13,6 +13,11 @@ spec:
       app.kubernetes.io/component: tap-executor
   template:
     metadata:
+      annotations:
+        # the executor has no Service, so annotations are how it is found; a deployment's own Prometheus discovers pods by these
+        prometheus.io/scrape: {{ .Values.metrics.scrapeAnnotations | quote }}
+        prometheus.io/path: /metrics
+        prometheus.io/port: "{{ .Values.config.executorMetricsPort }}"
       labels:
         {{- include "skao-tap.labels" . | nindent 8 }}
         app.kubernetes.io/component: tap-executor

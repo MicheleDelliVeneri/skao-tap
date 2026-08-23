@@ -10,7 +10,7 @@ at all.
 from xml.sax.saxutils import escape, quoteattr
 
 from tapcore.config import settings
-from tapcore.db import pool
+from tapcore.db import connection as db_connection
 from tapcore.errors import NotFoundError, ServiceError
 
 
@@ -18,7 +18,7 @@ def availability_xml() -> str:
     available = "true"
     note = "service is accepting queries"
     try:
-        with pool().connection() as conn:
+        with db_connection() as conn:
             conn.execute("SELECT 1")
     except Exception as exc:  # pragma: no cover
         available = "false"
@@ -221,7 +221,7 @@ def voresource_xml() -> str:
 
 
 def tables_xml() -> str:
-    with pool().connection() as conn:
+    with db_connection() as conn:
         schemas = conn.execute(
             "SELECT schema_name, description FROM tap_schema.schemas ORDER BY schema_index"
         ).fetchall()

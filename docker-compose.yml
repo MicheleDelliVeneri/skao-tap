@@ -45,12 +45,31 @@ services:
       TAP_DATABASE_URL: postgresql://tap:tap@db:5432/tap
       TAP_BASE_URL: http://localhost:8080/tap
       TAP_RESULTS_DIR: /results
+    expose:
+      - "9100"
     volumes:
       - results:/results
     depends_on:
       db:
         condition: service_healthy
 
+  # A Prometheus for local work, so the metrics can be looked at without a
+  # cluster. Production scrapes the same endpoints from its own instance.
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=24h
+    volumes:
+      - ./etc/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - tap-api
+      - tap-executor
+
 volumes:
   pgdata:
   results:
+  promdata:

@@ -7,6 +7,8 @@ the second one unnecessary, and the caching that stopped the table list being
 re-read on every request.
 """
 
+import contextlib
+
 import pytest
 from tap_api.queries import query as query_module
 from tapcore.errors import UsageError
@@ -83,7 +85,7 @@ def counting_pool(monkeypatch, fake_db):
     """Count how many times the published-table query reaches the database."""
     query_module.forget_published_tables()
     calls = {"n": 0}
-    original = query_module.pool
+    original = query_module.db_connection
 
     class CountingConnection:
         def __init__(self, inner):
@@ -97,18 +99,12 @@ def counting_pool(monkeypatch, fake_db):
         def __getattr__(self, name):
             return getattr(self._inner, name)
 
-    class CountingPool:
-        def connection(self):
-            import contextlib
+    @contextlib.contextmanager
+    def counting():
+        with original() as conn:
+            yield CountingConnection(conn)
 
-            @contextlib.contextmanager
-            def wrapped():
-                with original().connection() as conn:
-                    yield CountingConnection(conn)
-
-            return wrapped()
-
-    monkeypatch.setattr(query_module, "pool", CountingPool)
+    monkeypatch.setattr(query_module, "db_connection", counting)
     yield calls
     query_module.forget_published_tables()
 
