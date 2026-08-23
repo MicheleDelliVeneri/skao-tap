@@ -25,6 +25,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
+          cache-suffix: lint
       - run: uv sync --locked --all-groups
       - run: uv run ruff check --output-format github .
       - run: uv run ruff format --check .
@@ -40,6 +41,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
+          cache-suffix: unit
       - run: uv sync --locked --all-groups
       - run: uv run pytest tests/unit -v --cov --cov-report=xml
       - name: Upload coverage to Codecov
@@ -63,6 +65,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
+          cache-suffix: component
       # Run the database from the image the project ships, so the component
       # tests and the deployed tap-db can never drift apart on the server
       # major or the pgsphere build. Only the psql client comes from apt (the
@@ -119,6 +122,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
+          cache-suffix: docs
       - run: uv sync --locked --group docs
       - run: uv run --group docs mkdocs build --strict
 
