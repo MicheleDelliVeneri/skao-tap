@@ -57,6 +57,11 @@ INSERT INTO tap_schema.columns (
     table_name, column_name, datatype, description, unit, ucd,
     indexed, principal, column_index
 )
+-- `indexed` describes the indexes this script actually creates: the primary
+-- key on source_id, and nothing on flux since dropping the btree nothing
+-- queried. ra and dec are covered only through the
+-- spoint(radians(ra), radians(dec)) expression index, which no plain
+-- predicate on either column can use, so neither claims to be indexed.
 VALUES
     ('perf.sources', 'source_id', 'long', 'Synthetic source identifier', NULL,
      'meta.id;meta.main', 1, 1, 1),
@@ -65,6 +70,6 @@ VALUES
     ('perf.sources', 'dec', 'double', 'ICRS declination', 'deg',
      'pos.eq.dec;meta.main', 0, 1, 3),
     ('perf.sources', 'flux', 'double', 'Synthetic integrated flux', 'mJy',
-     'phot.flux.density', 1, 0, 4);
+     'phot.flux.density', 0, 0, 4);
 
 SELECT count(*) AS loaded_rows FROM perf.sources;
