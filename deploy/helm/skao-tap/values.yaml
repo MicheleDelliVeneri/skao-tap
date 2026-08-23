@@ -99,9 +99,14 @@ backup:
 #
 # Disabled by default: a deployment with no IAM behaves exactly as it did
 # before auth existed, which is what local development, the demo notebook and
-# the component tests rely on. Enabling it gates the mutating metadata
-# endpoints; querying (including POST /tap/sync, which is how VO clients send
-# ADQL) stays anonymous so standard tooling keeps working.
+# the component tests rely on.
+#
+# Enabling it does two things. Mutating the metadata endpoints needs a token
+# the plugin approves (see `roles` and `gatedOperations`), and every other
+# request needs a verified token as well — service discovery and the health
+# check aside. That second part includes querying: POST /tap/sync is how VO
+# clients send ADQL, and they carry no token, so a deployment that wants to
+# serve them sets `anonymousQueries: true` below.
 #
 # Whatever the plugin, bearer tokens are always verified by this service
 # against the IAM's JWKS before any authorisation decision is taken.
