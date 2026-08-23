@@ -78,7 +78,8 @@ explicitly rather than defaulted. No token-exchange step is involved.
 
 | Requests | Token | Why |
 | --- | --- | --- |
-| `/tap/availability` | no | a Kubernetes probe cannot hold one |
+| `/health/live`, `/health/ready` | no | a kubelet has no token; gating these would fail every probe and Kubernetes would kill the pods |
+| `/tap/availability` | no | the VOSI resource, reachable before a client has a token |
 | `/tap/capabilities`, `/tap/tables`, `/tap/registry`, `/tap/examples` | no | a registry harvester or a VO client browsing for services cannot hold one |
 | `/api/v1/auth`, `/openapi.json`, `/docs` | no | this is where a client works out how to authenticate |
 | `GET /tap/sync?REQUEST=getCapabilities` | no | TAP 1.0 capability discovery: the handler redirects it to the open `/capabilities`, so a token would guard nothing |

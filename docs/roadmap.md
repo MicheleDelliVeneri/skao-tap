@@ -50,6 +50,25 @@ A running log of what the benchmark suite
 established, newest first. Each entry is a measurement rather than an opinion,
 so it can be checked and it can go stale — the run that produced it is named.
 
+### 2026-08-23 — the liveness probe turned overload into an outage (fixed)
+
+Both Kubernetes probes pointed at `/tap/availability`, which reports on the
+database and therefore queues for a pooled connection. Neither probe set
+`timeoutSeconds`, so both used the one-second default. Under an offered rate
+*inside* the service's own measured capacity the pool saturated, the endpoint
+could not answer in a second, and the kubelet **SIGKILLed the API twice** —
+restarting a process that was busy rather than broken, dropping every in-flight
+request, and making the overload worse on each restart. Readiness had the same
+dependency, so a loaded pod also left the Service and pushed its share onto
+pods in the same state.
+
+Fixed by asking the two questions separately, since their remedies differ:
+`/health/live` touches nothing outside the process (a wedged process is what a
+restart fixes), and `/health/ready` distinguishes a full pool — still ready,
+because that is a healthy service under load — from an unreachable database.
+Both are exempt from authentication, because a kubelet has no token and gating
+them would have meant that enabling auth killed every pod.
+
 ### 2026-08-23 — the I/O-bound regime is still unmeasured
 
 At both sizes measured so far the buffer cache hit ratio is **100.000%** with

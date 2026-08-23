@@ -87,7 +87,11 @@ class FakePool:
         self._db = db
 
     @contextlib.contextmanager
-    def connection(self):
+    def connection(self, timeout: float | None = None):
+        # Mirrors psycopg_pool's signature: the readiness probe asks for a
+        # connection with its own short timeout, and a fake that refuses the
+        # argument would make that path look broken when it is not.
+        del timeout
         yield FakeConnection(self._db)
 
     def close(self):
