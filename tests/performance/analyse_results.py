@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import itertools
 import json
 import re
 from pathlib import Path
@@ -47,7 +48,7 @@ def main() -> int:
         )
 
     findings = []
-    for previous, current in zip(reports, reports[1:], strict=False):
+    for previous, current in itertools.pairwise(reports):
         throughput_growth = current["requests_per_second"] / max(
             previous["requests_per_second"], 0.000001
         )

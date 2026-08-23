@@ -14,21 +14,24 @@ import httpx
 
 WORKLOAD = (
     ("metadata", "SELECT TOP 100 table_name FROM tap_schema.tables"),
-    ("point", "SELECT source_id, ra, dec, flux FROM perf.catalog WHERE source_id = {source_id}"),
+    ("point", "SELECT source_id, ra, dec, flux FROM perf.sources WHERE source_id = {source_id}"),
     (
         "cone",
-        "SELECT TOP 100 source_id, ra, dec, flux FROM perf.catalog "
+        "SELECT TOP 100 source_id, ra, dec, flux FROM perf.sources "
         "WHERE 1=CONTAINS(POINT('ICRS', ra, dec), "
         "CIRCLE('ICRS', {ra}, {dec}, 0.5))",
     ),
-    ("stream", "SELECT TOP 1000 source_id, ra, dec, flux FROM perf.catalog"),
+    ("stream", "SELECT TOP 1000 source_id, ra, dec, flux FROM perf.sources"),
 )
 WEIGHTS = (1, 6, 2, 1)
 
 
 def _percentile(values: list[float], percentile: float) -> float:
+    # 0.0, not NaN: the report is written with allow_nan=False, so a workload
+    # that recorded nothing would raise instead of reporting. The sibling
+    # "requests" count is what says the bucket was empty.
     if not values:
-        return math.nan
+        return 0.0
     index = min(len(values) - 1, math.ceil(percentile * len(values)) - 1)
     return sorted(values)[index]
 
@@ -128,7 +131,7 @@ def main() -> int:
         "error_rate": (len(samples) - successful) / len(samples) if samples else 1.0,
         "requests_per_second": successful / elapsed,
         "latency": {
-            "mean_seconds": statistics.fmean(latencies) if latencies else math.nan,
+            "mean_seconds": statistics.fmean(latencies) if latencies else 0.0,
             "p50_seconds": _percentile(latencies, 0.50),
             "p95_seconds": _percentile(latencies, 0.95),
             "p99_seconds": _percentile(latencies, 0.99),

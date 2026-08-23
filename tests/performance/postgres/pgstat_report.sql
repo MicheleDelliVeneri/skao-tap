@@ -14,5 +14,5 @@ SELECT
     shared_blk_write_time,
     query
 FROM pg_stat_statements
-WHERE query ILIKE '%perf.catalog%'
+WHERE query ILIKE '%perf.sources%'
 ORDER BY total_exec_time DESC;

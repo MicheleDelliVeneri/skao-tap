@@ -2,8 +2,11 @@
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 CREATE SCHEMA IF NOT EXISTS perf;
 
-DROP TABLE IF EXISTS perf.catalog;
-CREATE TABLE perf.catalog (
+-- Not perf.catalog: CATALOG is reserved in the ADQL grammar, so every query
+-- naming it fails to parse before it reaches the publication check, and the
+-- HTTP workloads all error out.
+DROP TABLE IF EXISTS perf.sources;
+CREATE TABLE perf.sources (
     source_id bigint PRIMARY KEY,
     ra double precision NOT NULL,
     dec double precision NOT NULL,
@@ -11,7 +14,7 @@ CREATE TABLE perf.catalog (
     position spoint NOT NULL
 );
 
-INSERT INTO perf.catalog (source_id, ra, dec, flux, position)
+INSERT INTO perf.sources (source_id, ra, dec, flux, position)
 SELECT
     id,
     mod(id * 137, 360)::double precision
@@ -27,13 +30,15 @@ SELECT
     )
 FROM generate_series(1, :scale_rows) AS series(id);
 
-CREATE INDEX perf_catalog_position_gist ON perf.catalog USING gist (position);
-CREATE INDEX perf_catalog_radec_gist ON perf.catalog
+-- The cone workload filters on spoint(radians(ra), radians(dec)), so this
+-- expression index is the one that serves it; an index on the position column
+-- would only add build time and storage to every run.
+CREATE INDEX perf_sources_radec_gist ON perf.sources
 USING gist (spoint(radians(ra), radians(dec)));
-CREATE INDEX perf_catalog_flux_btree ON perf.catalog (flux);
-ANALYZE perf.catalog;
+CREATE INDEX perf_sources_flux_btree ON perf.sources (flux);
+ANALYZE perf.sources;
 GRANT USAGE ON SCHEMA perf TO tap_reader;
-GRANT SELECT ON perf.catalog TO tap_reader;
+GRANT SELECT ON perf.sources TO tap_reader;
 
 INSERT INTO tap_schema.schemas (schema_name, description, schema_index)
 VALUES ('perf', 'Synthetic performance-test catalogue', 900)
@@ -43,23 +48,23 @@ INSERT INTO tap_schema.tables (
     schema_name, table_name, table_type, description, table_index
 )
 VALUES (
-    'perf', 'perf.catalog', 'table', 'Synthetic performance-test catalogue', 900
+    'perf', 'perf.sources', 'table', 'Synthetic performance-test catalogue', 900
 )
 ON CONFLICT (table_name) DO UPDATE SET description = EXCLUDED.description;
 
-DELETE FROM tap_schema.columns WHERE table_name = 'perf.catalog';
+DELETE FROM tap_schema.columns WHERE table_name = 'perf.sources';
 INSERT INTO tap_schema.columns (
     table_name, column_name, datatype, description, unit, ucd,
     indexed, principal, column_index
 )
 VALUES
-    ('perf.catalog', 'source_id', 'long', 'Synthetic source identifier', NULL,
+    ('perf.sources', 'source_id', 'long', 'Synthetic source identifier', NULL,
      'meta.id;meta.main', 1, 1, 1),
-    ('perf.catalog', 'ra', 'double', 'ICRS right ascension', 'deg',
+    ('perf.sources', 'ra', 'double', 'ICRS right ascension', 'deg',
      'pos.eq.ra;meta.main', 0, 1, 2),
-    ('perf.catalog', 'dec', 'double', 'ICRS declination', 'deg',
+    ('perf.sources', 'dec', 'double', 'ICRS declination', 'deg',
      'pos.eq.dec;meta.main', 0, 1, 3),
-    ('perf.catalog', 'flux', 'double', 'Synthetic integrated flux', 'mJy',
+    ('perf.sources', 'flux', 'double', 'Synthetic integrated flux', 'mJy',
      'phot.flux.density', 1, 0, 4);
 
-SELECT count(*) AS loaded_rows FROM perf.catalog;
+SELECT count(*) AS loaded_rows FROM perf.sources;

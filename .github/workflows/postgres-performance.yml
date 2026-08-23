@@ -98,6 +98,9 @@ jobs:
 
       - name: Run database-only concurrency sweep
         run: |
+          # pgbench is piped into tee, and without pipefail the step reports
+          # tee's success while pgbench failed, leaving misleading artifacts
+          set -o pipefail
           for clients in $PERF_CLIENTS; do
             jobs=$(( clients < 8 ? clients : 8 ))
             docker exec tap-db-performance psql -U tap -d tap \
@@ -130,6 +133,9 @@ jobs:
             > performance-results/tap-api.log 2>&1 &
           api_pid=$!
           echo "$api_pid" > performance-results/tap-api.pid
+          # every path out of this step, not just the happy one: a leaked
+          # uvicorn holds port 8000 and breaks the profiling step that follows
+          trap 'kill "$api_pid" 2>/dev/null || true; wait "$api_pid" 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
             curl --fail --silent "$TAP_BASE_URL/availability" >/dev/null && break
             sleep 1
@@ -151,8 +157,6 @@ jobs:
               -f /tmp/performance/pgstat_report.sql \
               > "performance-results/pgstat-tap-c${clients}.csv"
           done
-          kill "$api_pid"
-          wait "$api_pid" || true
           exit "$overall"
 
       - name: Record application flamegraph under load
