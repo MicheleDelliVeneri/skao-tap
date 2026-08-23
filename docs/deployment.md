@@ -89,10 +89,12 @@ is deliberately short: a synchronous query may run for up to
 a client waiting a minute for a connection that a fast, retryable refusal
 describes better.
 
-Mind the connections. Each worker opens its own pool of up to `dbPoolMax`, so a pod can
-hold `workers × 8` and the deployment `workers × 8 × replicas`. Keep that
-under the server's `max_connections` — `postgresql.tuning.max_connections`
-raises it for the in-chart database, and a managed server has its own limit.
+Mind the connections. Each worker opens its own pool, so a pod holds up to
+`tapApi.workers × config.dbPoolMax` connections, and the deployment holds that
+multiplied by `tapApi.replicas`. With the defaults that is `1 × 8 = 8` per pod.
+Keep the total under the server's `max_connections` —
+`postgresql.tuning.max_connections` raises it for the in-chart database, and a
+managed server has its own limit.
 
 !!! warning "Results volume access mode"
     The results volume is shared between the API and the executor. With more

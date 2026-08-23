@@ -16,9 +16,9 @@ tapApi:
   #
   # Set it to the pod's CPU limit, no higher: past that the workers compete
   # for the same cores and only latency changes. Each worker opens its own
-  # connection pool of up to 8, so a pod's connection ceiling is
-  # `workers x 8`, and the cluster's is that times `replicas` — keep the
-  # total under the server's max_connections (see postgresql.tuning).
+  # connection pool, so a pod's ceiling is `workers x config.dbPoolMax`, and
+  # the deployment's is that multiplied by `replicas` — keep the total under
+  # the server's max_connections (see postgresql.tuning).
   #
   # Scaling out with `replicas` does the same thing across pods, and both can
   # be used together.
@@ -287,9 +287,10 @@ voRegistry:
 config:
   # -- Database connections per API or executor process. This is the real
   # concurrency limit: a process with `dbPoolMax: 8` serves 8 queries at once
-  # and the ninth waits. A pod holds `dbPoolMax x tapApi.workers`, and the
-  # deployment that times `replicas` — keep the total under the server's
-  # max_connections (see postgresql.tuning).
+  # and the ninth waits for one to finish. A pod holds
+  # `dbPoolMax x tapApi.workers`, and the deployment holds that multiplied by
+  # `tapApi.replicas` — keep the total under the server's max_connections
+  # (see postgresql.tuning).
   dbPoolMin: 1
   dbPoolMax: 8
   # -- How long a request waits for a free connection before being told the
