@@ -69,15 +69,52 @@ because that is a healthy service under load — from an unreachable database.
 Both are exempt from authentication, because a kubelet has no token and gating
 them would have meant that enabling auth killed every pod.
 
-### 2026-08-23 — the I/O-bound regime is still unmeasured
+### 2026-08-24 — D3 is where the working set stops fitting
 
-At both sizes measured so far the buffer cache hit ratio is **100.000%** with
-**zero blocks read from disk**: D1 and D2 fit entirely in `shared_buffers` plus
-the page cache. Every conclusion below about size therefore describes an
-in-memory database, and the point where the working set stops fitting — which
-is what `DATABASE_IO_BOUND` exists to catch — has not been reached. D3 (25 GiB)
-and D4 (45 GiB) against a 6 GiB PostgreSQL are where that changes, and until
-they run the suite has said nothing about I/O.
+D3 (25.28 GiB, 7.4M ObsCore rows) against a 6 GiB PostgreSQL is the first size
+that touches the disk in earnest. Per 180-second measurement window, on client
+backends only:
+
+| | buffer hit ratio | blocks read | read wait |
+| --- | --- | --- | --- |
+| D1 (2 GiB), warm | 100.00% | 0 | 0 s |
+| D2 (10 GiB), warm | 100.00% | 0–7 | 0 s |
+| **D3 (25 GiB)** | **68–70%** | **1.6–2.2M** | **14–52 s** |
+
+Throughput at one client falls from 145 requests/s on D2 to 115–142 on D3 —
+less than a 70% hit ratio might suggest, because the reads are NVMe-fast and a
+single client cannot queue behind itself. What this regime costs under
+concurrency is the question the rest of the D3 sweep answers.
+
+The first repetition at each size is measurably colder than the rest (D1's
+first window read 280 MiB, D2's first read 1,091 MiB, and both were at 100%
+thereafter), so the 60-second warmup does not fully warm a working set of this
+size. Worth widening the warmup for the larger datasets rather than reading the
+first repetition as a result.
+
+### 2026-08-24 — the database summary was reading the wrong row (fixed)
+
+`pg_stat_database` carries one row per database *plus* a shared-objects row
+whose `datname` is NULL, and that row sorts first. The summary took the first
+row, so every cache hit ratio and block-read figure the suite produced —
+including the ones already published — described an empty accounting entry with
+a few hundred block accesses rather than the workload. The bottleneck classifier
+was fed the same row, which is why an I/O-bound D3 measurement classified as
+`UNKNOWN`.
+
+Fixed by selecting the row by database name, recorded in the snapshot. The
+`pg_stat_io` figures the summary reports are now client-backend only as well:
+after a bulk load the checkpointer and autovacuum dwarf the query workload, and
+counting them attributed generation I/O to the measurement that followed it.
+
+Two things follow. The conclusion that D1 and D2 fit in memory *survives* —
+re-derived from the stored deltas, they really are 100% with zero reads — but
+it was not evidence when it was written, because the number quoted came from a
+row that reads 100% whatever the workload does. And a `reclassify` command now
+re-derives a finished run's database summary and bottleneck verdicts from its
+stored artefacts, so an analysis mistake can be corrected without re-measuring:
+run against the published D1+D2 results, nothing changed, which is what
+confirms those conclusions rather than assuming them.
 
 ### 2026-08-23 — a full aggregate scales with the table, as it must
 

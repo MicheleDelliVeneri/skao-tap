@@ -663,3 +663,94 @@ def capture_plans(run, cfg: dict, entries: list) -> dict:
         forward.terminate()
     tally = pg_mod.write_plans(plans, run.explain_dir)
     return tally
+
+
+def reclassify(run_dir, cfg: dict) -> dict:
+    """Recompute the derived analysis of a finished run from its artefacts.
+
+    Every measurement keeps its PostgreSQL snapshots, its deltas and its
+    Prometheus series, precisely so that a mistake in the analysis can be
+    corrected without re-measuring anything. This is that path: it re-derives
+    the database summary and the bottleneck classification and leaves the
+    measurements — samples, percentiles, timings — untouched.
+
+    The previous summary is kept beside the new one rather than replaced. A run
+    directory is append-only by design, and "the analysis changed" is exactly
+    the kind of thing a reader needs to be able to see.
+    """
+    import json
+    import pathlib
+    import shutil
+    import time as _time
+
+    import pyarrow.parquet as pq
+
+    run_dir = pathlib.Path(run_dir)
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    shutil.copy2(summary_path, run_dir / f"summary.superseded-{int(_time.time())}.json")
+
+    limits_map = limits(cfg)
+    changed = []
+    for entry in summary.get("runs", []):
+        key = entry["key"]
+        delta_path = run_dir / "postgres" / f"{key}-delta.json"
+        metrics_path = run_dir / "metrics" / f"{key}.parquet"
+        if not delta_path.exists():
+            continue
+        pg_summary = pg_mod.summarise(json.loads(delta_path.read_text()))
+        metrics_rows = []
+        if metrics_path.exists():
+            table = pq.read_table(metrics_path).to_pydict()
+            metrics_rows = [
+                {"metric": m, "labels": lab, "t": t, "value": v}
+                for m, lab, t, v in zip(
+                    table["metric"],
+                    table["labels"],
+                    table["t"],
+                    table["value"],
+                    strict=True,
+                )
+            ]
+        api_limit = limits_map["tap_api_cpu_limit_cores"] * max(entry.get("replicas") or 1, 1)
+        verdicts = bottleneck.classify(
+            metrics_rows=metrics_rows,
+            summary=entry.get("http") or {},
+            pg_summary=pg_summary,
+            recorder_cpu_peak=entry.get("generator_cpu_peak") or 0.0,
+            limits={**limits_map, "tap_api_cpu_limit_cores": api_limit},
+        )
+        was = (entry.get("bottleneck") or [{}])[0].get("classification")
+        entry["postgres"] = pg_summary
+        entry["bottleneck"] = [
+            {
+                "classification": v.classification,
+                "confidence": v.confidence,
+                "evidence": v.evidence,
+                "explanation": v.explanation,
+            }
+            for v in verdicts
+        ]
+        now = verdicts[0].classification if verdicts else None
+        if was != now:
+            changed.append((key, was, now))
+
+    tally: dict[str, dict] = {}
+    for entry in summary.get("runs", []):
+        for verdict in entry.get("bottleneck") or []:
+            slot = tally.setdefault(
+                verdict["classification"],
+                {"count": 0, "explanation": verdict["explanation"]},
+            )
+            slot["count"] += 1
+    summary["bottleneck_tally"] = tally
+    summary["reanalysed_at"] = _time.time()
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True, default=str, allow_nan=False)
+    )
+    for key, was, now in changed:
+        log.info("reclassified %s: %s -> %s", key, was, now)
+    log.info(
+        "%d of %d measurements changed classification", len(changed), len(summary.get("runs", []))
+    )
+    return summary

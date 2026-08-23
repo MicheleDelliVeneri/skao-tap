@@ -78,7 +78,14 @@ def reset_statements(conn) -> None:
 
 def snapshot(conn) -> dict:
     """Every statistics view, as rows of plain dicts."""
-    out: dict[str, typing.Any] = {"captured_at": time.time()}
+    out: dict[str, typing.Any] = {
+        "captured_at": time.time(),
+        # Recorded so the summary can find its own row in pg_stat_database.
+        # That view has one row per database plus a shared-objects row whose
+        # datname is NULL, and the NULL row sorts first — so "the first row"
+        # is an empty accounting entry, not this database.
+        "database": conn.execute("SELECT current_database()").fetchone()[0],
+    }
     for view, _ in VIEWS.items():
         try:
             with conn.cursor() as cur:
@@ -178,7 +185,7 @@ def write_statements_csv(rows: list[dict], path) -> None:
 
 def delta(before: dict, after: dict) -> dict:
     """After minus before, per view, per key, for every numeric column."""
-    result: dict[str, list[dict]] = {}
+    result: dict[str, list[dict]] = {"database": after.get("database")}
     for view, keys in VIEWS.items():
         index = {tuple(str(row.get(k)) for k in keys): row for row in before.get(view, [])}
         rows = []
@@ -197,12 +204,28 @@ def delta(before: dict, after: dict) -> dict:
 
 
 def summarise(delta_rows: dict) -> dict:
-    """The handful of database numbers the report leads with."""
-    database = next(iter(delta_rows.get("pg_stat_database", [])), {})
+    """The handful of database numbers the report leads with.
+
+    The pg_stat_database row is selected by name. Taking the first row instead
+    silently reported the shared-objects entry — datname NULL, a few hundred
+    block accesses — as the workload's cache hit ratio and block reads, which
+    made an I/O-bound run look like a perfect 100% hit rate.
+    """
+    name = delta_rows.get("database")
+    rows = [r for r in delta_rows.get("pg_stat_database", []) if r.get("datname")]
+    database = next((r for r in rows if r.get("datname") == name), None)
+    if database is None:
+        # No name recorded (an older run) or no matching row: the busiest named
+        # database is a better guess than the first one, and is still wrong
+        # loudly rather than quietly.
+        database = max(
+            rows, key=lambda r: (r.get("blks_hit") or 0) + (r.get("blks_read") or 0), default={}
+        )
     hit = database.get("blks_hit") or 0
     read = database.get("blks_read") or 0
     tables = delta_rows.get("pg_stat_user_tables", [])
     io_rows = delta_rows.get("pg_stat_io", [])
+    client_io = [r for r in io_rows if r.get("backend_type") == "client backend"]
     return {
         "transactions_committed": database.get("xact_commit"),
         "transactions_rolled_back": database.get("xact_rollback"),
@@ -219,10 +242,15 @@ def summarise(delta_rows: dict) -> dict:
         "sequential_scans": sum(t.get("seq_scan") or 0 for t in tables),
         "sequential_tuples_read": sum(t.get("seq_tup_read") or 0 for t in tables),
         "index_scans": sum(t.get("idx_scan") or 0 for t in tables),
-        "io_read_bytes": sum((r.get("reads") or 0) * 8192 for r in io_rows),
-        "io_write_bytes": sum((r.get("writes") or 0) * 8192 for r in io_rows),
-        "io_read_time_ms": sum(r.get("read_time") or 0 for r in io_rows),
-        "io_write_time_ms": sum(r.get("write_time") or 0 for r in io_rows),
+        # Client backends only. pg_stat_io also counts the checkpointer,
+        # background writer and autovacuum, and after a bulk load those dwarf
+        # the query workload — which would attribute generation I/O to the
+        # measurement that followed it.
+        "io_read_bytes": sum((r.get("reads") or 0) * 8192 for r in client_io),
+        "io_write_bytes": sum((r.get("writes") or 0) * 8192 for r in client_io),
+        "io_read_time_ms": sum(r.get("read_time") or 0 for r in client_io),
+        "io_write_time_ms": sum(r.get("write_time") or 0 for r in client_io),
+        "io_read_bytes_all_backends": sum((r.get("reads") or 0) * 8192 for r in io_rows),
     }
 
 

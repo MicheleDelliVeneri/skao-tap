@@ -338,6 +338,20 @@ def cmd_publish(args) -> int:
     return 0
 
 
+def cmd_reclassify(args) -> int:
+    """Re-derive a finished run's analysis from its stored artefacts."""
+    path = runs_mod.resolve(args.run_dir)
+    if not path:
+        print("no run directory found", file=sys.stderr)
+        return 2
+    summary = runner.reclassify(path, runner.load_config())
+    plotter = report_mod.Plotter(path, summary)
+    figures = plotter.draw_all()
+    html_mod.write_csv(summary, path / "summary.csv")
+    print(html_mod.render(path, summary, figures))
+    return 0
+
+
 def cmd_setup(args) -> int:
     runner.setup(runner.load_config(), rebuild_images=not args.no_build)
     return 0
@@ -386,6 +400,12 @@ def main(argv: list[str] | None = None) -> int:
         "publish", help="copy a run's graphs and numbers into the docs site"
     )
     sub.set_defaults(handler=cmd_publish)
+    sub.add_argument("run_dir", nargs="?")
+    sub = subparsers.add_parser(
+        "reclassify",
+        help="re-derive a finished run's database summary and bottleneck verdicts",
+    )
+    sub.set_defaults(handler=cmd_reclassify)
     sub.add_argument("run_dir", nargs="?")
     sub = subparsers.add_parser("setup", help="cluster, KEDA, monitoring, chart")
     sub.set_defaults(handler=cmd_setup)
