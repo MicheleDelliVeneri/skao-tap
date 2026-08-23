@@ -166,7 +166,7 @@ def deployed_image_tag() -> str | None:
         return None
 
 
-def verify_running_images(expected_tag: str) -> None:
+def verify_running_images(expected_tag: str, timeout_s: float = 180.0) -> None:
     """Refuse to measure pods that are not running the images just built.
 
     The check is on the pod spec rather than on an image id, because kind
@@ -174,24 +174,35 @@ def verify_running_images(expected_tag: str) -> None:
     one docker built, so comparing those would look like a check and verify
     nothing.
 
-    Parsed from JSON rather than assembled with a jsonpath expression: the
-    quoting needed to get a newline into a jsonpath template is exactly the
-    kind of detail that turns a guard into a crash.
+    Waits rather than sampling once. A rolling update leaves the previous pod
+    present and Terminating for a few seconds after the new one is Ready, and a
+    guard that fails on that is a guard that fails on every successful
+    deployment. Terminating pods are skipped and the rest are re-checked until
+    they agree or the deadline passes — so the guard is strict about the end
+    state and patient about how it is reached.
     """
-    payload = json.loads(
-        kubectl("get", "pods", "-l", f"app.kubernetes.io/instance={RELEASE}", "-o", "json")
-    )
-    wrong = []
-    for item in payload.get("items", []):
-        for container in item["spec"]["containers"]:
-            if expected_tag not in container["image"]:
-                wrong.append(f"{item['metadata']['name']}: {container['image']}")
-    if wrong:
-        raise RuntimeError(
-            "these pods are not running the images this run built "
-            f"(expected tag {expected_tag}):\n  " + "\n  ".join(wrong)
+    deadline = time.monotonic() + timeout_s
+    wrong: list[str] = []
+    while time.monotonic() < deadline:
+        payload = json.loads(
+            kubectl("get", "pods", "-l", f"app.kubernetes.io/instance={RELEASE}", "-o", "json")
         )
-    log.info("all pods confirmed running %s", expected_tag)
+        wrong = []
+        for item in payload.get("items", []):
+            if item["metadata"].get("deletionTimestamp"):
+                continue  # on its way out; not what will serve the measurement
+            for container in item["spec"]["containers"]:
+                if expected_tag not in container["image"]:
+                    wrong.append(f"{item['metadata']['name']}: {container['image']}")
+        if not wrong:
+            log.info("all pods confirmed running %s", expected_tag)
+            return
+        log.info("waiting for the rollout to %s (%d pod(s) behind)", expected_tag, len(wrong))
+        time.sleep(5)
+    raise RuntimeError(
+        "these pods are still not running the images this run built "
+        f"(expected tag {expected_tag}) after {timeout_s:.0f}s:\n  " + "\n  ".join(wrong)
+    )
 
 
 def install_keda() -> str:
