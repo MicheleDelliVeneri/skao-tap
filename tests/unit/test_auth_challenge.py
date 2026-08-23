@@ -123,14 +123,29 @@ def test_discovery_and_health_stay_open(client, secured, path):
     assert client.get(path).status_code == 200
 
 
-def test_reading_metadata_through_tap_stays_open(client, secured, fake_db):
+def test_reading_metadata_through_tap_needs_a_token_by_default(client, secured, fake_db):
+    """A VO client cannot authenticate, so opening this is a decision a
+    deployment takes rather than inherits."""
+    synchronous = client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": QUERY})
+    job = client.post("/tap/async", data={"LANG": "ADQL", "QUERY": QUERY}, follow_redirects=False)
+    assert synchronous.status_code == 401
+    assert job.status_code == 401
+    assert "ivoa_bearer" in synchronous.headers["www-authenticate"]
+
+
+def test_reading_metadata_through_tap_is_open_when_a_deployment_says_so(
+    client, secured, auth_settings, fake_db
+):
+    auth_settings(auth_anonymous_queries=True)
     synchronous = client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": QUERY})
     job = client.post("/tap/async", data={"LANG": "ADQL", "QUERY": QUERY}, follow_redirects=False)
     assert synchronous.status_code == 200
     assert job.status_code == 303
 
 
-def test_a_job_subresource_is_open_like_the_job(client, secured, fake_db):
+def test_a_job_subresource_is_open_like_the_job(client, secured, auth_settings, fake_db):
+    """A job is a tree, and every branch of it belongs to the same read."""
+    auth_settings(auth_anonymous_queries=True)
     created = client.post(
         "/tap/async", data={"LANG": "ADQL", "QUERY": QUERY}, follow_redirects=False
     )
@@ -139,10 +154,19 @@ def test_a_job_subresource_is_open_like_the_job(client, secured, fake_db):
     assert client.get(f"/tap/async/{job_id}/parameters").status_code == 200
 
 
+def test_the_json_query_facade_is_not_opened_by_the_switch(client, secured, auth_settings):
+    """The switch exists for clients that cannot authenticate. A JSON client
+    can, so it is out of scope even when TAP is open."""
+    auth_settings(auth_anonymous_queries=True)
+    assert client.post("/api/v1/query", json={"query": QUERY}).status_code == 401
+    assert client.post("/api/v1/jobs", json={"query": QUERY}).status_code == 401
+
+
 def test_the_auth_endpoint_advertises_the_discovery_url(client, secured, iam_issuer):
     """So a client can find the IAM without having to provoke a 401 first."""
     body = client.get("/api/v1/auth").json()
     assert body["token_required"] is True
+    assert body["anonymous_queries"] is False
     assert body["discovery_url"] == f"{iam_issuer}/.well-known/openid-configuration"
 
 
@@ -152,9 +176,9 @@ def test_the_auth_endpoint_advertises_the_discovery_url(client, secured, iam_iss
 @pytest.mark.parametrize(
     ("path", "required"),
     [
-        ("/tap/sync", False),
-        ("/tap/async", False),
-        ("/tap/async/abc/results/result", False),
+        ("/tap/sync", True),
+        ("/tap/async", True),
+        ("/tap/async/abc/results/result", True),
         ("/tap/capabilities", False),
         ("/tap/capabilities/", False),
         ("/api/v1/auth", False),
@@ -165,6 +189,24 @@ def test_the_auth_endpoint_advertises_the_discovery_url(client, secured, iam_iss
     ],
 )
 def test_which_paths_need_a_token(path, required):
+    assert needs_token(path) is required
+
+
+@pytest.mark.parametrize(
+    ("path", "required"),
+    [
+        ("/tap/sync", False),
+        ("/tap/sync/", False),
+        ("/tap/async", False),
+        ("/tap/async/abc/results/result", False),
+        # not a prefix match on a different route that merely starts the same
+        ("/tap/synchronised", True),
+        ("/api/v1/query", True),
+        ("/api/v1/software", True),
+    ],
+)
+def test_which_paths_need_a_token_with_anonymous_queries(auth_settings, path, required):
+    auth_settings(auth_anonymous_queries=True)
     assert needs_token(path) is required
 
 

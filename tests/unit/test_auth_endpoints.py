@@ -101,8 +101,17 @@ def test_malformed_authorization_header_is_401(client, secured, software_payload
     assert response.status_code == 401
 
 
-def test_reading_metadata_through_tap_stays_anonymous(client, secured, fake_db):
-    """Gating POST /tap/sync would lock every standard VO client out."""
+def test_tap_reads_need_a_token_unless_a_deployment_opens_them(client, secured, fake_db):
+    """Closed by default; open where a deployment says so, because that is
+    what decides whether standard VO clients can use the service."""
+    query = "SELECT source_id, ra FROM ska.continuum_sources"
+    assert client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": query}).status_code == 401
+
+
+def test_reading_metadata_through_tap_is_anonymous_when_allowed(
+    client, secured, auth_settings, fake_db
+):
+    auth_settings(auth_anonymous_queries=True)
     query = "SELECT source_id, ra FROM ska.continuum_sources"
     synchronous = client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": query})
     job = client.post("/tap/async", data={"LANG": "ADQL", "QUERY": query}, follow_redirects=False)

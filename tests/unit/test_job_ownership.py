@@ -18,10 +18,17 @@ ROLES = json.dumps({"metadata.ingest": {"groups": ["/ska/science-metadata/oper"]
 
 @pytest.fixture
 def secured(auth_settings, stub_iam, iam_issuer, iam_audience):
+    """Authenticated, and serving standard VO clients.
+
+    Anonymous queries are on because that is the only way an *ownerless* job
+    comes into existence in an authenticated deployment, and half of what
+    ownership has to get right is how those behave.
+    """
     auth_settings(
         auth_enabled=True,
         auth_plugin="iam-groups",
         auth_roles=ROLES,
+        auth_anonymous_queries=True,
         iam_issuer=iam_issuer,
         iam_audience=iam_audience,
     )

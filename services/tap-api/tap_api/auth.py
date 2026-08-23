@@ -23,11 +23,12 @@ which requests additionally need a *decision* about that token. So a metadata
 needs a token the plugin (IAM groups, or the SRCNet Permissions API)
 approves.
 
-Two sets of paths stay open regardless (see ``ANONYMOUS_PATHS`` and
-``ANONYMOUS_PREFIXES``): the endpoints a client reaches *before* it has a
-token, because the challenge it gets back is what names the IAM; and reading
-metadata through TAP itself — ``/tap/sync`` and the ``/tap/async`` job — so
-the VO toolchain keeps working.
+One set of paths stays open regardless (``ANONYMOUS_PATHS``): the endpoints a
+client reaches *before* it has a token, because the challenge it gets back is
+what names the IAM, plus the health check a probe asks for. Reading metadata
+through TAP — ``/tap/sync`` and the ``/tap/async`` job — can be opened on top
+of that with ``TAP_AUTH_ANONYMOUS_QUERIES``, which is what a deployment that
+wants to serve standard VO clients sets.
 """
 
 import logging
@@ -121,16 +122,16 @@ ANONYMOUS_PATHS = frozenset(
     }
 )
 
-# The second kind is reading metadata through TAP itself — a synchronous query
-# and the UWS job that runs one — which stays open so PyVO, TOPCAT and the
-# rest of the VO toolchain keep working against a deployment with
-# authentication on. Prefixes, because a job is a tree of sub-resources
-# (/phase, /parameters, /results, …) and every one of them belongs to the
-# same read.
+# Reading metadata through TAP itself — a synchronous query and the UWS job
+# that runs one — is the second kind, and unlike the paths above it is a
+# deployment's choice (``auth_anonymous_queries``). Standard VO clients cannot
+# authenticate, so opening these is what decides whether PyVO and TOPCAT can
+# use the service at all; closed by default, because "who may read this
+# archive" is not a question to answer by inheriting a default.
 #
-# Everything else — the JSON API's own query and job facades, metadata reads
-# under /api/v1/<mount>, and every mutation — needs a verified token.
-ANONYMOUS_PREFIXES = ("/tap/sync", "/tap/async")
+# Prefixes, because a job is a tree of sub-resources (/phase, /parameters,
+# /results, …) and every one of them belongs to the same read.
+QUERY_PREFIXES = ("/tap/sync", "/tap/async")
 
 
 def needs_token(path: str) -> bool:
@@ -140,8 +141,9 @@ def needs_token(path: str) -> bool:
     trimmed = path.rstrip("/") or "/"
     if trimmed in ANONYMOUS_PATHS or path in ANONYMOUS_PATHS:
         return False
-    return not any(
-        trimmed == prefix or trimmed.startswith(f"{prefix}/") for prefix in ANONYMOUS_PREFIXES
+    return not (
+        settings.auth_anonymous_queries
+        and any(trimmed == prefix or trimmed.startswith(f"{prefix}/") for prefix in QUERY_PREFIXES)
     )
 
 
@@ -262,6 +264,7 @@ def auth_summary() -> dict:
         "enabled": True,
         "plugin": active.name,
         "token_required": settings.auth_require_token,
+        "anonymous_queries": settings.auth_anonymous_queries,
         "discovery_url": discovery_url(),
         "issuer": settings.iam_issuer,
         "audience": settings.iam_audience or None,

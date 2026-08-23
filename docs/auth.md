@@ -17,10 +17,14 @@ When enabled, two separable things happen to a request:
 
 The two are configured separately, because the answers differ. By default
 **every request needs a verified token** (`auth.requireToken`) except service
-discovery, the health check, and reading metadata through TAP itself. Only
-some of those requests additionally need an authorisation *decision* — see
-[what is gated](#what-is-gated). So a metadata `GET` needs a token and
-nothing more; deleting a metadata document needs a token the plugin approves.
+discovery and the health check. Only some of those requests additionally need
+an authorisation *decision* — see [what is gated](#what-is-gated). So a
+metadata `GET` needs a token and nothing more; deleting a metadata document
+needs a token the plugin approves.
+
+Reading metadata through TAP — `/tap/sync` and the `/tap/async` job — can be
+reopened to token-less callers with `auth.anonymousQueries`. That switch is
+what decides whether standard VO clients can use the service at all.
 
 ## Getting a token: the AuthVO challenge
 
@@ -68,20 +72,45 @@ explicitly rather than defaulted. No token-exchange step is involved.
 
 | Requests | Token | Why |
 | --- | --- | --- |
-| `/tap/sync`, `/tap/async` and its sub-resources | no | reading metadata through TAP is what PyVO and TOPCAT do, and they carry no token |
 | `/tap/availability` | no | a Kubernetes probe cannot hold one |
 | `/tap/capabilities`, `/tap/tables`, `/tap/registry`, `/tap/examples` | no | a registry harvester or a VO client browsing for services cannot hold one |
 | `/api/v1/auth`, `/openapi.json`, `/docs` | no | this is where a client works out how to authenticate |
-| everything else — `/api/v1/<mount>` reads and writes, `/api/v1/query`, `/api/v1/jobs` | yes | a JSON client is not the VO toolchain and can be expected to authenticate |
+| `/tap/sync`, `/tap/async` and its sub-resources | **configurable** | `auth.anonymousQueries` — off by default |
+| everything else — `/api/v1/<mount>` reads and writes, `/api/v1/query`, `/api/v1/jobs` | yes | a JSON client can authenticate, and is expected to |
 
-The asymmetry is deliberate but worth stating plainly: the same metadata an
-anonymous caller can read with an ADQL query over `/tap/sync` needs a token
-when read as JSON from `/api/v1/<mount>`. What justifies it is the client
-population, not the data — the VO toolchain cannot authenticate, and locking
-it out would make the service useless as a TAP service. A deployment that
-wants the JSON reads open too sets `auth.requireToken: false`, which restores
-the earlier behaviour (tokens verified when present, demanded only by the
-gated operations).
+### Serving standard VO clients
+
+```yaml
+auth:
+  enabled: true
+  anonymousQueries: true    # PyVO, TOPCAT and friends carry no token
+```
+
+PyVO, TOPCAT and the rest of the VO toolchain have no way to obtain or send a
+bearer token, so with `anonymousQueries: false` they get `401` on every
+query. Turning it on opens exactly two things: a synchronous query, and the
+UWS job that runs one — including the job's sub-resources (`/phase`,
+`/parameters`, `/results`, …), because they are branches of the same read.
+
+It does **not** open the JSON API's own query and job facades
+(`/api/v1/query`, `/api/v1/jobs`). The switch exists for clients that cannot
+authenticate; a JSON client can.
+
+That leaves a deliberate asymmetry when it is on: the same metadata is
+readable anonymously with an ADQL query over `/tap/sync` and token-gated when
+read as JSON from `/api/v1/<mount>`. What justifies it is the client
+population, not the data. Ownership still applies either way — an anonymous
+caller sees jobs with no owner and gets `403` on a job someone claimed.
+
+Two further notes for a deployment that opens queries:
+
+- Anonymous queries reach whatever the query role can read, so what protects
+  unpublished data is TAP_SCHEMA publication and the `tap_reader` grants, not
+  this switch.
+- The gated operations still apply on top. Adding `query.sync` and the
+  `jobs.*` operations to `auth.gatedOperations` re-closes the query surface
+  for callers whose token the plugin does not approve, which is a different
+  question from whether a token is needed at all.
 
 ## What is gated
 
@@ -331,8 +360,9 @@ authentication layer, which applies whether or not an operation is gated.
 
 | Request | Auth disabled | Auth enabled |
 | --- | --- | --- |
-| TAP query or job, no token | 200 | 200 (token verified if present) |
 | Discovery or health endpoint, no token | 200 | 200 |
+| TAP query or job, no token, `anonymousQueries: true` | 200 | 200 |
+| TAP query or job, no token, `anonymousQueries: false` | 200 | `401` + AuthVO challenge |
 | Any other request, no token | 200 | `401` + AuthVO challenge |
 | Any request, forged/expired token | ignored | `401`, `error="invalid_token"` |
 | Metadata `GET`, valid token | 200 | 200 (no role needed) |

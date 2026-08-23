@@ -112,17 +112,25 @@ auth:
   # "permissions-api" (delegate to the SKA SRC Permissions API). A site can
   # install its own in the skao_tap.auth entry-point group and name it here.
   plugin: iam-groups
-  # -- Require a verified token on every request except service discovery,
-  # the health check, and reading metadata through TAP itself (`/tap/sync`
-  # and the `/tap/async` job, so PyVO and TOPCAT keep working). With this on,
-  # the JSON API needs a token even to read; a metadata GET needs nothing
-  # more than a valid one, while mutations still need the grants under
-  # `roles` (or a Permissions API decision).
+  # -- Require a verified token on every request except service discovery and
+  # the health check (see anonymousQueries below for TAP reads). A metadata
+  # GET then needs nothing more than a valid token, while mutations still
+  # need the grants under `roles`, or a Permissions API decision.
   #
   # Requests refused for want of a token answer an IVOA AuthVO challenge
   # naming the IAM's discovery document, so a client can find the issuer and
   # go and get a token instead of being told to read the docs.
   requireToken: true
+  # -- Let callers with no token read metadata through TAP: `/tap/sync` and
+  # the `/tap/async` job with all its sub-resources. Nothing else — not the
+  # JSON API's own query and job facades, which are reached by clients that
+  # *can* authenticate.
+  #
+  # This is the switch that decides whether standard VO clients can use the
+  # service at all: PyVO, TOPCAT and the rest send no token, so with it off
+  # they get 401 on every query. Off by default, because who may read an
+  # archive is a decision to take rather than inherit.
+  anonymousQueries: false
   iam:
     # -- Token issuer, e.g. https://ska-iam.stfc.ac.uk. Required when enabled.
     issuer: ""

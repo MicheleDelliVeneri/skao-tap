@@ -55,6 +55,16 @@ class Settings:
             in ("1", "true", "yes", "on")
         )
     )
+    # Reopen reading metadata through TAP — /tap/sync and the /tap/async job —
+    # to callers with no token. Off by default: standard VO clients cannot
+    # authenticate, so this is the switch that decides whether a deployment
+    # serves them at all, and that is a decision to take rather than inherit.
+    auth_anonymous_queries: bool = field(
+        default_factory=lambda: (
+            os.getenv("TAP_AUTH_ANONYMOUS_QUERIES", "false").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+    )
     # per-operation policy for the iam-groups plugin, as JSON:
     # {"metadata.ingest": {"groups": [...], "scopes": [...]}, ...}
     auth_roles: str = field(default_factory=lambda: os.getenv("TAP_AUTH_ROLES", "{}"))

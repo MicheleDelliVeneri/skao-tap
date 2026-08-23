@@ -37,11 +37,12 @@ def bearer(make_token):
 
 @pytest.fixture
 def default_gates(auth_settings, stub_iam, iam_issuer, iam_audience):
-    """Auth on, gate set left at its default."""
+    """Auth on, gate set left at its default, serving anonymous VO clients."""
     auth_settings(
         auth_enabled=True,
         auth_plugin="iam-groups",
         auth_roles=JOB_ROLES,
+        auth_anonymous_queries=True,
         iam_issuer=iam_issuer,
         iam_audience=iam_audience,
     )
@@ -49,12 +50,18 @@ def default_gates(auth_settings, stub_iam, iam_issuer, iam_audience):
 
 @pytest.fixture
 def job_gates(auth_settings, stub_iam, iam_issuer, iam_audience):
-    """Auth on, with the job and query operations enforced too."""
+    """Auth on, with the job and query operations enforced too.
+
+    Anonymous queries are allowed at the authentication layer, so what these
+    tests observe is the *gate* refusing a token-less caller rather than the
+    token requirement doing it first.
+    """
     auth_settings(
         auth_enabled=True,
         auth_plugin="iam-groups",
         auth_roles=JOB_ROLES,
         auth_gated_operations=JOB_OPERATIONS,
+        auth_anonymous_queries=True,
         iam_issuer=iam_issuer,
         iam_audience=iam_audience,
     )
@@ -133,8 +140,10 @@ def test_every_operation_is_selectable(auth_settings):
 # -- the default: querying stays anonymous ----------------------------------
 
 
-def test_tap_queries_and_jobs_stay_anonymous_by_default(client, default_gates, fake_db):
-    """Enabling auth must not, on its own, lock standard VO clients out."""
+def test_tap_queries_and_jobs_are_open_where_anonymous_queries_are_allowed(
+    client, default_gates, fake_db
+):
+    """The default gate set must not add a second lock on top of the switch."""
     job_id = _create(client)
     queried = client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": QUERY})
     mutated = client.post(
