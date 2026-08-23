@@ -91,7 +91,8 @@ def main() -> int:
     if args.clients < 1 or args.duration < 1 or args.scale_rows < 1:
         parser.error("clients, duration, and scale-rows must be positive")
 
-    deadline = time.monotonic() + args.duration
+    started = time.monotonic()
+    deadline = started + args.duration
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=args.clients,
         thread_name_prefix="tap-load",
@@ -110,7 +111,11 @@ def main() -> int:
     samples = [sample for future in futures for sample in future.result()]
     latencies = [sample["seconds"] for sample in samples]
     successful = sum(sample["ok"] for sample in samples)
-    elapsed = max(args.duration, max(latencies, default=0.0))
+    # Wall clock from submit to the last future, not max(duration, slowest
+    # request): a worker that starts a request just before the deadline
+    # finishes after it, and charging those rows to `duration` inflates
+    # throughput exactly when the service is slowest.
+    elapsed = max(time.monotonic() - started, 1e-9)
     by_workload = {}
     for name, _query in WORKLOAD:
         subset = [sample["seconds"] for sample in samples if sample["workload"] == name]
@@ -124,6 +129,7 @@ def main() -> int:
     report = {
         "clients": args.clients,
         "duration_seconds": args.duration,
+        "elapsed_seconds": round(elapsed, 6),
         "scale_rows": args.scale_rows,
         "requests": len(samples),
         "successful": successful,

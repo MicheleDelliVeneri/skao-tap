@@ -210,7 +210,11 @@ jobs:
       - name: Summarise likely bottlenecks
         if: always()
         run: |
-          python3 tests/performance/analyse_results.py performance-results \
+          # the venv interpreter like every other step, but this one runs with
+          # if: always(), so it may be reached before the venv exists
+          python=python3
+          if [ -x .venv/bin/python ]; then python=.venv/bin/python; fi
+          "$python" tests/performance/analyse_results.py performance-results \
             > performance-results/bottleneck-summary.md
           cat performance-results/bottleneck-summary.md >> "$GITHUB_STEP_SUMMARY"
 
