@@ -192,6 +192,19 @@ def run_sync(
     started = time.perf_counter()
     chunks = _result_chunks(prepared, uploads or [])
     first = next(chunks, b"")
-    # the first chunk is where the query actually ran; the rest is streaming
-    QUERY_DURATION.labels(kind="sync").observe(time.perf_counter() - started)
-    return itertools.chain([first], chunks), prepared["mime"]
+    return _timed(itertools.chain([first], chunks), started), prepared["mime"]
+
+
+def _timed(chunks: Iterator[bytes], started: float) -> Iterator[bytes]:
+    """Record the query's duration when its stream ends.
+
+    Observed at the end, not after the first chunk: the metric says "to the
+    last row", and stopping at the first would have made it time-to-first-byte
+    and under-reported exactly the long streams worth knowing about. Recorded
+    in a finally, so a client that disconnects halfway is still measured
+    rather than silently dropped.
+    """
+    try:
+        yield from chunks
+    finally:
+        QUERY_DURATION.labels(kind="sync").observe(time.perf_counter() - started)

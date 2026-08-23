@@ -5,6 +5,8 @@ reproducing anything locally — the thing whose absence made the last three
 performance fixes take a local harness and a sampling profiler.
 """
 
+import time
+
 import pytest
 from prometheus_client import generate_latest
 from tapcore import observability as obs
@@ -181,3 +183,72 @@ def test_a_hostile_id_never_reaches_the_database(client, fake_db):
         headers={obs.REQUEST_ID_HEADER: "*/ DROP TABLE uws.jobs; --"},
     )
     assert not any("DROP TABLE" in s for s in fake_db.statements)
+
+
+def test_the_sync_duration_is_recorded_when_the_stream_ends():
+    """It says "to the last row", so it must observe at the end and not after
+    the first chunk. Tested on the wrapper directly: through the test client
+    the whole body is read before the call returns, so it could not tell the
+    two apart."""
+    from tap_api.queries.query import _timed
+
+    def sum_of():
+        for line in generate_latest(obs.REGISTRY).decode().splitlines():
+            if line.startswith('tap_query_duration_seconds_sum{kind="sync"}'):
+                return float(line.split()[-1])
+        return 0.0
+
+    before = sum_of()
+    stream = _timed(iter([b"a", b"b"]), time.perf_counter())
+    next(stream)
+    assert sum_of() == before, "nothing is recorded while rows are still coming"
+    list(stream)  # exhaust
+    assert sum_of() > before
+
+
+def test_an_abandoned_stream_is_still_measured():
+    """A client that disconnects halfway is a slow query too — dropping it
+    would bias the metric towards the requests that finished."""
+    from tap_api.queries.query import _timed
+
+    def count():
+        for line in generate_latest(obs.REGISTRY).decode().splitlines():
+            if line.startswith('tap_query_duration_seconds_count{kind="sync"}'):
+                return float(line.split()[-1])
+        return 0.0
+
+    before = count()
+    stream = _timed(iter([b"a", b"b", b"c"]), time.perf_counter())
+    next(stream)
+    stream.close()  # the client went away
+    assert count() == before + 1
+
+
+def test_a_failed_job_is_counted_as_a_failure(monkeypatch, fake_db):
+    """Undercounting failures is worse than not counting them: an alert on
+    this metric would have stayed quiet."""
+    from tap_executor import worker
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("query blew up")
+
+    job = fake_db.add_job(phase="EXECUTING", query_sql="SELECT 1", parameters={})
+    monkeypatch.setattr(worker, "run_query", explode, raising=False)
+
+    before = generate_latest(obs.REGISTRY).decode()
+    worker.execute_job(job)
+    after = generate_latest(obs.REGISTRY).decode()
+
+    def errors(text):
+        for line in text.splitlines():
+            if line.startswith('tap_jobs_completed_total{phase="ERROR"}'):
+                return float(line.split()[-1])
+        return 0.0
+
+    assert errors(after) == errors(before) + 1
+
+
+def test_the_request_id_does_not_outlive_the_request(client):
+    """Work after the response must not be attributed to it."""
+    client.get("/tap/availability", headers={obs.REQUEST_ID_HEADER: "scoped-id"})
+    assert obs.request_id() is None

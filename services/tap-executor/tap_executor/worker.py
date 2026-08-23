@@ -25,7 +25,7 @@ from tapcore.observability import (
     QUERY_DURATION,
     REGISTRY,
     configure_logging,
-    set_request_id,
+    request_context,
     tag_sql,
 )
 from tapcore.query.adql import apply_maxrec, touched_tables
@@ -180,20 +180,19 @@ def execute_job(job: dict) -> None:
     job_id = job["job_id"]
     params = job["parameters"] or {}
     backend_pid = None
-    set_request_id(job.get("request_id"))
     started = time.monotonic()
-    try:
-        with LogContext(
+    # scoped to the job: this loop runs for the life of the pod, so a leftover
+    # id would attribute the next poll, the cleanup pass and any loop error to
+    # whichever job happened to run last
+    with (
+        request_context(job.get("request_id")),
+        LogContext(
             job_id=job_id,
             owner_id=job.get("owner_id"),
             request_id=job.get("request_id"),
-        ):
-            _execute_job_inner(job, job_id, params, backend_pid, started)
-    finally:
-        # this loop runs for the life of the pod: leaving the id set would
-        # attribute the next poll, the cleanup pass and any loop error to
-        # whichever job happened to run last
-        set_request_id(None)
+        ),
+    ):
+        _execute_job_inner(job, job_id, params, backend_pid, started)
 
 
 def _execute_job_inner(job: dict, job_id, params, backend_pid, started) -> None:
@@ -299,6 +298,7 @@ def _execute_job_inner(job: dict, job_id, params, backend_pid, started) -> None:
                 (_now(), str(exc)[:4000], job_id),
             ).rowcount
             if errored:
+                JOBS_COMPLETED.labels(phase="ERROR").inc()
                 log.exception("job %s failed", job_id)
             else:
                 log.info("job %s aborted while executing", job_id)

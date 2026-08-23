@@ -33,8 +33,8 @@ from tapcore.observability import (
     REQUEST_ID_HEADER,
     configure_logging,
     new_request_id,
+    request_context,
     safe_request_id,
-    set_request_id,
 )
 from tapcore.query.votable import error_votable
 
@@ -117,8 +117,7 @@ async def correlate(request: Request, call_next):
     # in a header, written into a SQL comment and logged, so anything else
     # gets replaced rather than escaped
     rid = safe_request_id(request.headers.get(REQUEST_ID_HEADER)) or new_request_id()
-    set_request_id(rid)
-    with LogContext(request_id=rid, path=request.url.path):
+    with request_context(rid), LogContext(request_id=rid, path=request.url.path):
         response = await call_next(request)
     response.headers[REQUEST_ID_HEADER] = rid
     return response

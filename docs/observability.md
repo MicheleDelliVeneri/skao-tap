@@ -56,7 +56,7 @@ of its own, so its metrics get a listener instead.
 | `tap_query_duration_seconds{kind}` | histogram | Query time, `sync` and `async` separately — they have different limits and different users |
 | `tap_jobs{phase}` | gauge | The job store by phase |
 | `tap_oldest_queued_job_seconds` | gauge | Queue backlog. This is what to autoscale executors on |
-| `tap_jobs_completed_total{phase}` | counter | Job outcomes, including `ABORTED` |
+| `tap_jobs_completed_total{phase}` | counter | Job outcomes: `COMPLETED`, `ERROR` and `ABORTED` |
 
 Queue metrics are reported by the executor, because the queue is its subject.
 Every replica reports the same figures, so aggregate them with `max()` — they

@@ -58,7 +58,8 @@ DB_CONNECTIONS_IN_USE = Gauge(
 
 QUERY_DURATION = Histogram(
     "tap_query_duration_seconds",
-    "Time to run a user query, from acquiring a connection to the last row.",
+    "Time to run a user query, from acquiring a connection until the stream"
+    " ends — including a stream the client abandoned.",
     ["kind"],  # sync or async
     registry=REGISTRY,
     buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0),
@@ -141,6 +142,23 @@ def safe_request_id(value: str | None) -> str | None:
 
 def set_request_id(value: str | None) -> None:
     _request_id.set(value)
+
+
+@contextlib.contextmanager
+def request_context(value: str | None):
+    """Hold a correlation id for the duration of a block, then restore it.
+
+    Reset rather than cleared, so nesting restores what was there rather than
+    nothing. Both callers need this: the API must not attribute work after a
+    response to the request that finished, and the executor's loop runs for the
+    life of the pod, so a leftover id would label the next poll, the cleanup
+    pass and any loop error with whichever job ran last.
+    """
+    token = _request_id.set(value)
+    try:
+        yield value
+    finally:
+        _request_id.reset(token)
 
 
 def request_id() -> str | None:
