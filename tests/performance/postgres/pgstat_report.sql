@@ -10,8 +10,8 @@ SELECT
     shared_blks_read,
     temp_blks_read,
     temp_blks_written,
-    blk_read_time,
-    blk_write_time,
+    shared_blk_read_time,
+    shared_blk_write_time,
     query
 FROM pg_stat_statements
 WHERE query ILIKE '%perf.catalog%'
