@@ -1,0 +1,70 @@
+name: Python performance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "libs/tapcore/**"
+      - "services/**"
+      - "tests/benchmarks/**"
+      - ".github/workflows/python-performance.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+  pull_request:
+    paths:
+      - "libs/tapcore/**"
+      - "services/**"
+      - "tests/benchmarks/**"
+      - ".github/workflows/python-performance.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-performance-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmarks:
+    name: Hot-path benchmarks and profiles
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # py-spy attaches to the running interpreter, so this job profiles a
+      # CPython from setup-python rather than a uv-managed one.
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.9.x"
+          enable-cache: true
+          cache-suffix: benchmarks
+      - name: Install project and profiling tools
+        run: |
+          uv sync --locked --all-groups --python "$(command -v python)"
+          uv pip install --python .venv/bin/python \
+            pytest-benchmark==5.2.3 py-spy==0.4.2
+      - name: Measure hot paths
+        run: |
+          mkdir -p performance-results
+          uv run --no-sync pytest tests/benchmarks -v \
+            --benchmark-json=performance-results/benchmarks.json
+      - name: Record Python flamegraph
+        run: |
+          .venv/bin/py-spy record \
+            --output performance-results/python-hot-paths-flamegraph.svg \
+            --format flamegraph --rate 100 \
+            -- .venv/bin/python -m pytest tests/benchmarks -q --benchmark-only
+      - name: Upload profiling evidence
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: python-performance-${{ github.run_id }}
+          path: performance-results/
+          if-no-files-found: error
+          retention-days: 30
