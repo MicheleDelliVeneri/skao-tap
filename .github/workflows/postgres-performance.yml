@@ -173,6 +173,10 @@ jobs:
                --host 127.0.0.1 --port 8000 --log-level warning \
             > performance-results/tap-api-profile.log 2>&1 &
           profiler_pid=$!
+          # same reason as the sweep step above: the availability check below
+          # can exit under bash -e, and a leaked py-spy/uvicorn keeps port 8000
+          # and a CPU busy for the rest of the job
+          trap 'kill -INT "$profiler_pid" 2>/dev/null || true; wait "$profiler_pid" 2>/dev/null || true' EXIT
           for _ in $(seq 1 60); do
             curl --fail --silent "$TAP_BASE_URL/availability" >/dev/null && break
             sleep 1

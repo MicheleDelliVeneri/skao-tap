@@ -1,5 +1,9 @@
 \set ON_ERROR_STOP on
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+-- Explicit, even though db/init also creates it: that script swallows a
+-- missing pgsphere with a NOTICE, so without this line the failure surfaces
+-- much later as "type spoint does not exist" against the CREATE TABLE below.
+CREATE EXTENSION IF NOT EXISTS pg_sphere;
 CREATE SCHEMA IF NOT EXISTS perf;
 
 -- Not perf.catalog: CATALOG is reserved in the ADQL grammar, so every query
