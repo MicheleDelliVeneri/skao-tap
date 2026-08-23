@@ -126,8 +126,12 @@ def main() -> int:
             for worker_id in range(args.clients)
         ]
     samples = [sample for future in futures for sample in future.result()]
-    latencies = [sample["seconds"] for sample in samples]
-    successful = sum(sample["ok"] for sample in samples)
+    # Latency is measured over successful requests only. A request that failed
+    # fast — a 500, or a timeout raising early — would otherwise pull p95 and
+    # p99 down, so the report would look best exactly when the service is
+    # worst. The error counts below carry the failures instead.
+    latencies = [sample["seconds"] for sample in samples if sample["ok"]]
+    successful = len(latencies)
     # Wall clock from submit to the last future, not max(duration, slowest
     # request): a worker that starts a request just before the deadline
     # finishes after it, and charging those rows to `duration` inflates
@@ -135,8 +139,13 @@ def main() -> int:
     elapsed = max(time.monotonic() - started, 1e-9)
     by_workload = {}
     for name, _query in WORKLOAD:
-        subset = [sample["seconds"] for sample in samples if sample["workload"] == name]
-        by_workload[name] = {"requests": len(subset), **_percentiles(subset)}
+        attempted = [sample for sample in samples if sample["workload"] == name]
+        subset = [sample["seconds"] for sample in attempted if sample["ok"]]
+        by_workload[name] = {
+            "requests": len(attempted),
+            "successful": len(subset),
+            **_percentiles(subset),
+        }
 
     report = {
         "clients": args.clients,
