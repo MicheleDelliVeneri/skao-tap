@@ -172,6 +172,25 @@ jobs:
             --set auth.iam.audience=science-metadata \
             --set auth.permissionsApi.url=https://permissions.srcnet.skao.int/api/v1 \
             | grep -q 'TAP_PERMISSIONS_API_URL'
+      - name: Template with querying gated as well
+        run: |
+          helm template skao-tap deploy/helm/skao-tap \
+            --set auth.enabled=true \
+            --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
+            --set auth.iam.audience=science-metadata \
+            --set 'auth.gatedOperations={jobs.create,jobs.mutate,jobs.delete,query.sync}' \
+            --set 'auth.roles.jobs\.create.groups={/ska/oper}' \
+            --set 'auth.roles.jobs\.mutate.groups={/ska/oper}' \
+            --set 'auth.roles.jobs\.delete.groups={/ska/oper}' \
+            --set 'auth.roles.query\.sync.anyVerifiedToken=true' \
+            | grep -q 'TAP_AUTH_GATED_OPERATIONS: "jobs.create,jobs.mutate,jobs.delete,query.sync"'
+          helm template skao-tap deploy/helm/skao-tap \
+            --set auth.enabled=true \
+            --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
+            --set auth.iam.audience=science-metadata \
+            --set 'auth.gatedOperations={none}' \
+            --set 'auth.roles.metadata\.delete.groups={/ska/oper}' \
+            | grep -q 'TAP_AUTH_GATED_OPERATIONS: "none"'
       - name: Template with the VOResource record enabled
         run: |
           helm template skao-tap deploy/helm/skao-tap \
@@ -222,6 +241,36 @@ jobs:
           refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example
           refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
                   --set auth.iam.audience=science-metadata
+          # an operation enforced but granted to nobody, and an unknown one
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
+                  --set auth.iam.audience=science-metadata \
+                  --set 'auth.gatedOperations={jobs.create,jobs.mutate,jobs.delete,query.sync}' \
+                  --set 'auth.roles.metadata\.delete.groups={/ska/oper}'
+          # part of the query surface only: the caller refused at /tap/async
+          # would run the same query at /tap/sync
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
+                  --set auth.iam.audience=science-metadata \
+                  --set 'auth.gatedOperations={jobs.create}' \
+                  --set 'auth.roles.jobs\.create.groups={/ska/oper}'
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
+                  --set auth.iam.audience=science-metadata \
+                  --set 'auth.gatedOperations={jobs.rename}' \
+                  --set 'auth.roles.jobs\.rename.groups={/ska/oper}'
+          # a rule that exists but grants nobody: same outcome as no rule,
+          # by a longer route
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
+                  --set auth.iam.audience=science-metadata \
+                  --set 'auth.gatedOperations={metadata.delete}' \
+                  --set-json 'auth.roles={"metadata.delete":{}}'
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
+                  --set auth.iam.audience=science-metadata \
+                  --set 'auth.gatedOperations={metadata.delete}' \
+                  --set 'auth.roles.metadata\.delete.groups={}'
+          # "none" is only "enforce nothing" on its own
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
+                  --set auth.iam.audience=science-metadata \
+                  --set 'auth.gatedOperations={none,jobs.create}' \
+                  --set 'auth.roles.jobs\.create.groups={/ska/oper}'
 
   helm-e2e:
     name: Helm chart e2e (kind)

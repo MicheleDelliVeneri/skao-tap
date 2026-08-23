@@ -49,6 +49,13 @@ class Settings:
     # per-operation policy for the iam-groups plugin, as JSON:
     # {"metadata.ingest": {"groups": [...], "scopes": [...]}, ...}
     auth_roles: str = field(default_factory=lambda: os.getenv("TAP_AUTH_ROLES", "{}"))
+    # which operations the gate actually enforces, comma-separated; empty
+    # means the default set (metadata mutation only). Adding jobs.create or
+    # query.sync makes a deployment reject anonymous querying, which locks
+    # out VO clients that send no token — so it has to be asked for.
+    auth_gated_operations: str = field(
+        default_factory=lambda: os.getenv("TAP_AUTH_GATED_OPERATIONS", "")
+    )
     # token authenticity is always verified against this issuer, whatever
     # plugin decides authorisation
     iam_issuer: str = field(default_factory=lambda: os.getenv("TAP_IAM_ISSUER", ""))

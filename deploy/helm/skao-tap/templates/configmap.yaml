@@ -59,11 +59,61 @@ data:
   TAP_IAM_GROUP_CLAIMS: {{ .Values.auth.iam.groupClaims | quote }}
   TAP_IAM_WELL_KNOWN_URL: {{ .Values.auth.iam.wellKnownUrl | quote }}
   TAP_IAM_JWKS_CACHE: {{ .Values.auth.iam.jwksCacheSeconds | int64 | quote }}
+  {{- /* the one spelling that enforces nothing; anything else is a policy */}}
+  {{- $gatesNothing := and (eq (len .Values.auth.gatedOperations) 1) (eq (lower (first .Values.auth.gatedOperations)) "none") }}
   {{- if eq .Values.auth.plugin "iam-groups" }}
   {{- if not .Values.auth.roles }}
   {{- fail "auth.plugin=iam-groups needs auth.roles: every gated operation must name the groups or scopes that grant it (or set anyVerifiedToken), otherwise nothing is granted. See docs/auth.md." }}
   {{- end }}
+  {{- /* an operation enforced but never granted denies everyone, which reads
+         as a broken deployment rather than as a policy */}}
+  {{- if not $gatesNothing }}
+  {{- range $operation := .Values.auth.gatedOperations }}
+  {{- if not (hasKey $.Values.auth.roles $operation) }}
+  {{- fail (printf "auth.gatedOperations enforces %s but auth.roles has no entry for it, so it would be denied to everyone. Grant it under auth.roles, or drop it from auth.gatedOperations." $operation) }}
   {{- end }}
+  {{- /* present but empty grants nobody, which is the same outcome by a
+         longer route: an unfinished policy rather than a decision */}}
+  {{- $rule := get $.Values.auth.roles $operation }}
+  {{- if not (kindIs "map" $rule) }}
+  {{- fail (printf "auth.roles.%s must be a mapping with groups, scopes or anyVerifiedToken" $operation) }}
+  {{- end }}
+  {{- if not (or $rule.groups $rule.scopes $rule.anyVerifiedToken) }}
+  {{- fail (printf "auth.roles.%s names no group or scope and does not set anyVerifiedToken, so %s would be denied to everyone while auth.gatedOperations enforces it. Grant it, or drop it from auth.gatedOperations." $operation $operation) }}
+  {{- end }}
+  {{- /* a blank entry is a grant to the group named "" — never intended,
+         and it makes a rule look populated while granting nobody */}}
+  {{- range $entry := concat (default (list) $rule.groups) (default (list) $rule.scopes) }}
+  {{- if not (trim (toString $entry)) }}
+  {{- fail (printf "auth.roles.%s has a blank group or scope entry, which grants nobody while looking like a grant" $operation) }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- if not $gatesNothing }}
+  {{- /* the query surface is enforced as a group: a caller refused at
+         POST /tap/async runs the same query at /tap/sync, and gating job
+         mutation without job creation hands a client a job it cannot start */}}
+  {{- $queryOps := list "jobs.create" "jobs.mutate" "jobs.delete" "query.sync" }}
+  {{- $missing := list }}
+  {{- range $operation := $queryOps }}
+  {{- if not (has $operation $.Values.auth.gatedOperations) }}
+  {{- $missing = append $missing $operation }}
+  {{- end }}
+  {{- end }}
+  {{- if and $missing (lt (len $missing) (len $queryOps)) }}
+  {{- fail (printf "auth.gatedOperations enforces part of the query surface but not %s. Enforce these four together or not at all: a caller refused at POST /tap/async runs the same query at /tap/sync, and gating job mutation without job creation hands a VO client a job it cannot start. See docs/auth.md." (join ", " $missing)) }}
+  {{- end }}
+  {{- $known := list "metadata.ingest" "metadata.amend" "metadata.delete" "jobs.create" "jobs.mutate" "jobs.delete" "query.sync" }}
+  {{- range $operation := .Values.auth.gatedOperations }}
+  {{- if not (has $operation $known) }}
+  {{- fail (printf "auth.gatedOperations names unknown operation %s; known operations: %s (or the single entry \"none\" to enforce nothing)" $operation (join ", " $known)) }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- /* empty means the service default: metadata mutation only */}}
+  TAP_AUTH_GATED_OPERATIONS: {{ join "," .Values.auth.gatedOperations | quote }}
   {{- /* camelCase in values, snake_case in the policy the service parses */}}
   TAP_AUTH_ROLES: {{ .Values.auth.roles | toJson | replace "\"anyVerifiedToken\"" "\"any_verified_token\"" | quote }}
   {{- if eq .Values.auth.plugin "permissions-api" }}
