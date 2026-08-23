@@ -125,13 +125,14 @@ def voresource_xml() -> str:
     """
     if not settings.registry_enabled:
         raise NotFoundError(
-            "this deployment publishes no VOResource record"
-            " (enable it with registry.enabled and an IVOA identifier)"
+            "this deployment publishes no VOResource record (Helm:"
+            " voRegistry.enabled with an IVOA identifier; env:"
+            " TAP_REGISTRY_ENABLED)"
         )
     # keyed by the Helm value an operator would go and set
     required = _required(
         **{
-            "voRegistry.authorityId/resourceKey": settings.registry_identifier,
+            "voRegistry.authorityId and voRegistry.resourceKey": settings.registry_identifier,
             "voRegistry.title": settings.registry_title,
             "voRegistry.shortName": settings.registry_short_name,
             "voRegistry.description": settings.registry_description,
@@ -140,7 +141,7 @@ def voresource_xml() -> str:
             "voRegistry.created": settings.registry_created,
         }
     )
-    identifier = required["voRegistry.authorityId/resourceKey"]
+    identifier = required["voRegistry.authorityId and voRegistry.resourceKey"]
     if not identifier.startswith("ivo://"):
         raise ServiceError(
             "the registry identifier must start with ivo:// (Helm:"

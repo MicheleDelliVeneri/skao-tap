@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     StreamingResponse,
 )
@@ -127,8 +128,17 @@ async def registry():
 
     404 until the deployment is configured to publish one: an IVOA
     identifier is a permanent promise about a URI, so it cannot be defaulted.
+
+    Errors are answered as plain text rather than through the DALI VOTable
+    handler the TAP endpoints use. A harvester asking for a registry record
+    has no reason to parse a VOTable, and answering one with the
+    x-votable+xml content type would look like a malformed record rather than
+    a missing one.
     """
-    return Response(vosi.voresource_xml(), media_type="application/xml")
+    try:
+        return Response(vosi.voresource_xml(), media_type="application/xml")
+    except TAPError as exc:
+        return PlainTextResponse(str(exc), status_code=exc.http_status)
 
 
 @app.get("/tap/availability")

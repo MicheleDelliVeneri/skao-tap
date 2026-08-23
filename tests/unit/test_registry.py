@@ -46,6 +46,18 @@ def _text(root, path):
 def test_no_record_until_a_deployment_says_who_it_is(client):
     response = client.get("/tap/registry")
     assert response.status_code == 404
+    # not the DALI VOTable the TAP endpoints answer with: a harvester asking
+    # for a record would read that as a malformed one rather than a missing one
+    assert not response.headers["content-type"].startswith("application/x-votable")
+    assert "voRegistry.enabled" in response.text
+
+
+def test_an_incomplete_record_is_a_plain_error_too(client, auth_settings):
+    auth_settings(registry_enabled=True)  # nothing else configured
+    response = client.get("/tap/registry")
+    assert response.status_code == 500
+    assert not response.headers["content-type"].startswith("application/x-votable")
+    assert "voRegistry.title" in response.text
 
 
 def test_the_record_carries_the_configured_identity(published):
