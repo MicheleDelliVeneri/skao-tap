@@ -63,7 +63,13 @@ decides what the bearer of a token may do.
 - **Graceful degradation**: a deployment with no IAM issuer configured
   behaves exactly as today (fully anonymous), so local development and the
   demo notebook are unaffected.
-- VOResource record and VO Registry registration of the service.
+- ~~**VOResource record**~~ *(done)*: `GET /tap/registry` serves a
+  `vs:CatalogService` record built from `voRegistry.*` chart values and the
+  live capability elements, so it cannot drift from `/tap/capabilities`. Off
+  until a deployment has an IVOA authority to publish under — see the
+  [registry guide](registry.md). Submitting the record to a publishing
+  registry stays a deliberate manual step; an OAI-PMH interface for direct
+  harvesting is the remaining piece.
 
 ## Package 7 — Queryable region footprints (`s_region`)
 

@@ -17,6 +17,35 @@ data:
   TAP_WAIT_MAX: {{ .Values.config.waitMaxSeconds | int64 | quote }}
   TAP_MODEL_PLUGINS: {{ .Values.config.modelPlugins | quote }}
   TAP_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  {{- /* VOResource record; disabled by default, see values.yaml */}}
+  TAP_REGISTRY_ENABLED: {{ .Values.voRegistry.enabled | quote }}
+  {{- if .Values.voRegistry.enabled }}
+  {{- range $key := list "authorityId" "resourceKey" "title" "shortName" "description" "referenceUrl" "publisher" "created" }}
+  {{- if not (get $.Values.voRegistry $key) }}
+  {{- fail (printf "voRegistry.%s is required when voRegistry.enabled=true: a VOResource record missing it is rejected by a publishing registry. See docs/registry.md." $key) }}
+  {{- end }}
+  {{- end }}
+  {{- if not .Values.voRegistry.subjects }}
+  {{- fail "voRegistry.subjects needs at least one term when voRegistry.enabled=true (e.g. [\"radio astronomy\"])" }}
+  {{- end }}
+  {{- if gt (len .Values.voRegistry.shortName) 16 }}
+  {{- fail (printf "voRegistry.shortName is %d characters; VOResource allows at most 16" (len .Values.voRegistry.shortName)) }}
+  {{- end }}
+  TAP_REGISTRY_IDENTIFIER: {{ printf "ivo://%s/%s" .Values.voRegistry.authorityId .Values.voRegistry.resourceKey | quote }}
+  TAP_REGISTRY_TITLE: {{ .Values.voRegistry.title | quote }}
+  TAP_REGISTRY_SHORT_NAME: {{ .Values.voRegistry.shortName | quote }}
+  TAP_REGISTRY_DESCRIPTION: {{ .Values.voRegistry.description | quote }}
+  TAP_REGISTRY_REFERENCE_URL: {{ .Values.voRegistry.referenceUrl | quote }}
+  TAP_REGISTRY_PUBLISHER: {{ .Values.voRegistry.publisher | quote }}
+  TAP_REGISTRY_CREATOR: {{ .Values.voRegistry.creator | quote }}
+  TAP_REGISTRY_CONTACT_NAME: {{ .Values.voRegistry.contact.name | quote }}
+  TAP_REGISTRY_CONTACT_EMAIL: {{ .Values.voRegistry.contact.email | quote }}
+  TAP_REGISTRY_SUBJECTS: {{ join "," .Values.voRegistry.subjects | quote }}
+  TAP_REGISTRY_TYPES: {{ join "," .Values.voRegistry.types | quote }}
+  TAP_REGISTRY_CONTENT_LEVELS: {{ join "," .Values.voRegistry.contentLevels | quote }}
+  TAP_REGISTRY_CREATED: {{ .Values.voRegistry.created | quote }}
+  TAP_REGISTRY_UPDATED: {{ .Values.voRegistry.updated | default .Values.voRegistry.created | quote }}
+  {{- end }}
   {{- /* authn/authz; disabled by default, see values.yaml */}}
   TAP_AUTH_ENABLED: {{ .Values.auth.enabled | quote }}
   {{- if .Values.auth.enabled }}

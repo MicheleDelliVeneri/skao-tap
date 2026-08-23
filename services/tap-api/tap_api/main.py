@@ -121,6 +121,16 @@ async def root():
     return RedirectResponse("/tap/capabilities")
 
 
+@app.get("/tap/registry")
+async def registry():
+    """The VOResource record a publishing registry harvests or ingests.
+
+    404 until the deployment is configured to publish one: an IVOA
+    identifier is a permanent promise about a URI, so it cannot be defaulted.
+    """
+    return Response(vosi.voresource_xml(), media_type="application/xml")
+
+
 @app.get("/tap/availability")
 async def availability():
     return Response(vosi.availability_xml(), media_type="application/xml")
