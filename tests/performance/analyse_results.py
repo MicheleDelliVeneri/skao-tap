@@ -118,15 +118,15 @@ def main() -> int:
     lines.extend(["", "## Where to look next", ""])
     lines.append(
         "- Open tap-python-flamegraph.svg; wide application frames identify "
-        "the Python functions consuming the most sampled time."
+        + "the Python functions consuming the most sampled time."
     )
     lines.append(
         "- Open cone-plan.json; compare estimated and actual rows, then inspect "
-        "buffer reads around scan, join, sort, and aggregate nodes."
+        + "buffer reads around scan, join, sort, and aggregate nodes."
     )
     lines.append(
         "- Use the per-concurrency pgstat CSV files to distinguish a slow query "
-        "from connection-pool or application saturation."
+        + "from connection-pool or application saturation."
     )
     lines.append("")
     print("\n".join(lines))
