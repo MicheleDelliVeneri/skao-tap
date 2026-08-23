@@ -9,7 +9,9 @@ and the provenance needed to know whether two runs are comparable at all
 (commit, image ids, seed, corpus hash, chart values hash). Runs
 accumulate rather than replace, so a regression has somewhere to show up.
 
-_No runs published yet._
+## Latest
+
+[20260823T184745Z-b16f52f5-db-scaling](20260823T184745Z-b16f52f5-db-scaling/index.md) · [CSV](20260823T184745Z-b16f52f5-db-scaling/summary.csv)
 
 ## Reading these numbers
 

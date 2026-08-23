@@ -50,6 +50,25 @@ A running log of what the benchmark suite
 established, newest first. Each entry is a measurement rather than an opinion,
 so it can be checked and it can go stale — the run that produced it is named.
 
+### 2026-08-23 — the I/O-bound regime is still unmeasured
+
+At both sizes measured so far the buffer cache hit ratio is **100.000%** with
+**zero blocks read from disk**: D1 and D2 fit entirely in `shared_buffers` plus
+the page cache. Every conclusion below about size therefore describes an
+in-memory database, and the point where the working set stops fitting — which
+is what `DATABASE_IO_BOUND` exists to catch — has not been reached. D3 (25 GiB)
+and D4 (45 GiB) against a 6 GiB PostgreSQL are where that changes, and until
+they run the suite has said nothing about I/O.
+
+### 2026-08-23 — a full aggregate scales with the table, as it must
+
+Q13 (`GROUP BY` over all of ObsCore) went from a p95 of 393 ms on D1 to
+**3,128 ms on D2** — roughly 8x for 5x the rows — and is the only class that
+classifies `DATABASE_CPU_BOUND`. Nothing is wrong with the plan; a full
+aggregate is proportional work. It is the class that will make an
+`EXPLAIN`-based admission decision worth having, because a user can issue it
+synchronously today (see package 11).
+
 ### 2026-08-23 — ADQL translation was the service (fixed)
 
 Translation cost **41.5 ms of a ~50 ms synchronous request**, against under
