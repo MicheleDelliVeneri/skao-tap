@@ -33,9 +33,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PERF_SCALE_ROWS: ${{ github.event_name == 'pull_request' && '10000' || inputs.scale_rows || '1000000' }}
-  PERF_DURATION: ${{ github.event_name == 'pull_request' && '5' || inputs.duration || '60' }}
-  PERF_CLIENTS: ${{ github.event_name == 'pull_request' && '1 8' || inputs.clients || '1 8 16 32' }}
+  # github.event.inputs rather than inputs: this workflow also runs on a
+  # schedule, where the inputs context is empty, and event.inputs is the form
+  # that is unambiguously null there. Same values on a manual dispatch.
+  PERF_SCALE_ROWS: ${{ github.event_name == 'pull_request' && '10000' || github.event.inputs.scale_rows || '1000000' }}
+  PERF_DURATION: ${{ github.event_name == 'pull_request' && '5' || github.event.inputs.duration || '60' }}
+  PERF_CLIENTS: ${{ github.event_name == 'pull_request' && '1 8' || github.event.inputs.clients || '1 8 16 32' }}
   TAP_DATABASE_URL: postgresql://tap:tap@127.0.0.1:5432/tap
   TAP_BASE_URL: http://127.0.0.1:8000/tap
   TAP_RESULTS_DIR: /tmp/skao-tap-performance-results
