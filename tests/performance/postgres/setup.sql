@@ -14,12 +14,16 @@ CREATE TABLE perf.catalog (
 INSERT INTO perf.catalog (source_id, ra, dec, flux, position)
 SELECT
     id,
-    mod(id * 137.50776405003785, 360.0),
-    -90.0 + mod(id * 73.0, 180.0),
-    0.001 + mod(id * 17.0, 100000.0) / 100.0,
+    mod(id * 137, 360)::double precision
+        + mod(id, 1000)::double precision / 1000.0,
+    -90.0 + mod(id * 73, 180)::double precision,
+    0.001 + mod(id * 17, 100000)::double precision / 100.0,
     spoint(
-        radians(mod(id * 137.50776405003785, 360.0)),
-        radians(-90.0 + mod(id * 73.0, 180.0))
+        radians(
+            mod(id * 137, 360)::double precision
+                + mod(id, 1000)::double precision / 1000.0
+        ),
+        radians(-90.0 + mod(id * 73, 180)::double precision)
     )
 FROM generate_series(1, :scale_rows) AS series(id);
 
