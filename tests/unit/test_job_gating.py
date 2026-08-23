@@ -10,7 +10,7 @@ does close every path to a job.
 import json
 
 import pytest
-from tapcore.auth import OPERATIONS, gated_operations
+from tapcore.auth import OPERATIONS, QUERY_OPERATIONS, gated_operations
 
 QUERY = "SELECT source_id, ra FROM ska.continuum_sources"
 
@@ -79,8 +79,32 @@ def test_the_default_gate_set_is_metadata_only():
 
 
 def test_the_gate_set_is_ordered_and_deduplicated(auth_settings):
-    auth_settings(auth_gated_operations="query.sync, jobs.create , jobs.create")
-    assert gated_operations() == ("jobs.create", "query.sync")
+    auth_settings(auth_gated_operations="metadata.delete, metadata.ingest , metadata.delete")
+    assert gated_operations() == ("metadata.ingest", "metadata.delete")
+
+
+def test_the_query_operations_are_enforced_as_a_group(auth_settings):
+    """Gating a subset is not a weaker policy, it is an incoherent one: the
+    caller refused at /tap/async runs the same query at /tap/sync."""
+    auth_settings(auth_gated_operations="jobs.create")
+    with pytest.raises(LookupError, match=r"query\.sync"):
+        gated_operations()
+
+
+def test_the_whole_query_group_is_accepted(auth_settings):
+    auth_settings(auth_gated_operations=JOB_OPERATIONS)
+    assert gated_operations() == QUERY_OPERATIONS
+
+
+def test_the_query_group_composes_with_the_metadata_operations(auth_settings):
+    auth_settings(auth_gated_operations=f"metadata.delete,{JOB_OPERATIONS}")
+    assert gated_operations() == ("metadata.delete", *QUERY_OPERATIONS)
+
+
+def test_a_missing_group_member_is_named(auth_settings):
+    auth_settings(auth_gated_operations="jobs.create,jobs.mutate,query.sync")
+    with pytest.raises(LookupError, match=r"jobs\.delete"):
+        gated_operations()
 
 
 def test_an_unknown_operation_is_refused(auth_settings):
@@ -223,7 +247,7 @@ def test_an_unconfigured_job_role_denies(
         auth_enabled=True,
         auth_plugin="iam-groups",
         auth_roles=json.dumps({"metadata.ingest": {"groups": [OPER]}}),
-        auth_gated_operations="jobs.create",
+        auth_gated_operations=JOB_OPERATIONS,
         iam_issuer=iam_issuer,
         iam_audience=iam_audience,
     )

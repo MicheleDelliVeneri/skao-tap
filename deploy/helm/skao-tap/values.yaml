@@ -143,8 +143,13 @@ auth:
   # The job and query operations are opt-in for a reason: TAP clients submit
   # queries as POSTs, so enforcing jobs.create or query.sync turns away every
   # standard VO client that carries no token. Enforce them only where every
-  # client is expected to authenticate — and enforce them together, since
-  # gating jobs.create alone leaves synchronous querying wide open.
+  # client is expected to authenticate.
+  #
+  # jobs.create, jobs.mutate, jobs.delete and query.sync are enforced as a
+  # GROUP: listing some but not all of them is refused. A caller refused at
+  # POST /tap/async runs the same query at /tap/sync, and gating job mutation
+  # without job creation hands a client a job it cannot start. The metadata
+  # operations stay independent of each other.
   #
   # Known operations: metadata.ingest, metadata.amend, metadata.delete,
   # jobs.create, jobs.mutate, jobs.delete, query.sync. The single entry

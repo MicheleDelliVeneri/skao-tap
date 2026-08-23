@@ -47,6 +47,18 @@ DEFAULT_GATED_OPERATIONS = (
     "metadata.delete",
 )
 
+# The query surface, enforced as a group. Each of these reaches the same data
+# by a different route: an anonymous caller refused at POST /tap/async runs
+# the query at /tap/sync instead, and a deployment that gates job mutation
+# without job creation only hands a VO client a job it cannot start. Gating a
+# subset is not a weaker policy, it is an incoherent one.
+QUERY_OPERATIONS = (
+    "jobs.create",
+    "jobs.mutate",
+    "jobs.delete",
+    "query.sync",
+)
+
 #: the one value that enforces nothing while authentication stays on
 NOTHING_GATED = "none"
 
@@ -82,6 +94,16 @@ def gated_operations() -> tuple[str, ...]:
             f"TAP_AUTH_GATED_OPERATIONS names unknown operation(s)"
             f" {', '.join(sorted(unknown))}; known operations:"
             f" {', '.join(OPERATIONS)}"
+        )
+    partial = [name for name in QUERY_OPERATIONS if name not in named]
+    if partial and any(name in named for name in QUERY_OPERATIONS):
+        raise LookupError(
+            "TAP_AUTH_GATED_OPERATIONS enforces part of the query surface but"
+            f" not {', '.join(partial)}. These four are enforced together or"
+            " not at all: an anonymous caller refused at POST /tap/async runs"
+            " the same query at /tap/sync, and gating job mutation without job"
+            " creation hands a VO client a job it cannot start. Add"
+            f" {', '.join(partial)}, or drop the query operations entirely."
         )
     # de-duplicated and ordered like OPERATIONS, so the startup log and the
     # capabilities document read the same whatever order an operator typed

@@ -47,6 +47,19 @@ data:
   {{- end }}
   {{- end }}
   {{- if not $gatesNothing }}
+  {{- /* the query surface is enforced as a group: a caller refused at
+         POST /tap/async runs the same query at /tap/sync, and gating job
+         mutation without job creation hands a client a job it cannot start */}}
+  {{- $queryOps := list "jobs.create" "jobs.mutate" "jobs.delete" "query.sync" }}
+  {{- $missing := list }}
+  {{- range $operation := $queryOps }}
+  {{- if not (has $operation $.Values.auth.gatedOperations) }}
+  {{- $missing = append $missing $operation }}
+  {{- end }}
+  {{- end }}
+  {{- if and $missing (lt (len $missing) (len $queryOps)) }}
+  {{- fail (printf "auth.gatedOperations enforces part of the query surface but not %s. Enforce these four together or not at all: a caller refused at POST /tap/async runs the same query at /tap/sync, and gating job mutation without job creation hands a VO client a job it cannot start. See docs/auth.md." (join ", " $missing)) }}
+  {{- end }}
   {{- $known := list "metadata.ingest" "metadata.amend" "metadata.delete" "jobs.create" "jobs.mutate" "jobs.delete" "query.sync" }}
   {{- range $operation := .Values.auth.gatedOperations }}
   {{- if not (has $operation $known) }}

@@ -56,15 +56,29 @@ auth:
     # … a grant for each operation listed above
 ```
 
-Two things to know before doing that:
+The four query operations are enforced **as a group**: naming some but not
+all of them is refused, by the chart at render time and by the service at
+startup. A subset is not a weaker policy, it is an incoherent one — a caller
+refused at `POST /tap/async` runs the same query at `/tap/sync`, and gating
+job mutation without job creation hands a VO client a job it cannot start.
 
-- **Anonymous VO clients stop working.** A client that sends no token gets
-  `401` on `POST /tap/sync` and `POST /tap/async`, which is how PyVO and
-  TOPCAT submit queries. This is the intended effect, not a side effect.
-- **`jobs.create` alone is not a closed door.** Synchronous querying reaches
-  the same data without creating a job, so enforcing `jobs.create` while
-  leaving `query.sync` open only changes which endpoint an anonymous caller
-  uses. Enforce the two together.
+One thing to know before enforcing them: **anonymous VO clients stop
+working.** A client that sends no token gets `401` on `POST /tap/sync` and
+`POST /tap/async`, which is how PyVO and TOPCAT submit queries. That is the
+intended effect, not a side effect.
+
+The metadata operations stay independent of each other — ingest, amendment
+and deletion are separately grantable, and typically separately granted.
+
+### What a client can still do without a token
+
+Reads are never gated by this setting, whatever is enforced. `GET` on a job,
+its `/phase`, `/parameters`, `/results` and the job list all stay open, and
+what limits them is [ownership](#job-ownership): an anonymous caller sees
+jobs with no owner, and gets `403` on a job someone claimed. So with the
+query operations enforced, an anonymous TOPCAT cannot create or start a job,
+and cannot see any job created with a token — but it can still read a job
+that was created anonymously, if any exist.
 
 With `plugin: iam-groups`, every operation listed in `gatedOperations` must
 also be granted under `roles` — an enforced operation nobody is granted is
