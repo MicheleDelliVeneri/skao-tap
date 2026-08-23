@@ -134,6 +134,19 @@ def build_and_load_images() -> tuple[str, dict[str, str]]:
     return tag, {f"tapbench/{name}:{tag}": digest for name, digest in digests.items()}
 
 
+def use_image_tag(tag: str | None) -> None:
+    """Pin the tag every later upgrade has to keep deploying.
+
+    Without this, a run that skips the build reads the deployed tag, passes it
+    to the first install, and then loses it: the next upgrade — switching an
+    autoscaler on, changing a replica count — falls back to the values file's
+    mutable ``:bench`` and silently redeploys a different build mid-run. The
+    image guard caught exactly that.
+    """
+    global _image_tag
+    _image_tag = tag
+
+
 def deployed_image_tag() -> str | None:
     """The tag the release is already using, for a run that skips the build."""
     values = run(
