@@ -21,9 +21,24 @@ hooks:
   - scripts/generate_model_schema_docs.py
 markdown_extensions:
   - admonition
+  - attr_list
+  - md_in_html
   - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
   - pymdownx.highlight
-  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  # Mermaid diagrams are rendered client-side by Material's own bundled
+  # mermaid, so the architecture diagrams stay diffable text in git rather
+  # than binary images that go stale silently.
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
 nav:
   - Overview: index.md
   - Architecture: architecture.md
