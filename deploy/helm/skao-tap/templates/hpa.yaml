@@ -25,8 +25,8 @@ which is why package 8 exported it.
 {{- if not (dig "requests" "cpu" "" (default dict .Values.tapApi.resources)) }}
 {{- fail "horizontalAutoscaling.tapApi needs tapApi.resources.requests.cpu set: a CPU utilisation target is a percentage of the request, so without one the metric is unavailable and the autoscaler never acts" }}
 {{- end }}
-{{- if and .Values.verticalAutoscaling.enabled (ne .Values.verticalAutoscaling.updateMode "Off") }}
-{{- fail (printf "horizontalAutoscaling.tapApi and verticalAutoscaling.updateMode=%q both change CPU, which Kubernetes does not support: the VPA resizes the pod while the HPA counts pods against a percentage of the size it just changed. Keep updateMode \"Off\" (recommendations only) alongside a CPU-based HPA, or scale the API vertically instead. See docs/autoscaling.md." .Values.verticalAutoscaling.updateMode) }}
+{{- if and .Values.verticalAutoscaling.enabled (ne .Values.verticalAutoscaling.updateMode "Off") (has "cpu" .Values.verticalAutoscaling.controlledResources) }}
+{{- fail (printf "horizontalAutoscaling.tapApi and verticalAutoscaling.updateMode=%q both change CPU, which Kubernetes does not support: the VPA resizes the pod while the HPA counts pods against a percentage of the size it just changed. Either keep updateMode \"Off\" (recommendations only), or set verticalAutoscaling.controlledResources to [\"memory\"] so the VPA sizes memory while the HPA counts pods on CPU — that combination is supported. See docs/autoscaling.md." .Values.verticalAutoscaling.updateMode) }}
 {{- end }}
 {{- end }}
 
@@ -35,7 +35,20 @@ which is why package 8 exported it.
 {{- fail (printf "horizontalAutoscaling.tapExecutor.minReplicas (%d) is above maxReplicas (%d)" (int $hpa.tapExecutor.minReplicas) (int $hpa.tapExecutor.maxReplicas)) }}
 {{- end }}
 {{- if lt (int $hpa.tapExecutor.minReplicas) 1 }}
-{{- fail "horizontalAutoscaling.tapExecutor.minReplicas must be at least 1: tap_oldest_queued_job_seconds is exported by the executor itself, so with no executors running nothing reports the queue, the series goes stale, and no amount of queued work can start a pod again" }}
+{{- /*
+Scale-to-zero deadlocks on the *default* query, because the series it reads is
+exported by the executor: with no executors nothing reports the queue that
+would start one. An operator whose own query comes from somewhere the
+executors do not have to be running for — a recording rule, a database
+exporter — has no such problem, so the refusal is scoped to the case that
+actually breaks. A plain HPA cannot do zero at all without a feature gate.
+*/}}
+{{- if ne $hpa.tapExecutor.scaler "keda" }}
+{{- fail "horizontalAutoscaling.tapExecutor.minReplicas must be at least 1 with scaler=external: a HorizontalPodAutoscaler cannot scale to zero without the HPAScaleToZero feature gate" }}
+{{- end }}
+{{- if not $hpa.tapExecutor.query }}
+{{- fail "horizontalAutoscaling.tapExecutor.minReplicas 0 needs your own horizontalAutoscaling.tapExecutor.query: the default reads tap_oldest_queued_job_seconds, which the executor itself exports, so with no executors running nothing reports the queue, the series goes stale, and no amount of queued work can start a pod again. Point `query` at a series that survives having no executors (a recording rule, or an exporter reading the database) and scale-to-zero is sound. See docs/autoscaling.md." }}
+{{- end }}
 {{- end }}
 {{- if not (has $hpa.tapExecutor.scaler (list "keda" "external")) }}
 {{- fail (printf "horizontalAutoscaling.tapExecutor.scaler is %q; expected \"keda\" or \"external\"" $hpa.tapExecutor.scaler) }}
@@ -141,9 +154,13 @@ spec:
         # seconds of backlog per replica: 300s of queue against 60 here asks
         # for 5 executors
         threshold: {{ int $hpa.tapExecutor.backlogSecondsPerReplica | quote }}
-        {{- /* No activationThreshold: it only governs the 0-to-1 transition,
-               and minReplicaCount is at least 1 here by design. Damping
-               belongs in `behavior` instead. */}}
+        {{- /* Only when it can do something: activationThreshold governs the
+               0-to-1 transition alone, so at a minimum of 1 it would be a
+               setting that looks live and is not. Damping for the scaling
+               range belongs in `behavior`. */}}
+        {{- if eq (int $hpa.tapExecutor.minReplicas) 0 }}
+        activationThreshold: {{ int $hpa.tapExecutor.activationBacklogSeconds | quote }}
+        {{- end }}
 ---
 {{- else }}
 {{- /*
@@ -174,9 +191,18 @@ spec:
       external:
         metric:
           name: {{ $hpa.tapExecutor.externalMetricName | quote }}
+          {{- /* Unset means the namespace default; an explicit {} means no
+                 selector, which some providers need — a selector that matches
+                 no series is not a stricter autoscaler, it is a dead one. */}}
+          {{- $selector := $hpa.tapExecutor.externalMetricSelector }}
+          {{- if kindIs "invalid" $selector }}
+          {{- $selector = dict "namespace" .Release.Namespace }}
+          {{- end }}
+          {{- with $selector }}
           selector:
             matchLabels:
-              namespace: {{ .Release.Namespace }}
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
         target:
           # AverageValue, so the HPA divides the backlog by the replica count:
           # desired = ceil(backlog / backlogSecondsPerReplica)

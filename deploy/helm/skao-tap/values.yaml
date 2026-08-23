@@ -74,6 +74,10 @@ podDisruptionBudget:
 verticalAutoscaling:
   enabled: false
   updateMode: "Off"
+  # -- Which resources the VPA sizes. Narrow this to ["memory"] to run a live
+  # VPA alongside a CPU-based HorizontalPodAutoscaler: two controllers driving
+  # CPU is unsupported, one per resource is not.
+  controlledResources: ["cpu", "memory"]
   tapApi:
     minAllowed:
       cpu: 100m
@@ -139,6 +143,10 @@ horizontalAutoscaling:
     # to react sooner and to run more executors; raise it to tolerate a queue.
     backlogSecondsPerReplica: 60
     pollingIntervalSeconds: 30
+    # -- Backlog that counts as work worth starting a pod for, when
+    # minReplicas is 0 (KEDA only, and only the 0-to-1 transition — with a
+    # minimum of 1 it would do nothing, so it is rendered only when it can).
+    activationBacklogSeconds: 0
     # -- Prometheus holding the executor metrics. Defaults to the chart's own
     # when prometheus.enabled=true, which is for trying this out, not for
     # production — point it at the Prometheus you already run.
@@ -153,6 +161,14 @@ horizontalAutoscaling:
     # -- External-metric name, when scaler=external. Must match what the
     # cluster's metrics provider actually publishes.
     externalMetricName: tap_oldest_queued_job_seconds
+    # -- matchLabels for that metric. Left unset, the chart scopes it to this
+    # release's namespace, which is what prometheus-adapter publishes when its
+    # rule overrides `namespace`. Set labels here for a provider that
+    # publishes different ones, or `{}` to send no selector at all — required
+    # when the provider exposes no labels, because a selector matching no
+    # series leaves the autoscaler at <unknown> for good. Note this is the
+    # external path's equivalent of `query`: that value only reaches KEDA.
+    externalMetricSelector:
     # -- Optional autoscaling/v2 `behavior:` block (both scalers).
     behavior: {}
 

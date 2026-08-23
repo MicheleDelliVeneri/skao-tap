@@ -218,6 +218,40 @@ jobs:
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --show-only templates/hpa.yaml \
             | grep -q "type: External"
+          # that path is scoped by a label selector, not by `query`, so a
+          # provider publishing no labels has to be able to remove it: a
+          # selector matching no series is a dead autoscaler, not a strict one
+          test "$(helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapExecutor.enabled=true \
+            --set horizontalAutoscaling.tapExecutor.scaler=external \
+            --set-json 'horizontalAutoscaling.tapExecutor.externalMetricSelector={}' \
+            --show-only templates/hpa.yaml | grep -c 'matchLabels')" = 0
+          helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapExecutor.enabled=true \
+            --set horizontalAutoscaling.tapExecutor.scaler=external \
+            --set-json 'horizontalAutoscaling.tapExecutor.externalMetricSelector={"job":"tap-executor"}' \
+            --show-only templates/hpa.yaml | grep -q 'job: tap-executor'
+          # scale-to-zero is refused for the default query and allowed for one
+          # that survives having no executors — and the activation threshold
+          # is rendered only where it can do anything
+          helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapExecutor.enabled=true \
+            --set horizontalAutoscaling.tapExecutor.minReplicas=0 \
+            --set prometheus.enabled=true \
+            --set 'horizontalAutoscaling.tapExecutor.query=max(from_the_database)' \
+            --show-only templates/hpa.yaml | grep -q "activationThreshold"
+          test "$(helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapExecutor.enabled=true \
+            --set prometheus.enabled=true \
+            --show-only templates/hpa.yaml | grep -c activationThreshold)" = 0
+          # a live VPA sizing memory beside a CPU HPA is supported: one
+          # controller per resource, which is the pattern that is not
+          helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapApi.enabled=true \
+            --set verticalAutoscaling.enabled=true \
+            --set verticalAutoscaling.updateMode=Auto \
+            --set-json 'verticalAutoscaling.controlledResources=["memory"]' \
+            --show-only templates/vpa.yaml | grep -q '\["memory"\]'
       # Every one of these is an autoscaler that would look configured and
       # either do nothing or make things worse.
       - name: Unworkable autoscaling configurations are refused
@@ -238,9 +272,13 @@ jobs:
                   --set verticalAutoscaling.updateMode=Auto
           refuses "${api[@]}" --set horizontalAutoscaling.tapApi.maxReplicas=1
           refuses "${api[@]}" --set horizontalAutoscaling.tapApi.minReplicas=0
-          # the backlog gauge is exported by the executor itself: at zero
-          # replicas nothing reports the queue that would start one
+          # the default query reads a gauge the executor itself exports: at
+          # zero replicas nothing reports the queue that would start one
           refuses "${executor[@]}" --set horizontalAutoscaling.tapExecutor.minReplicas=0
+          # and a plain HPA cannot reach zero at all, own query or not
+          refuses "${executor[@]}" --set horizontalAutoscaling.tapExecutor.minReplicas=0 \
+                  --set horizontalAutoscaling.tapExecutor.scaler=external \
+                  --set 'horizontalAutoscaling.tapExecutor.query=max(from_the_database)'
           refuses "${executor[@]}" --set horizontalAutoscaling.tapExecutor.scaler=cron
           refuses "${executor[@]}" \
                   --set horizontalAutoscaling.tapExecutor.backlogSecondsPerReplica=0
