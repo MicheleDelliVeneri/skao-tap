@@ -17,18 +17,84 @@ When enabled, two separable things happen to a request:
 
 ## What is gated
 
-| Operation | Endpoint |
-| --- | --- |
-| `metadata.ingest` | `POST /api/v1/<mount>` |
-| `metadata.amend` | `PATCH /api/v1/<mount>/{root_id}` |
-| `metadata.delete` | `DELETE /api/v1/<mount>/{root_id}` |
+Seven operations can be gated. Which ones a deployment actually enforces is
+its own choice, set with `auth.gatedOperations`:
 
-Everything else — every `GET`, and querying through `POST /tap/sync`,
-`POST /tap/async`, `POST /api/v1/query` and `POST /api/v1/jobs` — stays open
-to anonymous callers. This is deliberate: TAP clients send ADQL as a POST
-body, so gating "all writes" by HTTP method would lock PyVO, TOPCAT and
-every other standard VO client out of an authenticated deployment. What is
-protected is the data a caller can *change*.
+| Operation | Requests | Enforced by default |
+| --- | --- | --- |
+| `metadata.ingest` | `POST /api/v1/<mount>` | yes |
+| `metadata.amend` | `PATCH /api/v1/<mount>/{root_id}` | yes |
+| `metadata.delete` | `DELETE /api/v1/<mount>/{root_id}` | yes |
+| `jobs.create` | `POST /tap/async`, `POST /api/v1/jobs` | no |
+| `jobs.mutate` | `POST /tap/async/{job_id}/{phase,executionduration,destruction,parameters}`, `POST /api/v1/jobs/{job_id}/phase` | no |
+| `jobs.delete` | `DELETE /tap/async/{job_id}`, `POST /tap/async/{job_id}` with `ACTION=DELETE`, `DELETE /api/v1/jobs/{job_id}` | no |
+| `query.sync` | `GET`/`POST /tap/sync`, `POST /api/v1/query` | no |
+
+The default enforces metadata mutation only, and every `GET` stays open
+whatever is configured. That default is deliberate: TAP clients send ADQL as
+a POST body, so gating "all writes" by HTTP method would lock PyVO, TOPCAT
+and every other standard VO client out of an authenticated deployment. What
+is protected by default is the data a caller can *change*.
+
+### Requiring tokens for querying
+
+A site where every client is expected to authenticate can enforce the job
+and query operations too:
+
+```yaml
+auth:
+  enabled: true
+  gatedOperations:
+    - metadata.ingest
+    - metadata.amend
+    - metadata.delete
+    - jobs.create
+    - jobs.mutate
+    - jobs.delete
+    - query.sync
+  roles:
+    # … a grant for each operation listed above
+```
+
+The four query operations are enforced **as a group**: naming some but not
+all of them is refused, by the chart at render time and by the service at
+startup. A subset is not a weaker policy, it is an incoherent one — a caller
+refused at `POST /tap/async` runs the same query at `/tap/sync`, and gating
+job mutation without job creation hands a VO client a job it cannot start.
+
+One thing to know before enforcing them: **anonymous VO clients stop
+working.** A client that sends no token gets `401` on `POST /tap/sync` and
+`POST /tap/async`, which is how PyVO and TOPCAT submit queries. That is the
+intended effect, not a side effect.
+
+The metadata operations stay independent of each other — ingest, amendment
+and deletion are separately grantable, and typically separately granted.
+
+### What a client can still do without a token
+
+Reads are never gated by this setting, whatever is enforced. `GET` on a job,
+its `/phase`, `/parameters`, `/results` and the job list all stay open, and
+what limits them is [ownership](#job-ownership): an anonymous caller sees
+jobs with no owner, and gets `403` on a job someone claimed. So with the
+query operations enforced, an anonymous TOPCAT cannot create or start a job,
+and cannot see any job created with a token — but it can still read a job
+that was created anonymously, if any exist.
+
+With `plugin: iam-groups`, every operation listed in `gatedOperations` must
+also be granted under `roles` — an enforced operation nobody is granted is
+denied to everyone, so the chart refuses to render that configuration rather
+than shipping a service that answers `403` to its own operators.
+
+Every other `GET` — the job resources, the metadata reads, the VOSI
+documents — stays open whatever is configured. The one exception is
+`GET /tap/sync`, which executes a query rather than reading a resource, so
+`query.sync` covers it in both verbs. What stops one user reading another
+user's job is [ownership](#job-ownership), enforced in the job store rather
+than at the endpoint.
+
+To verify tokens and record job ownership while enforcing nothing, set
+`gatedOperations: ["none"]`. That is the only way to say it: a list that
+names no operation is rejected, so a typo cannot quietly turn the gate off.
 
 `GET /api/v1/auth` reports what the deployment enforces, so clients need not
 discover it by trial:
@@ -188,13 +254,22 @@ reached.
 
 ## Behaviour summary
 
+`gated_operations` lists only what this deployment enforces, so a client can
+tell from it whether it needs a token to query at all.
+
+"Gated call" below means a request covered by an operation this deployment
+enforces. The three metadata operations are enforced independently of one
+another; the four query operations are enforced as a group, so "enforcing
+`query.sync`" always means the whole query surface is enforced.
+
 | Request | Auth disabled | Auth enabled |
 | --- | --- | --- |
-| `GET`, or any query | 200 | 200 (token verified if present) |
-| Mutating call, no token | 200 | `401` + `WWW-Authenticate: Bearer` |
-| Mutating call, forged/expired token | 200 | `401` |
-| Mutating call, valid token without the role | 200 | `403` |
-| Mutating call, valid token with the role | 200 | 200 |
+| `GET`, other than `/tap/sync` | 200 | 200 (token verified if present) |
+| Query whose operation is not enforced | 200 | 200 (token verified if present) |
+| Gated call, no token | 200 | `401` + `WWW-Authenticate: Bearer` |
+| Gated call, forged/expired token | 200 | `401` |
+| Gated call, valid token without the role | 200 | `403` |
+| Gated call, valid token with the role | 200 | 200 |
 | Any call, unverifiable token | ignored | `401` |
 
 ## Job ownership

@@ -6,7 +6,7 @@ import os
 import shutil
 import time
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
 from tapcore import uws
 from tapcore.config import settings
@@ -15,7 +15,7 @@ from tapcore.errors import NotFoundError, UsageError
 from tapcore.query.upload import save_upload_sources
 from tapcore.query.votable import error_votable
 
-from ..auth import owner_of
+from ..auth import owner_of, require
 from ..queries.params import gather_params
 from ..queries.query import prepare_query
 from ..queries.uploads import gather_upload_files, parse_uploads, resolve_upload_sources
@@ -117,7 +117,7 @@ async def job_list(request: Request):
     return Response(uws.joblist_xml(jobs), media_type=XML)
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require("jobs.create"))])
 async def create_job(request: Request):
     params = await gather_params(request)
     phase = params.pop("PHASE", None)
@@ -139,7 +139,7 @@ async def job_summary(job_id: str, request: Request):
     return Response(uws.job_xml(job), media_type=XML)
 
 
-@router.post("/{job_id}")
+@router.post("/{job_id}", dependencies=[Depends(require("jobs.delete"))])
 async def job_action(job_id: str, request: Request):
     params = await gather_params(request)
     action = params.get("ACTION", "").upper()
@@ -148,7 +148,7 @@ async def job_action(job_id: str, request: Request):
     raise UsageError("POST to the job URI requires ACTION=DELETE")
 
 
-@router.delete("/{job_id}")
+@router.delete("/{job_id}", dependencies=[Depends(require("jobs.delete"))])
 async def delete_job(job_id: str):
     with pool().connection() as conn:
         uws.delete_job(conn, job_id)
@@ -162,7 +162,7 @@ async def get_phase(job_id: str, request: Request):
     return PlainTextResponse(job["phase"])
 
 
-@router.post("/{job_id}/phase")
+@router.post("/{job_id}/phase", dependencies=[Depends(require("jobs.mutate"))])
 async def post_phase(job_id: str, request: Request):
     params = await gather_params(request)
     phase = params.get("PHASE", "").upper()
@@ -184,7 +184,7 @@ async def get_execution_duration(job_id: str):
     return PlainTextResponse(str(job["execution_duration"]))
 
 
-@router.post("/{job_id}/executionduration")
+@router.post("/{job_id}/executionduration", dependencies=[Depends(require("jobs.mutate"))])
 async def post_execution_duration(job_id: str, request: Request):
     params = await gather_params(request)
     try:
@@ -206,7 +206,7 @@ async def get_destruction(job_id: str):
     return PlainTextResponse(_iso(job["destruction"]))
 
 
-@router.post("/{job_id}/destruction")
+@router.post("/{job_id}/destruction", dependencies=[Depends(require("jobs.mutate"))])
 async def post_destruction(job_id: str, request: Request):
     params = await gather_params(request)
     raw = params.get("DESTRUCTION", "")
@@ -241,7 +241,7 @@ async def get_parameters(job_id: str):
     return Response(uws.job_xml(job), media_type=XML)
 
 
-@router.post("/{job_id}/parameters")
+@router.post("/{job_id}/parameters", dependencies=[Depends(require("jobs.mutate"))])
 async def post_parameters(job_id: str, request: Request):
     params = await gather_params(request)
     with pool().connection() as conn:

@@ -136,8 +136,11 @@ async def tables():
     return Response(vosi.tables_xml(), media_type="application/xml")
 
 
-@app.get("/tap/sync")
-@app.post("/tap/sync")
+# query.sync is off by default: a deployment that gates it refuses anonymous
+# synchronous queries, which is most VO tooling. Gating jobs.create without it
+# leaves synchronous querying open, so the two belong together.
+@app.get("/tap/sync", dependencies=[Depends(auth.require("query.sync"))])
+@app.post("/tap/sync", dependencies=[Depends(auth.require("query.sync"))])
 async def sync(request: Request):
     params = await gather_params(request)
     if params.get("REQUEST") == "getCapabilities":  # TAP 1.0 compatibility

@@ -136,6 +136,39 @@ auth:
     serviceName: science-metadata
     serviceVersion: "1"
     timeoutSeconds: 10
+  # -- Which operations the gate enforces. Empty means the service default:
+  # metadata mutation only (metadata.ingest, metadata.amend,
+  # metadata.delete), which is what a deployment upgrading into this had.
+  #
+  # The job and query operations are opt-in for a reason: TAP clients submit
+  # queries as POSTs, so enforcing jobs.create or query.sync turns away every
+  # standard VO client that carries no token. Enforce them only where every
+  # client is expected to authenticate.
+  #
+  # jobs.create, jobs.mutate, jobs.delete and query.sync are enforced as a
+  # GROUP: listing some but not all of them is refused. A caller refused at
+  # POST /tap/async runs the same query at /tap/sync, and gating job mutation
+  # without job creation hands a client a job it cannot start. The metadata
+  # operations stay independent of each other.
+  #
+  # Known operations: metadata.ingest, metadata.amend, metadata.delete,
+  # jobs.create, jobs.mutate, jobs.delete, query.sync. The single entry
+  # ["none"] enforces nothing while still verifying tokens and recording job
+  # ownership; a list that names no operation at all is rejected, so a typo
+  # cannot quietly turn the gate off. With plugin=iam-groups
+  # each one listed here must also be granted under `roles` below; the chart
+  # refuses to render otherwise, because an enforced operation nobody is
+  # granted is denied to everyone.
+  #
+  #   gatedOperations:
+  #     - metadata.ingest
+  #     - metadata.amend
+  #     - metadata.delete
+  #     - jobs.create
+  #     - jobs.mutate
+  #     - jobs.delete
+  #     - query.sync
+  gatedOperations: []
   # -- Used when plugin=iam-groups: what each gated operation requires. A
   # principal is allowed when its verified token carries any of the listed
   # groups or any of the listed scopes.

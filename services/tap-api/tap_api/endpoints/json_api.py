@@ -32,7 +32,7 @@ from tapcore.errors import NotFoundError, UsageError
 from tapcore.metadata import ingest
 from tapcore.metadata.plugins import MetadataPlugin, active_plugins
 
-from ..auth import auth_summary, owner_of, require
+from ..auth import auth_summary, gated, owner_of, require
 from ..queries.query import prepare_query, run_sync
 
 router = APIRouter(prefix="/api/v1", tags=["json-api"])
@@ -72,6 +72,24 @@ def _tap_params(body: QueryRequest, fmt: str | None = None) -> dict[str, str]:
     return params
 
 
+#: which requests each gated operation covers, for /api/v1/auth
+OPERATION_ROUTES = {
+    "metadata.ingest": "POST /api/v1/<mount>",
+    "metadata.amend": "PATCH /api/v1/<mount>/{root_id}",
+    "metadata.delete": "DELETE /api/v1/<mount>/{root_id}",
+    "jobs.create": "POST /tap/async, POST /api/v1/jobs",
+    "jobs.mutate": (
+        "POST /tap/async/{job_id}/(phase|executionduration|destruction|parameters),"
+        " POST /api/v1/jobs/{job_id}/phase"
+    ),
+    "jobs.delete": (
+        "DELETE /tap/async/{job_id}, POST /tap/async/{job_id} with ACTION=DELETE,"
+        " DELETE /api/v1/jobs/{job_id}"
+    ),
+    "query.sync": "GET|POST /tap/sync, POST /api/v1/query",
+}
+
+
 @router.get("/auth")
 async def auth_info():
     """What this deployment enforces: whether a token is needed, and from where.
@@ -80,15 +98,13 @@ async def auth_info():
     deployment is unauthenticated, or which IAM issues the tokens it accepts.
     """
     summary = auth_summary()
-    summary["gated_operations"] = {
-        "metadata.ingest": "POST /api/v1/<mount>",
-        "metadata.amend": "PATCH /api/v1/<mount>/{root_id}",
-        "metadata.delete": "DELETE /api/v1/<mount>/{root_id}",
-    }
+    # only what this deployment actually enforces: listing an operation it
+    # lets through would tell a client to send a token it does not need
+    summary["gated_operations"] = {name: OPERATION_ROUTES[name] for name in gated()}
     return summary
 
 
-@router.post("/query")
+@router.post("/query", dependencies=[Depends(require("query.sync"))])
 async def sync_query(body: QueryRequest):
     """Synchronous ADQL query, JSON by default (metadata, data, status).
 
@@ -151,7 +167,7 @@ def _queue(conn, job: dict) -> None:
     uws.update_job(conn, job["job_id"], phase="QUEUED", query_sql=prepared["sql"])
 
 
-@router.post("/jobs", status_code=201)
+@router.post("/jobs", status_code=201, dependencies=[Depends(require("jobs.create"))])
 async def create_job(body: JobRequest, request: Request):
     params = _tap_params(body, fmt=body.format)
     if body.run_id:
@@ -210,7 +226,7 @@ class PhaseRequest(BaseModel):
     phase: str = Field(description="RUN or ABORT")
 
 
-@router.post("/jobs/{job_id}/phase")
+@router.post("/jobs/{job_id}/phase", dependencies=[Depends(require("jobs.mutate"))])
 async def post_phase(job_id: str, body: PhaseRequest):
     phase = body.phase.upper()
     with pool().connection() as conn:
@@ -224,7 +240,7 @@ async def post_phase(job_id: str, body: PhaseRequest):
         return _job_json(uws.get_job(conn, job_id))
 
 
-@router.delete("/jobs/{job_id}", status_code=204)
+@router.delete("/jobs/{job_id}", status_code=204, dependencies=[Depends(require("jobs.delete"))])
 async def delete_job(job_id: str):
     with pool().connection() as conn:
         uws.delete_job(conn, job_id)
