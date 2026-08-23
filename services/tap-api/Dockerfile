@@ -24,4 +24,8 @@ USER 10001
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
     CMD ["/srv/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/tap/availability', timeout=4)"]
-CMD ["/srv/.venv/bin/uvicorn", "tap_api.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Shell form so the worker count and port come from the environment: ADQL
+# translation is pure-Python ANTLR and holds the GIL, so one process serves one
+# query at a time however many CPUs the pod has, and TAP_API_WORKERS is what
+# lets a deployment use them. exec keeps uvicorn in place for signal handling.
+CMD ["/bin/sh", "-c", "exec /srv/.venv/bin/uvicorn tap_api.main:app --host 0.0.0.0 --port ${TAP_API_PORT:-8080} --workers ${TAP_API_WORKERS:-1}"]

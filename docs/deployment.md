@@ -38,6 +38,7 @@ Key values (see `values.yaml` for the full list):
 | `verticalAutoscaling.enabled` | `false` | VPA per service (recommendation mode first) |
 | `postgresql.tuning` | `{}` | postgresql.conf overrides as `-c` server arguments |
 | `backup.enabled` | `false` | Nightly `pg_dump` CronJob to a dedicated PVC |
+| `tapApi.workers` | `1` | Uvicorn processes per pod; ADQL translation holds the GIL, so this is what lets a pod use more than one core |
 | `auth.enabled` | `false` | Require verified tokens and gate the mutating metadata endpoints ([guide](auth.md)) |
 | `auth.requireToken` | `true` | With `auth.enabled`, every request needs a verified token — discovery and the health check aside |
 | `auth.anonymousQueries` | `false` | Let token-less callers read metadata through `/tap/sync` and the `/tap/async` job; what standard VO clients need |
@@ -46,6 +47,27 @@ Key values (see `values.yaml` for the full list):
 | `auth.iam.issuer` | `""` | Required when `auth.enabled`; tokens are verified against its JWKS |
 | `auth.iam.audience` | `""` | Required when `auth.enabled`; guards against cross-service token replay |
 | `auth.roles` | `{}` | Per-operation groups/scopes for `iam-groups`; required, and an empty rule denies |
+
+### Serving concurrent queries
+
+Translating ADQL is pure-Python ANTLR work — tens of milliseconds per query,
+holding the GIL — so a single process answers one query at a time no matter
+how many cores the pod has. Measured locally at 8 concurrent clients, same
+machine and same queries:
+
+| workers | throughput | p95 |
+| ---: | ---: | ---: |
+| 1 | 59 req/s | 199 ms |
+| 4 | 210 req/s | 61 ms |
+
+Set `tapApi.workers` to the pod's CPU limit and no higher: beyond that the
+workers compete for the same cores and only latency moves. `tapApi.replicas`
+does the same across pods, and the two combine.
+
+Mind the connections. Each worker opens its own pool of up to 8, so a pod can
+hold `workers × 8` and the deployment `workers × 8 × replicas`. Keep that
+under the server's `max_connections` — `postgresql.tuning.max_connections`
+raises it for the in-chart database, and a managed server has its own limit.
 
 !!! warning "Results volume access mode"
     The results volume is shared between the API and the executor. With more
