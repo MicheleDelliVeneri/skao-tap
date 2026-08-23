@@ -20,16 +20,25 @@ data:
   {{- /* VOResource record; disabled by default, see values.yaml */}}
   TAP_REGISTRY_ENABLED: {{ .Values.voRegistry.enabled | quote }}
   {{- if .Values.voRegistry.enabled }}
+  {{- /* trimmed, like the service does: a whitespace-only value would pass a
+         nil/empty check here and then fail at runtime, which is the failure
+         this validation exists to move forward to deploy time */}}
   {{- range $key := list "authorityId" "resourceKey" "title" "shortName" "description" "referenceUrl" "publisher" "created" }}
-  {{- if not (get $.Values.voRegistry $key) }}
+  {{- if not (trim (toString (get $.Values.voRegistry $key))) }}
   {{- fail (printf "voRegistry.%s is required when voRegistry.enabled=true: a VOResource record missing it is rejected by a publishing registry. See docs/registry.md." $key) }}
   {{- end }}
   {{- end }}
-  {{- if not .Values.voRegistry.subjects }}
-  {{- fail "voRegistry.subjects needs at least one term when voRegistry.enabled=true (e.g. [\"radio astronomy\"])" }}
+  {{- $subjects := list }}
+  {{- range $subject := default (list) .Values.voRegistry.subjects }}
+  {{- if trim (toString $subject) }}
+  {{- $subjects = append $subjects $subject }}
   {{- end }}
-  {{- if gt (len .Values.voRegistry.shortName) 16 }}
-  {{- fail (printf "voRegistry.shortName is %d characters; VOResource allows at most 16" (len .Values.voRegistry.shortName)) }}
+  {{- end }}
+  {{- if not $subjects }}
+  {{- fail "voRegistry.subjects needs at least one non-blank term when voRegistry.enabled=true (e.g. [\"radio astronomy\"]); the record's content requires a subject" }}
+  {{- end }}
+  {{- if gt (len (trim .Values.voRegistry.shortName)) 16 }}
+  {{- fail (printf "voRegistry.shortName is %d characters; VOResource allows at most 16" (len (trim .Values.voRegistry.shortName))) }}
   {{- end }}
   TAP_REGISTRY_IDENTIFIER: {{ printf "ivo://%s/%s" .Values.voRegistry.authorityId .Values.voRegistry.resourceKey | quote }}
   TAP_REGISTRY_TITLE: {{ .Values.voRegistry.title | quote }}

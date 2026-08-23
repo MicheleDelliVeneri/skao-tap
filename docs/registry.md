@@ -52,8 +52,10 @@ voRegistry:
   created: "2026-08-23"          # ISO-8601; `updated` defaults to this
 ```
 
-The chart refuses to render `enabled: true` with any required value unset, or
-with a `shortName` over the VOResource limit — a record that a registry will
+The chart refuses to render `enabled: true` with any required value unset or
+blank (whitespace is not a value, and the service would reject it at startup
+anyway), with no non-blank `subjects` entry, or with a `shortName` over the
+VOResource limit — a record that a registry will
 reject should fail at deploy time, not in someone else's ingest log a week
 later. The service raises the same errors, naming the Helm value to edit, for
 deployments configured through environment variables directly.

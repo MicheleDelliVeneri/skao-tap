@@ -227,6 +227,11 @@ jobs:
                   --set voRegistry.authorityId=""                         # no authority
           refuses "${complete[@]}" --set 'voRegistry.subjects={radio}' \
                   --set voRegistry.shortName="a-very-long-short-name"     # over 16 chars
+          # whitespace is not a value: these would pass a nil/empty check and
+          # then fail at runtime, which is what this validation exists to stop
+          refuses "${complete[@]}" --set 'voRegistry.subjects={radio}' \
+                  --set voRegistry.title="   "
+          refuses "${complete[@]}" --set-json 'voRegistry.subjects=[" "]'
 
       # Each of these is a way to end up with auth "on" but nothing enforced.
       - name: Unsafe authentication configurations are refused
