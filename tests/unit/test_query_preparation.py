@@ -141,3 +141,24 @@ def test_a_table_published_after_the_window_becomes_queryable(client, fake_db):
     restart."""
     query_module.forget_published_tables()
     assert "ska.continuum_sources" in query_module._published_tables()
+
+
+def test_a_table_published_while_running_is_not_refused(counting_pool, client, fake_db):
+    """What the component tests caught: a fixture registers a table in
+    TAP_SCHEMA while the service is up, and a cached "not published" would
+    reject queries against it until the window expired."""
+    query_module._published_tables()  # warm the cache without the new table
+    fake_db.published.append(("ska.late_arrival",))
+    reads_before = counting_pool["n"]
+
+    published = query_module._published_tables()
+    assert "ska.late_arrival" not in published  # stale, as expected
+
+    # asking about it refreshes rather than refuses
+    assert (
+        query_module._first_unpublished(frozenset({"ska.late_arrival"}), published, set())
+        == "ska.late_arrival"
+    )
+    query_module.forget_published_tables()
+    assert "ska.late_arrival" in query_module._published_tables()
+    assert counting_pool["n"] > reads_before

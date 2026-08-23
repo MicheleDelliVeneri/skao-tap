@@ -44,14 +44,16 @@ def prepare_query(params: dict[str, str]) -> dict:
     sql = translation.sql
 
     tables = translation.tables
-    published = _published_tables()
-    for table in tables:
-        lower = table.lower()
-        if lower.startswith("tap_upload."):
-            if lower.removeprefix("tap_upload.") not in upload_names:
-                raise UsageError(f"table {table} was not uploaded with this request")
-        elif lower not in published:
-            raise UsageError(f"table {table} is not published by this service")
+    unpublished = _first_unpublished(tables, _published_tables(), upload_names)
+    if unpublished is not None:
+        # The table list is cached, so "not published" may only mean "not
+        # published when we last looked". A table registered a moment ago must
+        # not be refused for up to the cache's lifetime, so refusing is what
+        # forces a fresh read — rare, and cheap because it is rare.
+        forget_published_tables()
+        unpublished = _first_unpublished(tables, _published_tables(), upload_names)
+    if unpublished is not None:
+        raise UsageError(f"table {unpublished} is not published by this service")
 
     maxrec = params.get("MAXREC")
     if maxrec is not None:
@@ -80,6 +82,24 @@ def prepare_query(params: dict[str, str]) -> dict:
         "mime": mime,
         "ext": ext,
     }
+
+
+def _first_unpublished(
+    tables: frozenset[str], published: frozenset[str], upload_names: set[str]
+) -> str | None:
+    """The first table that is not readable, or None if all of them are.
+
+    Uploads are checked here too, but against the request's own uploads, so
+    they are never affected by the cached list.
+    """
+    for table in tables:
+        lower = table.lower()
+        if lower.startswith("tap_upload."):
+            if lower.removeprefix("tap_upload.") not in upload_names:
+                raise UsageError(f"table {table} was not uploaded with this request")
+        elif lower not in published:
+            return table
+    return None
 
 
 # TAP_SCHEMA's table list changes when a deployment gains a metadata domain or
