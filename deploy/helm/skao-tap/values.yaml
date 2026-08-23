@@ -213,6 +213,55 @@ auth:
   #       scopes: ["science-metadata:admin"]
   roles: {}
 
+# -- VO Registry publication. The service serves its VOResource record at
+# GET /tap/registry, built from these values and its live capabilities, so the
+# record cannot describe a service other than the one answering.
+#
+# Off by default, and every value below is a placeholder: an IVOA identifier
+# is a permanent promise that `ivo://<authorityId>/<resourceKey>` resolves to
+# this service, so it cannot be guessed. The chart refuses to render
+# `enabled: true` while a required value is unset.
+#
+# Publishing the record is a separate, manual step: submit the document (or
+# the URL) to a publishing registry — SKAO's own, or one that accepts
+# submissions for the authority — which then makes it harvestable from the VO
+# Registry. Nothing here contacts a registry on its own.
+voRegistry:
+  enabled: false
+  # -- IVOA authority you are registered to publish under, e.g. "skao.int".
+  authorityId: ""
+  # -- Path within the authority, e.g. "srcnet/tap".
+  resourceKey: ""
+  # -- Human-readable title, e.g. "SKAO SRCNet TAP service".
+  title: ""
+  # -- At most 16 characters (VOResource limit), e.g. "SKAO TAP".
+  shortName: ""
+  # -- A paragraph on what is queryable here. Registry users read this first.
+  description: ""
+  # -- Landing page for humans, e.g. "https://srcnet.skao.int/tap".
+  referenceUrl: ""
+  # -- Organisation responsible for publishing, e.g. "SKA Observatory".
+  publisher: ""
+  # -- Optional: who produced the data.
+  creator: ""
+  # -- Optional support contact. A team alias, not a person: the record is
+  # public and permanent.
+  contact:
+    name: ""     # e.g. "SRCNet operations"
+    email: ""    # e.g. "srcnet-support@example.org"
+  # -- At least one subject term is required, e.g. ["radio astronomy"].
+  subjects: []
+  # -- VOResource vocabularies; the defaults suit a science archive.
+  types: ["Archive"]
+  contentLevels: ["Research"]
+  # -- ISO-8601 date the record was first published. Required, and fixed
+  # once published: it identifies the resource's origin, not this revision.
+  created: ""
+  # -- ISO-8601 date of the current revision; defaults to `created`. This is
+  # the one harvesters compare, so bump it whenever the record changes —
+  # a changed record carrying an unchanged `updated` can be ignored.
+  updated: ""
+
 # -- TAP service tuning (mapped to TAP_* environment variables).
 config:
   defaultMaxrec: 10000

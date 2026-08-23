@@ -17,6 +17,48 @@ data:
   TAP_WAIT_MAX: {{ .Values.config.waitMaxSeconds | int64 | quote }}
   TAP_MODEL_PLUGINS: {{ .Values.config.modelPlugins | quote }}
   TAP_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  {{- /* VOResource record; disabled by default, see values.yaml */}}
+  TAP_REGISTRY_ENABLED: {{ .Values.voRegistry.enabled | quote }}
+  {{- if .Values.voRegistry.enabled }}
+  {{- /* trimmed, like the service does: a whitespace-only value would pass a
+         nil/empty check here and then fail at runtime, which is the failure
+         this validation exists to move forward to deploy time */}}
+  {{- range $key := list "authorityId" "resourceKey" "title" "shortName" "description" "referenceUrl" "publisher" "created" }}
+  {{- if not (trim (toString (get $.Values.voRegistry $key))) }}
+  {{- fail (printf "voRegistry.%s is required when voRegistry.enabled=true: a VOResource record missing it is rejected by a publishing registry. See docs/registry.md." $key) }}
+  {{- end }}
+  {{- end }}
+  {{- $subjects := list }}
+  {{- range $subject := default (list) .Values.voRegistry.subjects }}
+  {{- if trim (toString $subject) }}
+  {{- $subjects = append $subjects $subject }}
+  {{- end }}
+  {{- end }}
+  {{- if not $subjects }}
+  {{- fail "voRegistry.subjects needs at least one non-blank term when voRegistry.enabled=true (e.g. [\"radio astronomy\"]); the record's content requires a subject" }}
+  {{- end }}
+  {{- if gt (len (trim .Values.voRegistry.shortName)) 16 }}
+  {{- fail (printf "voRegistry.shortName is %d characters; VOResource allows at most 16" (len (trim .Values.voRegistry.shortName))) }}
+  {{- end }}
+  {{- /* trimmed on the way out, like the service trims on the way in: a
+         padded authorityId would otherwise reach the identifier as
+         "ivo://skao.int /srcnet/tap", valid to this chart and rejected by a
+         registry */}}
+  TAP_REGISTRY_IDENTIFIER: {{ printf "ivo://%s/%s" (trim .Values.voRegistry.authorityId) (trim .Values.voRegistry.resourceKey) | quote }}
+  TAP_REGISTRY_TITLE: {{ trim .Values.voRegistry.title | quote }}
+  TAP_REGISTRY_SHORT_NAME: {{ trim .Values.voRegistry.shortName | quote }}
+  TAP_REGISTRY_DESCRIPTION: {{ trim .Values.voRegistry.description | quote }}
+  TAP_REGISTRY_REFERENCE_URL: {{ trim .Values.voRegistry.referenceUrl | quote }}
+  TAP_REGISTRY_PUBLISHER: {{ trim .Values.voRegistry.publisher | quote }}
+  TAP_REGISTRY_CREATOR: {{ trim .Values.voRegistry.creator | quote }}
+  TAP_REGISTRY_CONTACT_NAME: {{ trim .Values.voRegistry.contact.name | quote }}
+  TAP_REGISTRY_CONTACT_EMAIL: {{ trim .Values.voRegistry.contact.email | quote }}
+  TAP_REGISTRY_SUBJECTS: {{ join "," .Values.voRegistry.subjects | quote }}
+  TAP_REGISTRY_TYPES: {{ join "," .Values.voRegistry.types | quote }}
+  TAP_REGISTRY_CONTENT_LEVELS: {{ join "," .Values.voRegistry.contentLevels | quote }}
+  TAP_REGISTRY_CREATED: {{ trim .Values.voRegistry.created | quote }}
+  TAP_REGISTRY_UPDATED: {{ trim (.Values.voRegistry.updated | default .Values.voRegistry.created) | quote }}
+  {{- end }}
   {{- /* authn/authz; disabled by default, see values.yaml */}}
   TAP_AUTH_ENABLED: {{ .Values.auth.enabled | quote }}
   {{- if .Values.auth.enabled }}

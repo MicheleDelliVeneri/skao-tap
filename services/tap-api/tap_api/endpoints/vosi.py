@@ -1,9 +1,17 @@
-"""VOSI endpoints: availability, capabilities (TAPRegExt), tables (VODataService)."""
+"""VOSI endpoints: availability, capabilities (TAPRegExt), tables
+(VODataService) — and the VOResource record a publishing registry harvests.
 
-from xml.sax.saxutils import escape
+The capability elements are written once and used by both the VOSI
+capabilities document and the registry record: a record that disagreed with
+/capabilities about what this service supports would be worse than no record
+at all.
+"""
+
+from xml.sax.saxutils import escape, quoteattr
 
 from tapcore.config import settings
 from tapcore.db import pool
+from tapcore.errors import NotFoundError, ServiceError
 
 
 def availability_xml() -> str:
@@ -24,15 +32,10 @@ def availability_xml() -> str:
     )
 
 
-def capabilities_xml() -> str:
+def _capability_elements() -> str:
+    """The <capability> elements, indented two spaces, with no wrapper."""
     base = settings.base_url
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<vosi:capabilities
-    xmlns:vosi="http://www.ivoa.net/xml/VOSICapabilities/v1.0"
-    xmlns:vod="http://www.ivoa.net/xml/VODataService/v1.1"
-    xmlns:tr="http://www.ivoa.net/xml/TAPRegExt/v1.0"
-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <capability standardID="ivo://ivoa.net/std/TAP" xsi:type="tr:TableAccess">
+    return f"""  <capability standardID="ivo://ivoa.net/std/TAP" xsi:type="tr:TableAccess">
     <interface xsi:type="vod:ParamHTTP" role="std" version="1.1">
       <accessURL use="base">{base}</accessURL>
     </interface>
@@ -75,8 +78,146 @@ def capabilities_xml() -> str:
       <accessURL use="full">{base}/tables</accessURL>
     </interface>
   </capability>
-</vosi:capabilities>
 """
+
+
+def capabilities_xml() -> str:
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        "<vosi:capabilities\n"
+        '    xmlns:vosi="http://www.ivoa.net/xml/VOSICapabilities/v1.0"\n'
+        '    xmlns:vod="http://www.ivoa.net/xml/VODataService/v1.1"\n'
+        '    xmlns:tr="http://www.ivoa.net/xml/TAPRegExt/v1.0"\n'
+        '    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n'
+        f"{_capability_elements()}"
+        "</vosi:capabilities>\n"
+    )
+
+
+SHORT_NAME_MAX = 16  # VOResource caps shortName at 16 characters
+
+
+def _required(**values: str) -> dict[str, str]:
+    """Every registry value that has no sensible default.
+
+    A record missing any of these is rejected by a publishing registry, so it
+    is better to say which value is missing than to serve a document that
+    fails somewhere else, days later, in someone else's ingest log.
+    """
+    missing = sorted(name for name, value in values.items() if not value.strip())
+    if missing:
+        raise ServiceError(
+            f"the VOResource record is enabled but incomplete; unset: {', '.join(missing)}"
+        )
+    return {name: value.strip() for name, value in values.items()}
+
+
+def _items(raw: str) -> list[str]:
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def voresource_xml() -> str:
+    """The VOResource record for this service, for a publishing registry.
+
+    Built from the deployment's own configuration and the live capability
+    elements rather than kept as a file beside them, so it cannot describe a
+    service other than the one answering the request.
+
+    The child elements are deliberately in *no* namespace, and there is no
+    default ``xmlns`` on the root. VOResource declares
+    ``elementFormDefault="unqualified"``, so ``<title>``, ``<identifier>``,
+    ``<curation>`` and ``<capability>`` are unqualified — which is what every
+    published record looks like. Adding a default namespace here would
+    qualify them and break schema validation.
+    """
+    if not settings.registry_enabled:
+        raise NotFoundError(
+            "this deployment publishes no VOResource record (Helm:"
+            " voRegistry.enabled with an IVOA identifier; env:"
+            " TAP_REGISTRY_ENABLED)"
+        )
+    # keyed by the Helm value an operator would go and set
+    required = _required(
+        **{
+            "voRegistry.authorityId and voRegistry.resourceKey": settings.registry_identifier,
+            "voRegistry.title": settings.registry_title,
+            "voRegistry.shortName": settings.registry_short_name,
+            "voRegistry.description": settings.registry_description,
+            "voRegistry.referenceUrl": settings.registry_reference_url,
+            "voRegistry.publisher": settings.registry_publisher,
+            "voRegistry.created": settings.registry_created,
+        }
+    )
+    identifier = required["voRegistry.authorityId and voRegistry.resourceKey"]
+    if not identifier.startswith("ivo://"):
+        raise ServiceError(
+            "the registry identifier must start with ivo:// (Helm:"
+            " voRegistry.authorityId and voRegistry.resourceKey);"
+            f" got {identifier!r}"
+        )
+    short_name = required["voRegistry.shortName"]
+    if len(short_name) > SHORT_NAME_MAX:
+        raise ServiceError(
+            f"voRegistry.shortName must be at most {SHORT_NAME_MAX} characters"
+            f" (VOResource limit), got {len(short_name)}"
+        )
+    subjects = _items(settings.registry_subjects)
+    if not subjects:
+        raise ServiceError("the VOResource record needs at least one voRegistry.subjects entry")
+
+    updated = settings.registry_updated.strip() or required["voRegistry.created"]
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        "<ri:Resource",
+        '    xmlns:ri="http://www.ivoa.net/xml/RegistryInterface/v1.0"',
+        # VODataService twice under two prefixes: vs: is what the xsi:type
+        # reads as in every published record, and the capability elements
+        # shared with /capabilities are written against vod:
+        '    xmlns:vs="http://www.ivoa.net/xml/VODataService/v1.1"',
+        '    xmlns:vod="http://www.ivoa.net/xml/VODataService/v1.1"',
+        '    xmlns:tr="http://www.ivoa.net/xml/TAPRegExt/v1.0"',
+        '    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
+        '    xsi:type="vs:CatalogService"',
+        f"    created={quoteattr(required['voRegistry.created'])} updated={quoteattr(updated)}"
+        ' status="active">',
+        f"  <title>{escape(required['voRegistry.title'])}</title>",
+        f"  <shortName>{escape(short_name)}</shortName>",
+        f"  <identifier>{escape(identifier)}</identifier>",
+        "  <curation>",
+        f"    <publisher>{escape(required['voRegistry.publisher'])}</publisher>",
+    ]
+    if settings.registry_creator.strip():
+        parts += [
+            "    <creator>",
+            f"      <name>{escape(settings.registry_creator.strip())}</name>",
+            "    </creator>",
+        ]
+    contact_name = settings.registry_contact_name.strip()
+    contact_email = settings.registry_contact_email.strip()
+    if contact_name or contact_email:
+        parts.append("    <contact>")
+        if contact_name:
+            parts.append(f"      <name>{escape(contact_name)}</name>")
+        if contact_email:
+            parts.append(f"      <email>{escape(contact_email)}</email>")
+        parts.append("    </contact>")
+    parts += ["  </curation>", "  <content>"]
+    parts += [f"    <subject>{escape(subject)}</subject>" for subject in subjects]
+    parts += [
+        f"    <description>{escape(required['voRegistry.description'])}</description>",
+        f"    <referenceURL>{escape(required['voRegistry.referenceUrl'])}</referenceURL>",
+    ]
+    parts += [f"    <type>{escape(item)}</type>" for item in _items(settings.registry_types)]
+    parts += [
+        f"    <contentLevel>{escape(item)}</contentLevel>"
+        for item in _items(settings.registry_content_levels)
+    ]
+    parts += ["  </content>"]
+    # the same capability elements /capabilities serves, already at the
+    # indentation a child of the root element wants
+    parts.append(_capability_elements().rstrip("\n"))
+    parts.append("</ri:Resource>")
+    return "\n".join(parts) + "\n"
 
 
 def tables_xml() -> str:
