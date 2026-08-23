@@ -151,7 +151,10 @@ CRDs](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscal
 in the cluster). It starts in recommendation mode — read the suggestions
 with `kubectl describe vpa` — and moves to live resizing with
 `verticalAutoscaling.updateMode=Auto` once the `minAllowed`/`maxAllowed`
-bounds are trusted.
+bounds are trusted. `verticalAutoscaling.controlledResources` narrows what it
+sizes — set it to `["memory"]` to run a live VPA next to a CPU-based
+HorizontalPodAutoscaler, since two controllers driving the same resource is
+what does not work (see [Autoscaling](autoscaling.md)).
 
 The in-chart PostgreSQL is sized through `postgresql.resources` plus
 `postgresql.tuning`, a map rendered as `-c key=value` server arguments:
