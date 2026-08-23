@@ -231,8 +231,14 @@ def cmd_fixed_scaling(args) -> int:
     dataset = args.dataset or cfg["scenarios"]["fixed_replica_scaling"]["dataset"]
     datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
     entries = build_corpus(cfg, datasets)
-    results = runner.concurrency_sweep(run, cfg, dataset, entries, quick=args.quick)
-    c1 = args.c1 or runner.sustainable_capacity(results, cfg["scenarios"]["slo"]["p95_seconds"])
+    # The sweep exists to find C1. Given one, skip it: re-measuring a ladder
+    # that has already been measured is an hour and a half of the cluster's
+    # time spent producing a number the caller already has.
+    results: list[dict] = []
+    c1 = args.c1
+    if not c1:
+        results = runner.concurrency_sweep(run, cfg, dataset, entries, quick=args.quick)
+        c1 = runner.sustainable_capacity(results, cfg["scenarios"]["slo"]["p95_seconds"])
     if not c1:
         # Without C1 every offered rate in this family is meaningless, so this
         # stops rather than inventing one.
