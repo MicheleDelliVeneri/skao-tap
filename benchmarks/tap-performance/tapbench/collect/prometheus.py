@@ -152,6 +152,9 @@ class Prometheus:
                 if self.client.get(f"{self.base_url}/-/ready").status_code == 200:
                     return True
             except httpx.HTTPError:
+                # Prometheus is still coming up: connection refused and read
+                # timeouts are the expected state here, not an error. Retry
+                # until the deadline; the caller gets False if it never readies.
                 pass
             time.sleep(2)
         return False

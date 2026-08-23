@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import html
 import json
+import math
 import pathlib
 
 TEMPLATE = """<!doctype html>
@@ -89,7 +90,7 @@ def _fmt(value) -> str:
     if value is None:
         return "—"
     if isinstance(value, float):
-        if value != value:  # NaN
+        if math.isnan(value):
             return "—"
         if abs(value) >= 1000:
             return f"{value:,.0f}"

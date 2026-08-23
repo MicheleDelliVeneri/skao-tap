@@ -294,7 +294,6 @@ async def closed_loop(
     recorder = Recorder()
     warm = Recorder()  # discarded: it exists to fill caches and pools
     stop = asyncio.Event()
-    issue = _issue_sync if mode == "sync" else _issue_async
 
     async with _client(concurrency, timeout_s) as client:
         watcher = asyncio.create_task(recorder.watch_self(stop))
@@ -304,9 +303,9 @@ async def closed_loop(
                 entry = workload.next()
                 now = time.time()
                 if mode == "sync":
-                    await issue(client, base_url, entry, now, target, response_format)
+                    await _issue_sync(client, base_url, entry, now, target, response_format)
                 else:
-                    await issue(client, base_url, entry, now, target)
+                    await _issue_async(client, base_url, entry, now, target)
 
         if warmup_s > 0:
             until = time.perf_counter() + warmup_s
@@ -314,7 +313,7 @@ async def closed_loop(
         until = time.perf_counter() + measure_s
         await asyncio.gather(*(worker(recorder, until) for _ in range(concurrency)))
         stop.set()
-        await watcher
+        await asyncio.gather(watcher)
     log.info(
         "closed loop c=%d: %d requests, %.1f rps, generator CPU peak %.0f%%",
         concurrency,
@@ -365,7 +364,6 @@ async def open_loop(
     """
     recorder = Recorder()
     stop = asyncio.Event()
-    issue = _issue_sync if mode == "sync" else _issue_async
     timeline: list[dict] = []
     in_flight: set[asyncio.Task] = set()
     dropped = 0
@@ -421,10 +419,12 @@ async def open_loop(
                 offered = wall_start + (next_arrival - perf_start)
                 if mode == "sync":
                     task = asyncio.create_task(
-                        issue(client, base_url, entry, offered, recorder, response_format)
+                        _issue_sync(client, base_url, entry, offered, recorder, response_format)
                     )
                 else:
-                    task = asyncio.create_task(issue(client, base_url, entry, offered, recorder))
+                    task = asyncio.create_task(
+                        _issue_async(client, base_url, entry, offered, recorder)
+                    )
                 in_flight.add(task)
                 task.add_done_callback(in_flight.discard)
 
@@ -434,7 +434,7 @@ async def open_loop(
         if in_flight:
             await asyncio.wait(set(in_flight), timeout=timeout_s)
         stop.set()
-        await watcher
+        await asyncio.gather(watcher)
 
     if dropped:
         log.warning("generator could not offer %d arrivals (in-flight cap)", dropped)
