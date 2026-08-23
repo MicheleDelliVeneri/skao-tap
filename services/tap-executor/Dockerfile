@@ -21,4 +21,9 @@ RUN groupadd -g 10001 tap && useradd -m -u 10001 -g tap tap \
 COPY --from=builder /srv/.venv /srv/.venv
 ENV HOME=/tmp XDG_CACHE_HOME=/tmp/.cache XDG_CONFIG_HOME=/tmp/.config
 USER 10001
+EXPOSE 9100
+# The worker had nothing to probe until it began serving metrics; that
+# listener is a fair liveness signal, since the loop starts it and holds it.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
+    CMD ["/srv/.venv/bin/python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/metrics' % os.environ.get('TAP_EXECUTOR_METRICS_PORT', '9100'), timeout=4)"]
 CMD ["/srv/.venv/bin/python", "-m", "tap_executor.worker"]

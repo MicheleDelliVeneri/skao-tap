@@ -182,12 +182,18 @@ def execute_job(job: dict) -> None:
     backend_pid = None
     set_request_id(job.get("request_id"))
     started = time.monotonic()
-    with LogContext(
-        job_id=job_id,
-        owner_id=job.get("owner_id"),
-        request_id=job.get("request_id"),
-    ):
-        _execute_job_inner(job, job_id, params, backend_pid, started)
+    try:
+        with LogContext(
+            job_id=job_id,
+            owner_id=job.get("owner_id"),
+            request_id=job.get("request_id"),
+        ):
+            _execute_job_inner(job, job_id, params, backend_pid, started)
+    finally:
+        # this loop runs for the life of the pod: leaving the id set would
+        # attribute the next poll, the cleanup pass and any loop error to
+        # whichever job happened to run last
+        set_request_id(None)
 
 
 def _execute_job_inner(job: dict, job_id, params, backend_pid, started) -> None:

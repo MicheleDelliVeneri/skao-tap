@@ -141,3 +141,43 @@ def test_the_pool_wait_is_recorded_even_when_it_is_short(client, fake_db):
         return 0.0
 
     assert wait_count(after) > wait_count(before)
+
+
+# -- a caller's id is not trusted -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("hostile", "why"),
+    [
+        ("*/ DROP TABLE uws.jobs; --", "closes the SQL comment"),
+        ("id */ UNION SELECT 1 /*", "reopens it around injected SQL"),
+        ("id\r\nX-Injected: yes", "splits the response header"),
+        ("id\nfake log line", "forges a log record"),
+        ("a" * 129, "unbounded length"),
+    ],
+)
+def test_a_hostile_request_id_is_replaced_not_escaped(client, hostile, why):
+    """The id reaches a SQL comment, a response header and the logs, so it is
+    refused rather than quoted."""
+    response = client.get("/tap/availability", headers={obs.REQUEST_ID_HEADER: hostile})
+    returned = response.headers[obs.REQUEST_ID_HEADER]
+    assert returned != hostile, why
+    assert obs.SAFE_REQUEST_ID.fullmatch(returned)
+
+
+def test_tagging_refuses_an_unsafe_id_even_if_something_set_one(fake_db):
+    """Defence in depth: the check does not rely on the middleware having run."""
+    obs.set_request_id("*/ DROP TABLE x; --")
+    try:
+        assert obs.tag_sql("SELECT 1") == "SELECT 1"
+    finally:
+        obs.set_request_id(None)
+
+
+def test_a_hostile_id_never_reaches_the_database(client, fake_db):
+    client.post(
+        "/tap/sync",
+        data={"LANG": "ADQL", "QUERY": QUERY},
+        headers={obs.REQUEST_ID_HEADER: "*/ DROP TABLE uws.jobs; --"},
+    )
+    assert not any("DROP TABLE" in s for s in fake_db.statements)

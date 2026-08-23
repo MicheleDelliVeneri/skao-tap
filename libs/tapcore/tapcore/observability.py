@@ -14,6 +14,7 @@ follow the same rule — a number nobody would have to reproduce locally to see.
 import contextlib
 import logging
 import os
+import re
 import time
 import uuid
 from contextvars import ContextVar
@@ -112,9 +113,30 @@ def _looks_interactive() -> bool:
 # -- request correlation ----------------------------------------------------
 
 
+#: What a correlation id may contain. Generated ids are hex; ids from callers
+#: are anything at all until checked, and they end up in a SQL comment, a
+#: response header and the logs — so `*/`, `;`, and CR/LF are all exclusions
+#: that matter rather than tidiness.
+SAFE_REQUEST_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+
 def new_request_id() -> str:
     """A fresh correlation id, for a request that arrived without one."""
     return uuid.uuid4().hex
+
+
+def safe_request_id(value: str | None) -> str | None:
+    """The value if it is usable as a correlation id, else None.
+
+    A caller's id is echoed in a header, written into a SQL comment and put in
+    the logs. Accepting it verbatim would let `*/` close the comment early,
+    CR/LF split a header or forge a log line — so an id that is not plainly an
+    identifier is refused rather than escaped, and the caller gets a generated
+    one instead.
+    """
+    if value and SAFE_REQUEST_ID.fullmatch(value):
+        return value
+    return None
 
 
 def set_request_id(value: str | None) -> None:
@@ -139,14 +161,17 @@ def tag_sql(sql: str) -> str:
     inside the statement, before any trailing semicolon, so it cannot be read
     as a second empty statement.
     """
-    current = request_id()
+    current = safe_request_id(request_id())
     if not current:
+        # unset, or something that has no business in a comment: tag nothing
+        # rather than trust that whoever set it checked
         return sql
     body = sql.rstrip()
     terminator = ""
     if body.endswith(";"):
         body, terminator = body[:-1].rstrip(), ";"
-    # ids are hex, so nothing here can close the comment early
+    # `current` has been through safe_request_id, so it cannot close the
+    # comment or carry a newline
     return f"{body} /* rid={current} */{terminator}"
 
 
