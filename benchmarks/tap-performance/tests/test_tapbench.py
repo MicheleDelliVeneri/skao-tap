@@ -6,6 +6,7 @@ absent rather than guessed. Each is tested here, because a benchmark whose
 harness is wrong produces confident numbers about nothing.
 """
 
+import json
 import math
 import pathlib
 import sys
@@ -398,3 +399,41 @@ def test_a_ramp_step_interpolates_linearly():
 
 def test_a_flat_step_ignores_the_ramp():
     assert load_runner.Step(seconds=10.0, rate=5.0).rate_at(7.0) == 5.0
+
+
+def test_publish_drops_host_identifying_fields(tmp_path):
+    """Publishing is the step that makes a run public, so it de-identifies.
+
+    Runs recorded before environment() stopped capturing hostname and user
+    still have them on disk; republishing one of those must not put a
+    contributor's workstation name on the docs site.
+    """
+    from tapbench.analyze import publish as publish_mod
+
+    run_dir = tmp_path / "20260101T000000Z-deadbeef-smoke"
+    (run_dir / "plots").mkdir(parents=True)
+    (run_dir / "summary.json").write_text(json.dumps({"scenarios": {}, "generated_at": 0}))
+    (run_dir / "environment.json").write_text(
+        json.dumps(
+            {
+                "host": {
+                    "hostname": "SOMEBODYS-LAPTOP.local",
+                    "user": "somebody",
+                    "platform": "macOS-26.6.2-arm64",
+                    "cpu_count": 14,
+                },
+                "git": {"sha": "deadbeef"},
+            }
+        )
+    )
+
+    docs = tmp_path / "docs"
+    publish_mod.publish(run_dir, docs_dir=docs)
+
+    published = json.loads((docs / run_dir.name / "environment.json").read_text())
+    assert "hostname" not in published["host"]
+    assert "user" not in published["host"]
+    # Everything that makes two runs comparable survives.
+    assert published["host"]["platform"] == "macOS-26.6.2-arm64"
+    assert published["host"]["cpu_count"] == 14
+    assert published["git"]["sha"] == "deadbeef"

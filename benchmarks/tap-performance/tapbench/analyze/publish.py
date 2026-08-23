@@ -197,6 +197,23 @@ def _dataset_table(summary: dict) -> str:
     )
 
 
+# Fields that describe the person or the machine rather than the measurement.
+# runs.environment() no longer records them, but runs captured before that
+# still carry them, and publish() is the step that would put them on a public
+# site — so it is the step that has to drop them.
+IDENTIFYING_HOST_FIELDS = ("hostname", "user")
+
+
+def _deidentified(environment: dict) -> dict:
+    host = environment.get("host")
+    if not isinstance(host, dict):
+        return environment
+    return {
+        **environment,
+        "host": {k: v for k, v in host.items() if k not in IDENTIFYING_HOST_FIELDS},
+    }
+
+
 def publish(run_dir: pathlib.Path, *, docs_dir: pathlib.Path | None = None) -> pathlib.Path:
     """Copy a run's graphs into the docs site and write its page."""
     docs_dir = docs_dir or DOCS
@@ -215,9 +232,15 @@ def publish(run_dir: pathlib.Path, *, docs_dir: pathlib.Path | None = None) -> p
     for source in sorted((run_dir / "plots").glob("keda_*.png")):
         shutil.copy2(source, target / "plots" / source.name)
         published.append((source.stem, f"Autoscaling timeline — {source.stem[5:]}"))
-    for extra in ("summary.csv", "environment.json", "dataset.json"):
+    for extra in ("summary.csv", "dataset.json"):
         if (run_dir / extra).exists():
             shutil.copy2(run_dir / extra, target / extra)
+    source = run_dir / "environment.json"
+    if source.exists():
+        environment = _deidentified(json.loads(source.read_text()))
+        (target / "environment.json").write_text(
+            json.dumps(environment, indent=2, sort_keys=True) + "\n"
+        )
 
     page = target / "index.md"
     page.write_text(_render(summary, run_id, published))
