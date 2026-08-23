@@ -1,6 +1,7 @@
 """Concurrent TAP /sync workload used by the scheduled performance workflow."""
 
 import argparse
+import collections
 import concurrent.futures
 import json
 import math
@@ -59,9 +60,17 @@ def _worker(
     deadline: float,
     scale_rows: int,
     timeout: float,
-) -> list[dict]:
+) -> dict:
     rng = random.Random(worker_id)
-    results = []
+    # Aggregated in the worker rather than one dict per request: the
+    # percentiles need every successful latency, so those are kept as plain
+    # floats, and everything else collapses into counters. A status histogram
+    # costs nothing to keep and is the first thing worth knowing when the
+    # error rate is not zero.
+    attempted: collections.Counter[str] = collections.Counter()
+    latencies: dict[str, list[float]] = {name: [] for name, _ in WORKLOAD}
+    statuses: collections.Counter[int] = collections.Counter()
+    bytes_read = 0
     with httpx.Client(timeout=timeout) as client:
         while time.monotonic() < deadline:
             name, template = rng.choices(WORKLOAD, weights=WEIGHTS, k=1)[0]
@@ -82,18 +91,20 @@ def _worker(
                 size = len(response.content)
             except httpx.HTTPError:
                 ok = False
-                status = 0
+                status = 0  # no response: a connect error, or the timeout
                 size = 0
-            results.append(
-                {
-                    "workload": name,
-                    "seconds": time.perf_counter() - started,
-                    "ok": ok,
-                    "status": status,
-                    "bytes": size,
-                }
-            )
-    return results
+            elapsed = time.perf_counter() - started
+            attempted[name] += 1
+            statuses[status] += 1
+            bytes_read += size
+            if ok:
+                latencies[name].append(elapsed)
+    return {
+        "attempted": attempted,
+        "latencies": latencies,
+        "statuses": statuses,
+        "bytes_read": bytes_read,
+    }
 
 
 def main() -> int:
@@ -125,38 +136,52 @@ def main() -> int:
             )
             for worker_id in range(args.clients)
         ]
-    samples = [sample for future in futures for sample in future.result()]
-    # Latency is measured over successful requests only. A request that failed
-    # fast — a 500, or a timeout raising early — would otherwise pull p95 and
-    # p99 down, so the report would look best exactly when the service is
-    # worst. The error counts below carry the failures instead.
-    latencies = [sample["seconds"] for sample in samples if sample["ok"]]
+    attempted: collections.Counter[str] = collections.Counter()
+    statuses: collections.Counter[int] = collections.Counter()
+    by_name: dict[str, list[float]] = {name: [] for name, _ in WORKLOAD}
+    bytes_read = 0
+    for future in futures:
+        result = future.result()
+        attempted.update(result["attempted"])
+        statuses.update(result["statuses"])
+        bytes_read += result["bytes_read"]
+        for name, values in result["latencies"].items():
+            by_name[name].extend(values)
+
+    # Latency covers successful requests only. A request that failed fast — a
+    # 500, or a timeout raising early — would otherwise pull p95 and p99 down,
+    # so the report would read best exactly when the service is worst. The
+    # error counts carry the failures instead.
+    latencies = [value for values in by_name.values() for value in values]
+    requests = sum(attempted.values())
     successful = len(latencies)
     # Wall clock from submit to the last future, not max(duration, slowest
     # request): a worker that starts a request just before the deadline
     # finishes after it, and charging those rows to `duration` inflates
     # throughput exactly when the service is slowest.
     elapsed = max(time.monotonic() - started, 1e-9)
-    by_workload = {}
-    for name, _query in WORKLOAD:
-        attempted = [sample for sample in samples if sample["workload"] == name]
-        subset = [sample["seconds"] for sample in attempted if sample["ok"]]
-        by_workload[name] = {
-            "requests": len(attempted),
-            "successful": len(subset),
-            **_percentiles(subset),
+    by_workload = {
+        name: {
+            "requests": attempted[name],
+            "successful": len(by_name[name]),
+            **_percentiles(by_name[name]),
         }
+        for name, _query in WORKLOAD
+    }
 
     report = {
         "clients": args.clients,
         "duration_seconds": args.duration,
         "elapsed_seconds": round(elapsed, 6),
         "scale_rows": args.scale_rows,
-        "requests": len(samples),
+        "requests": requests,
         "successful": successful,
-        "errors": len(samples) - successful,
-        "error_rate": (len(samples) - successful) / len(samples) if samples else 1.0,
+        "errors": requests - successful,
+        "error_rate": (requests - successful) / requests if requests else 1.0,
         "requests_per_second": successful / elapsed,
+        "bytes_per_second": bytes_read / elapsed,
+        # 0 means no response at all — a connect error or the client timeout
+        "status_counts": {str(code): count for code, count in sorted(statuses.items())},
         "latency": {
             "mean_seconds": statistics.fmean(latencies) if latencies else 0.0,
             **_percentiles(latencies),
