@@ -1,11 +1,19 @@
 """Request-level authentication and authorisation wiring.
 
-One dependency factory, ``require(operation)``, guards the mutating metadata
-endpoints. Reads and queries stay open — TAP clients issue queries as POSTs,
-so gating them would lock standard VO tooling out of an authenticated
-deployment — but a token presented on any request is still verified and
-attached to ``request.state.principal``, so ownership and audit records get a
-subject when one is available.
+One dependency factory, ``require(operation)``, guards every gated
+operation: the mutating metadata endpoints, the UWS job resources that create,
+mutate or delete a job, and synchronous querying.
+
+Which of those a deployment actually enforces is its own choice
+(``TAP_AUTH_GATED_OPERATIONS``), because the choice is not free: TAP clients
+submit queries as POSTs, so enforcing ``jobs.create`` or ``query.sync`` turns
+away every standard VO client that carries no token. The default enforces
+metadata mutation only, which is what a deployment upgrading into this had.
+
+An operation this deployment does not enforce is let through exactly as it
+would be with auth off — but a token presented on any request is still
+verified and attached to ``request.state.principal``, so ownership and audit
+records get a subject when one is available.
 """
 
 import logging
@@ -17,6 +25,7 @@ from tapcore.auth import (
     Principal,
     active_auth_plugin,
     clear_job_viewer,
+    gated_operations,
     set_job_viewer,
     verifier,
 )
@@ -29,6 +38,7 @@ log = logging.getLogger("tap_api")
 # needs a sentinel of its own rather than a second flag
 _UNRESOLVED = object()
 _PLUGIN: object = _UNRESOLVED
+_GATED: tuple[str, ...] | None = None
 
 
 def plugin():
@@ -43,16 +53,31 @@ def plugin():
             )
         else:
             log.info("authorisation plugin: %s", resolved.describe())
+            log.info("enforced operations: %s", ", ".join(gated()))
         # assigned only after a successful resolve, so a misconfiguration
         # keeps raising instead of being cached as "auth off"
         _PLUGIN = resolved
     return _PLUGIN
 
 
+def gated() -> tuple[str, ...]:
+    """The operations this deployment enforces, resolved once.
+
+    Resolved here rather than per request so a malformed
+    ``TAP_AUTH_GATED_OPERATIONS`` is reported the same way a bad plugin name
+    is, instead of once per call.
+    """
+    global _GATED
+    if _GATED is None:
+        _GATED = gated_operations()
+    return _GATED
+
+
 def reset_plugin() -> None:
-    """Forget the resolved plugin (configuration changed; used by tests)."""
-    global _PLUGIN
+    """Forget the resolved plugin and gate set (configuration changed; tests)."""
+    global _PLUGIN, _GATED
     _PLUGIN = _UNRESOLVED
+    _GATED = None
 
 
 def _bearer(request: Request) -> str | None:
@@ -118,6 +143,11 @@ def require(operation: str):
         active = plugin()
         if active is None:  # auth disabled: behave exactly as before
             return ANONYMOUS
+        if operation not in gated():
+            # this deployment does not enforce this operation, so the request
+            # passes as it would with auth off. attach_principal has already
+            # verified any token it carries, so an owner is still recorded.
+            return getattr(request.state, "principal", ANONYMOUS)
         who = await run_in_threadpool(principal_of, request)
         if who.is_anonymous:
             raise AuthenticationError(f"{operation} requires a bearer token")

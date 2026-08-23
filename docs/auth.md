@@ -17,18 +17,63 @@ When enabled, two separable things happen to a request:
 
 ## What is gated
 
-| Operation | Endpoint |
-| --- | --- |
-| `metadata.ingest` | `POST /api/v1/<mount>` |
-| `metadata.amend` | `PATCH /api/v1/<mount>/{root_id}` |
-| `metadata.delete` | `DELETE /api/v1/<mount>/{root_id}` |
+Seven operations can be gated. Which ones a deployment actually enforces is
+its own choice, set with `auth.gatedOperations`:
 
-Everything else — every `GET`, and querying through `POST /tap/sync`,
-`POST /tap/async`, `POST /api/v1/query` and `POST /api/v1/jobs` — stays open
-to anonymous callers. This is deliberate: TAP clients send ADQL as a POST
-body, so gating "all writes" by HTTP method would lock PyVO, TOPCAT and
-every other standard VO client out of an authenticated deployment. What is
-protected is the data a caller can *change*.
+| Operation | Requests | Enforced by default |
+| --- | --- | --- |
+| `metadata.ingest` | `POST /api/v1/<mount>` | yes |
+| `metadata.amend` | `PATCH /api/v1/<mount>/{root_id}` | yes |
+| `metadata.delete` | `DELETE /api/v1/<mount>/{root_id}` | yes |
+| `jobs.create` | `POST /tap/async`, `POST /api/v1/jobs` | no |
+| `jobs.mutate` | `POST /tap/async/{job_id}/{phase,executionduration,destruction,parameters}`, `POST /api/v1/jobs/{job_id}/phase` | no |
+| `jobs.delete` | `DELETE /tap/async/{job_id}`, `POST /tap/async/{job_id}` with `ACTION=DELETE`, `DELETE /api/v1/jobs/{job_id}` | no |
+| `query.sync` | `GET`/`POST /tap/sync`, `POST /api/v1/query` | no |
+
+The default enforces metadata mutation only, and every `GET` stays open
+whatever is configured. That default is deliberate: TAP clients send ADQL as
+a POST body, so gating "all writes" by HTTP method would lock PyVO, TOPCAT
+and every other standard VO client out of an authenticated deployment. What
+is protected by default is the data a caller can *change*.
+
+### Requiring tokens for querying
+
+A site where every client is expected to authenticate can enforce the job
+and query operations too:
+
+```yaml
+auth:
+  enabled: true
+  gatedOperations:
+    - metadata.ingest
+    - metadata.amend
+    - metadata.delete
+    - jobs.create
+    - jobs.mutate
+    - jobs.delete
+    - query.sync
+  roles:
+    # … a grant for each operation listed above
+```
+
+Two things to know before doing that:
+
+- **Anonymous VO clients stop working.** A client that sends no token gets
+  `401` on `POST /tap/sync` and `POST /tap/async`, which is how PyVO and
+  TOPCAT submit queries. This is the intended effect, not a side effect.
+- **`jobs.create` alone is not a closed door.** Synchronous querying reaches
+  the same data without creating a job, so enforcing `jobs.create` while
+  leaving `query.sync` open only changes which endpoint an anonymous caller
+  uses. Enforce the two together.
+
+With `plugin: iam-groups`, every operation listed in `gatedOperations` must
+also be granted under `roles` — an enforced operation nobody is granted is
+denied to everyone, so the chart refuses to render that configuration rather
+than shipping a service that answers `403` to its own operators.
+
+Reads are never gated by this setting. What stops one user reading another
+user's job is [ownership](#job-ownership), which is enforced in the job
+store, not at the endpoint.
 
 `GET /api/v1/auth` reports what the deployment enforces, so clients need not
 discover it by trial:
@@ -188,13 +233,18 @@ reached.
 
 ## Behaviour summary
 
+`gated_operations` lists only what this deployment enforces, so a client can
+tell from it whether it needs a token to query at all.
+
 | Request | Auth disabled | Auth enabled |
 | --- | --- | --- |
-| `GET`, or any query | 200 | 200 (token verified if present) |
-| Mutating call, no token | 200 | `401` + `WWW-Authenticate: Bearer` |
-| Mutating call, forged/expired token | 200 | `401` |
-| Mutating call, valid token without the role | 200 | `403` |
-| Mutating call, valid token with the role | 200 | 200 |
+| `GET` | 200 | 200 (token verified if present) |
+| Query, `query.sync`/`jobs.create` not enforced | 200 | 200 (token verified if present) |
+| Query, `query.sync`/`jobs.create` enforced, no token | 200 | `401` |
+| Gated call, no token | 200 | `401` + `WWW-Authenticate: Bearer` |
+| Gated call, forged/expired token | 200 | `401` |
+| Gated call, valid token without the role | 200 | `403` |
+| Gated call, valid token with the role | 200 | 200 |
 | Any call, unverifiable token | ignored | `401` |
 
 ## Job ownership

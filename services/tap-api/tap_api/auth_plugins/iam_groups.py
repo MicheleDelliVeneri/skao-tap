@@ -12,6 +12,10 @@ carries any one of them:
                           "scopes": ["science-metadata:admin"]}
     }'
 
+The operation names are the ones in ``tapcore.auth.OPERATIONS``, so a
+deployment that enforces job or query operations grants them the same way
+(``jobs.create``, ``jobs.mutate``, ``jobs.delete``, ``query.sync``).
+
 Every gated operation must be granted explicitly: an operation missing from
 the mapping, or present with neither groups nor scopes, is denied. Accepting
 any verified token is a deliberate choice that has to be written down:

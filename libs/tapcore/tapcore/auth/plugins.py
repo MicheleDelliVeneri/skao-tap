@@ -25,14 +25,51 @@ log = logging.getLogger("tapcore")
 
 ENTRY_POINT_GROUP = "skao_tap.auth"
 
-# The gated operations. Querying is deliberately absent: TAP clients issue
-# queries as POSTs, and gating those would lock standard VO tooling out of an
-# authenticated deployment. Only metadata mutation is gated.
+# Every operation the gate knows how to enforce.
 OPERATIONS = (
     "metadata.ingest",  # POST   /api/v1/<mount>
     "metadata.amend",  # PATCH  /api/v1/<mount>/{root_id}
     "metadata.delete",  # DELETE /api/v1/<mount>/{root_id}
+    "jobs.create",  # POST   /tap/async
+    "jobs.mutate",  # POST   /tap/async/{job_id}/(phase|parameters|...)
+    "jobs.delete",  # DELETE /tap/async/{job_id}, POST ...?ACTION=DELETE
+    "query.sync",  # GET|POST /tap/sync
 )
+
+# What is enforced unless the deployment says otherwise: metadata mutation
+# only. Querying is absent by default on purpose — TAP clients submit queries
+# as POSTs to /sync and /async, so enforcing jobs.create or query.sync turns
+# away every standard VO client that carries no token. A site that wants that
+# asks for it through TAP_AUTH_GATED_OPERATIONS.
+DEFAULT_GATED_OPERATIONS = (
+    "metadata.ingest",
+    "metadata.amend",
+    "metadata.delete",
+)
+
+
+def gated_operations() -> tuple[str, ...]:
+    """The operations this deployment enforces, in ``OPERATIONS`` order.
+
+    Read per request rather than cached: the setting is part of the same
+    configuration a test (or a reloaded process) can change underneath us,
+    and parsing a short comma-separated list is not worth a cache to get
+    wrong.
+    """
+    raw = settings.auth_gated_operations.strip()
+    if not raw:
+        return DEFAULT_GATED_OPERATIONS
+    named = tuple(part.strip() for part in raw.split(",") if part.strip())
+    unknown = [name for name in named if name not in OPERATIONS]
+    if unknown:
+        raise LookupError(
+            f"TAP_AUTH_GATED_OPERATIONS names unknown operation(s)"
+            f" {', '.join(sorted(unknown))}; known operations:"
+            f" {', '.join(OPERATIONS)}"
+        )
+    # de-duplicated and ordered like OPERATIONS, so the startup log and the
+    # capabilities document read the same whatever order an operator typed
+    return tuple(name for name in OPERATIONS if name in named)
 
 
 class AuthPlugin(ABC):

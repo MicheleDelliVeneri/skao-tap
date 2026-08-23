@@ -44,12 +44,13 @@ decides what the bearer of a token may do.
   endpoint — onto roles and evaluates the route's role expression. The
   policies for the TAP service are versioned in the Permissions API's
   environment directories, not here.
-- **What gets protected**: the destructive and mutating surface first —
-  `POST`/`PATCH`/`DELETE /api/v1/<mount>` on every metadata domain (a
-  `DELETE` cascades through a whole document hierarchy), then job
-  creation, job mutation and job deletion. Anonymous read-only querying
-  stays possible where a deployment's policy allows it, so plain VO
-  clients keep working.
+- ~~**What gets protected**~~ *(done)*: seven operations can be gated —
+  `metadata.ingest`/`amend`/`delete` on every metadata domain (a `DELETE`
+  cascades through a whole document hierarchy), `jobs.create`,
+  `jobs.mutate`, `jobs.delete` and `query.sync`. A deployment chooses which
+  it enforces (`auth.gatedOperations`); the default is metadata mutation
+  only, so anonymous querying keeps working and plain VO clients are
+  unaffected unless a site deliberately closes it.
 - **Token exchange for downstream calls**: not required — this service calls
   no other SRCNet service on a user's behalf. If that changes, exchange the
   incoming token through the Permissions API (`type=exchange` policies) for

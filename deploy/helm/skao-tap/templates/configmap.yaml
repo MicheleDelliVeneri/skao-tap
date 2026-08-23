@@ -34,7 +34,22 @@ data:
   {{- if not .Values.auth.roles }}
   {{- fail "auth.plugin=iam-groups needs auth.roles: every gated operation must name the groups or scopes that grant it (or set anyVerifiedToken), otherwise nothing is granted. See docs/auth.md." }}
   {{- end }}
+  {{- /* an operation enforced but never granted denies everyone, which reads
+         as a broken deployment rather than as a policy */}}
+  {{- range $operation := .Values.auth.gatedOperations }}
+  {{- if not (hasKey $.Values.auth.roles $operation) }}
+  {{- fail (printf "auth.gatedOperations enforces %s but auth.roles has no entry for it, so it would be denied to everyone. Grant it under auth.roles, or drop it from auth.gatedOperations." $operation) }}
   {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- $known := list "metadata.ingest" "metadata.amend" "metadata.delete" "jobs.create" "jobs.mutate" "jobs.delete" "query.sync" }}
+  {{- range $operation := .Values.auth.gatedOperations }}
+  {{- if not (has $operation $known) }}
+  {{- fail (printf "auth.gatedOperations names unknown operation %s; known operations: %s" $operation (join ", " $known)) }}
+  {{- end }}
+  {{- end }}
+  {{- /* empty means the service default: metadata mutation only */}}
+  TAP_AUTH_GATED_OPERATIONS: {{ join "," .Values.auth.gatedOperations | quote }}
   {{- /* camelCase in values, snake_case in the policy the service parses */}}
   TAP_AUTH_ROLES: {{ .Values.auth.roles | toJson | replace "\"anyVerifiedToken\"" "\"any_verified_token\"" | quote }}
   {{- if eq .Values.auth.plugin "permissions-api" }}
