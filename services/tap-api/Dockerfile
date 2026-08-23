@@ -21,6 +21,9 @@ COPY --from=builder /srv/.venv /srv/.venv
 # the container can run with a read-only root filesystem
 ENV HOME=/tmp XDG_CACHE_HOME=/tmp/.cache XDG_CONFIG_HOME=/tmp/.config
 USER 10001
+# The default only — EXPOSE is fixed at build time, so a container started
+# with TAP_API_PORT set listens elsewhere and that port has to be published
+# explicitly rather than by docker run -P.
 EXPOSE 8080
 # Follows TAP_API_PORT like the command below, or the health status would
 # describe a port the service is not listening on.
