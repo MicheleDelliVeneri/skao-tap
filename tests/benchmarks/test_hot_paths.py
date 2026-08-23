@@ -1,7 +1,7 @@
 """CPU-focused benchmarks for the TAP query hot paths.
 
-These benchmarks deliberately avoid network and database I/O so CodSpeed can
-compare pull requests deterministically. End-to-end database performance is
+These benchmarks deliberately avoid network and database I/O so CI runs can
+be compared without mixing in service or storage latency. End-to-end database performance is
 covered by the separate PostgreSQL performance workflow.
 """
 
@@ -13,7 +13,7 @@ import pytest
 # pytest collects everything under tests/ (see pyproject.toml testpaths), and
 # the benchmark fixture comes from the plugin — without it every test here is
 # an error on a plain `pytest` run. Skip the module instead.
-pytest.importorskip("pytest_codspeed", reason="benchmarks need pytest-codspeed")
+pytest.importorskip("pytest_benchmark", reason="benchmarks need pytest-benchmark")
 
 from tapcore.query.adql import adql_to_postgresql, touched_tables
 from tapcore.query.results import ColumnMeta, RowLimiter, stream
