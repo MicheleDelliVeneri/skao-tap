@@ -1838,6 +1838,7 @@ dependencies = [
 benchmark = [
     { name = "jinja2" },
     { name = "matplotlib" },
+    { name = "numpy" },
     { name = "psutil" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pyarrow" },
@@ -1868,6 +1869,7 @@ requires-dist = [
 benchmark = [
     { name = "jinja2", specifier = ">=3.1" },
     { name = "matplotlib", specifier = ">=3.9" },
+    { name = "numpy", specifier = ">=2.0" },
     { name = "psutil", specifier = ">=6.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pyarrow", specifier = ">=17" },
