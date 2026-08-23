@@ -26,6 +26,12 @@ Reading metadata through TAP — `/tap/sync` and the `/tap/async` job — can be
 reopened to token-less callers with `auth.anonymousQueries`. That switch is
 what decides whether standard VO clients can use the service at all.
 
+The environment variables behind these switches are read strictly: `1`,
+`true`, `yes`, `on`, `0`, `false`, `no`, `off`, in any case, and anything else
+refuses to start. Mapping an unrecognised value to false is how
+`TAP_AUTH_REQUIRE_TOKEN=flase` would turn the token requirement off without
+saying so.
+
 ## Getting a token: the AuthVO challenge
 
 A bare `401` leaves a client guessing which IAM to talk to. A request refused

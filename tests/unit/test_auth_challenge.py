@@ -357,3 +357,49 @@ def test_turning_the_requirement_off_restores_anonymous_reads(
 def test_authentication_disabled_leaves_everything_open(client):
     assert client.get("/api/v1/software").status_code == 200
     assert client.get("/api/v1/tables").status_code == 200
+
+
+# -- reading the switches ---------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["true", "TRUE", " on ", "1", "yes"])
+def test_a_flag_accepts_the_documented_true_spellings(monkeypatch, value):
+    from tapcore.config import _flag
+
+    monkeypatch.setenv("TAP_TEST_FLAG", value)
+    assert _flag("TAP_TEST_FLAG", False) is True
+
+
+@pytest.mark.parametrize("value", ["false", "OFF", " 0 ", "no"])
+def test_a_flag_accepts_the_documented_false_spellings(monkeypatch, value):
+    from tapcore.config import _flag
+
+    monkeypatch.setenv("TAP_TEST_FLAG", value)
+    assert _flag("TAP_TEST_FLAG", True) is False
+
+
+@pytest.mark.parametrize("value", ["flase", "maybe", "TRUEISH", "2"])
+def test_a_typo_is_refused_rather_than_read_as_false(monkeypatch, value):
+    """The bug this guards: mapping every unrecognised value to False is how
+    TAP_AUTH_REQUIRE_TOKEN=flase turns the token requirement off in silence."""
+    from tapcore.config import _flag
+
+    monkeypatch.setenv("TAP_TEST_FLAG", value)
+    with pytest.raises(ValueError, match="is not a boolean"):
+        _flag("TAP_TEST_FLAG", True)
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_an_empty_value_means_the_default(monkeypatch, value):
+    from tapcore.config import _flag
+
+    monkeypatch.setenv("TAP_TEST_FLAG", value)
+    assert _flag("TAP_TEST_FLAG", True) is True
+    assert _flag("TAP_TEST_FLAG", False) is False
+
+
+def test_an_unset_variable_means_the_default(monkeypatch):
+    from tapcore.config import _flag
+
+    monkeypatch.delenv("TAP_TEST_FLAG", raising=False)
+    assert _flag("TAP_TEST_FLAG", True) is True
