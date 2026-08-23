@@ -2,7 +2,7 @@
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 -- Explicit, even though db/init also creates it: that script swallows a
 -- missing pgsphere with a NOTICE, so without this line the failure surfaces
--- much later as "type spoint does not exist" against the CREATE TABLE below.
+-- later and further away, at the spoint() expression index below.
 CREATE EXTENSION IF NOT EXISTS pg_sphere;
 CREATE SCHEMA IF NOT EXISTS perf;
 
@@ -10,28 +10,24 @@ CREATE SCHEMA IF NOT EXISTS perf;
 -- naming it fails to parse before it reaches the publication check, and the
 -- HTTP workloads all error out.
 DROP TABLE IF EXISTS perf.sources;
+-- Only what the workloads read and TAP_SCHEMA publishes. A stored spoint
+-- column was here, registered nowhere and queried by nothing: the cone
+-- predicate goes through the spoint(radians(ra), radians(dec)) expression
+-- index, so the column only made the table wider and the load slower.
 CREATE TABLE perf.sources (
     source_id bigint PRIMARY KEY,
     ra double precision NOT NULL,
     dec double precision NOT NULL,
-    flux double precision NOT NULL,
-    position spoint NOT NULL
+    flux double precision NOT NULL
 );
 
-INSERT INTO perf.sources (source_id, ra, dec, flux, position)
+INSERT INTO perf.sources (source_id, ra, dec, flux)
 SELECT
     id,
     mod(id * 137, 360)::double precision
         + mod(id, 1000)::double precision / 1000.0,
     -90.0 + mod(id * 73, 180)::double precision,
-    0.001 + mod(id * 17, 100000)::double precision / 100.0,
-    spoint(
-        radians(
-            mod(id * 137, 360)::double precision
-                + mod(id, 1000)::double precision / 1000.0
-        ),
-        radians(-90.0 + mod(id * 73, 180)::double precision)
-    )
+    0.001 + mod(id * 17, 100000)::double precision / 100.0
 FROM generate_series(1, :scale_rows) AS series(id);
 
 -- The cone workload filters on spoint(radians(ra), radians(dec)), so this
