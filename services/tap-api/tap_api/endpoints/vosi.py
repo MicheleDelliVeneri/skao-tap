@@ -122,6 +122,13 @@ def voresource_xml() -> str:
     Built from the deployment's own configuration and the live capability
     elements rather than kept as a file beside them, so it cannot describe a
     service other than the one answering the request.
+
+    The child elements are deliberately in *no* namespace, and there is no
+    default ``xmlns`` on the root. VOResource declares
+    ``elementFormDefault="unqualified"``, so ``<title>``, ``<identifier>``,
+    ``<curation>`` and ``<capability>`` are unqualified — which is what every
+    published record looks like. Adding a default namespace here would
+    qualify them and break schema validation.
     """
     if not settings.registry_enabled:
         raise NotFoundError(
@@ -163,7 +170,9 @@ def voresource_xml() -> str:
         '<?xml version="1.0" encoding="UTF-8"?>',
         "<ri:Resource",
         '    xmlns:ri="http://www.ivoa.net/xml/RegistryInterface/v1.0"',
-        '    xmlns:vr="http://www.ivoa.net/xml/VOResource/v1.0"',
+        # VODataService twice under two prefixes: vs: is what the xsi:type
+        # reads as in every published record, and the capability elements
+        # shared with /capabilities are written against vod:
         '    xmlns:vs="http://www.ivoa.net/xml/VODataService/v1.1"',
         '    xmlns:vod="http://www.ivoa.net/xml/VODataService/v1.1"',
         '    xmlns:tr="http://www.ivoa.net/xml/TAPRegExt/v1.0"',

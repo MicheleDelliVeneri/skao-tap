@@ -138,7 +138,10 @@ async def registry():
     try:
         return Response(vosi.voresource_xml(), media_type="application/xml")
     except TAPError as exc:
-        return PlainTextResponse(str(exc), status_code=exc.http_status)
+        # exc.message, not str(exc): the message is ours (which chart value is
+        # unset), while stringifying the exception is how implementation
+        # detail leaks into a response
+        return PlainTextResponse(exc.message, status_code=exc.http_status)
 
 
 @app.get("/tap/availability")

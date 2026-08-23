@@ -75,6 +75,19 @@ def test_the_record_carries_the_configured_identity(published):
     assert root.get(f"{{{'http://www.w3.org/2001/XMLSchema-instance'}}}type") == "vs:CatalogService"
 
 
+def test_the_child_elements_are_in_no_namespace(published):
+    """VOResource declares elementFormDefault="unqualified", so the children
+    are unqualified — as they are in every published record. A default xmlns
+    on the root would qualify them and fail validation, so this is pinned."""
+    published()
+    document = vosi.voresource_xml()
+    root = ET.fromstring(document)
+    assert 'xmlns="' not in document.split(">", 2)[1]  # no default ns on the root
+    for child in root:
+        assert "}" not in child.tag, f"{child.tag} ended up in a namespace"
+    assert {child.tag for child in root} >= {"title", "identifier", "curation", "content"}
+
+
 def test_the_record_advertises_the_same_capabilities_as_vosi(published):
     """A record that disagreed with /capabilities would be worse than none."""
     published()
