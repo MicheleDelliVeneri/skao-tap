@@ -197,9 +197,12 @@ voRegistry:
   # -- VOResource vocabularies; the defaults suit a science archive.
   types: ["Archive"]
   contentLevels: ["Research"]
-  # -- ISO-8601 date the record was first published. Required: registries
-  # order revisions by it. `updated` defaults to `created`.
+  # -- ISO-8601 date the record was first published. Required, and fixed
+  # once published: it identifies the resource's origin, not this revision.
   created: ""
+  # -- ISO-8601 date of the current revision; defaults to `created`. This is
+  # the one harvesters compare, so bump it whenever the record changes —
+  # a changed record carrying an unchanged `updated` can be ignored.
   updated: ""
 
 # -- TAP service tuning (mapped to TAP_* environment variables).
