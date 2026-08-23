@@ -183,6 +183,13 @@ jobs:
           docker logs --tail 300 tap-db-performance \
             > performance-results/postgres.log 2>&1 || true
 
+      - name: Summarise likely bottlenecks
+        if: always()
+        run: |
+          .venv/bin/python tests/performance/analyse_results.py performance-results \
+            > performance-results/bottleneck-summary.md
+          cat performance-results/bottleneck-summary.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload performance evidence
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
