@@ -1,0 +1,24 @@
+# Performance
+
+Benchmark results from `benchmarks/tap-performance`, which measures the
+service, PostgreSQL as the data grows, replica scaling and autoscaling
+behaviour separately — because they fail separately.
+
+Each run below is published in full: the graphs, the per-measurement CSV,
+and the provenance needed to know whether two runs are comparable at all
+(commit, image ids, seed, corpus hash, chart values hash). Runs
+accumulate rather than replace, so a regression has somewhere to show up.
+
+_No runs published yet._
+
+## Reading these numbers
+
+- A figure without an interval is one measurement. Intervals across
+  repetitions are 95% Student-t; percentile intervals within a run are
+  percentile bootstrap.
+- `LOAD_GENERATOR_BOUND` on any measurement means the client was the
+  limit, and nothing else from that measurement describes the service.
+- A run marked invalid is published anyway, with the reason. The samples
+  are the evidence of what went wrong.
+- Two throughputs closer together than the run-to-run variability plot
+  shows are the same throughput.

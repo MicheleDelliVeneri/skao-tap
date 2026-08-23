@@ -154,6 +154,27 @@ def new_run(scenario: str, resume: str | None = None) -> Run:
     return Run(path=path, scenario=scenario)
 
 
+def resolve(argument: str | None, scenario: str | None = None) -> pathlib.Path | None:
+    """A run directory from whatever the caller had to hand.
+
+    Accepts an absolute path, a path relative to the working directory, a bare
+    run name, or nothing at all (meaning the newest). The Makefile runs these
+    commands from the suite directory while a person reading the results is
+    usually somewhere else, so insisting on one form only would be a papercut
+    on every invocation.
+    """
+    if not argument:
+        return latest_run(scenario)
+    candidate = pathlib.Path(argument)
+    if candidate.is_dir():
+        return candidate
+    for base in (RESULTS, pathlib.Path.cwd()):
+        alternative = base / pathlib.Path(argument).name
+        if alternative.is_dir():
+            return alternative
+    return None
+
+
 def latest_run(scenario: str | None = None) -> pathlib.Path | None:
     candidates = sorted(p for p in RESULTS.glob("*") if p.is_dir())
     if scenario:

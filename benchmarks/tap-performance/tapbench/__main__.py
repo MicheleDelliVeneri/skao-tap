@@ -305,8 +305,8 @@ def cmd_full(args) -> int:
 
 
 def cmd_report(args) -> int:
-    path = pathlib.Path(args.run_dir) if args.run_dir else runs_mod.latest_run()
-    if not path or not path.is_dir():
+    path = runs_mod.resolve(args.run_dir)
+    if not path:
         print("no run directory found", file=sys.stderr)
         return 2
     summary = html_mod.load_summary(path)
@@ -314,6 +314,21 @@ def cmd_report(args) -> int:
     figures = plotter.draw_all()
     html_mod.write_csv(summary, path / "summary.csv")
     print(html_mod.render(path, summary, figures))
+    return 0
+
+
+def cmd_publish(args) -> int:
+    """Copy a run's graphs and numbers into the docs site."""
+    from .analyze import publish as publish_mod
+
+    path = runs_mod.resolve(args.run_dir)
+    if not path:
+        print("no run directory found", file=sys.stderr)
+        return 2
+    if not (path / "summary.json").exists():
+        print(f"{path} has no summary.json; run `report` first", file=sys.stderr)
+        return 2
+    print(publish_mod.publish(path))
     return 0
 
 
@@ -360,6 +375,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_argument("--datasets", nargs="+")
     sub = subparsers.add_parser("report", help="redraw plots and HTML for a run")
     sub.set_defaults(handler=cmd_report)
+    sub.add_argument("run_dir", nargs="?")
+    sub = subparsers.add_parser(
+        "publish", help="copy a run's graphs and numbers into the docs site"
+    )
+    sub.set_defaults(handler=cmd_publish)
     sub.add_argument("run_dir", nargs="?")
     sub = subparsers.add_parser("setup", help="cluster, KEDA, monitoring, chart")
     sub.set_defaults(handler=cmd_setup)

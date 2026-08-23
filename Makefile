@@ -10,6 +10,7 @@
 #   make benchmark-keda                   autoscaling scenarios K1-K7
 #   make benchmark-full                   every family, every dataset
 #   make benchmark-report                 redraw plots and HTML for a run
+#   make benchmark-publish RUN=<dir>      publish graphs to the docs site
 #
 #   make benchmark-setup                  cluster + KEDA + monitoring + chart
 #   make benchmark-teardown               delete the kind cluster
@@ -23,7 +24,7 @@ NO_BUILD_ARG := $(if $(NO_BUILD),--no-build,)
 
 .PHONY: benchmark-smoke benchmark-db-scaling benchmark-fixed-scaling \
         benchmark-keda benchmark-full benchmark-report benchmark-setup \
-        benchmark-teardown benchmark-help
+        benchmark-teardown benchmark-publish benchmark-help
 
 benchmark-help:
 	@sed -n '1,20p' $(firstword $(MAKEFILE_LIST))
@@ -48,6 +49,11 @@ benchmark-full:
 
 benchmark-report:
 	$(BENCH) report $(RUN)
+
+# Copies the graphs, the per-measurement CSV and the provenance into
+# docs/performance/, which the docs workflow already deploys to Pages.
+benchmark-publish:
+	$(BENCH) publish $(RUN)
 
 benchmark-teardown:
 	$(BENCH) teardown

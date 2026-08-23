@@ -37,4 +37,6 @@ nav:
   - VO Registry: registry.md
   - Observability: observability.md
   - Autoscaling: autoscaling.md
+  - Benchmarking: benchmarking.md
+  - Performance: performance/index.md
   - Roadmap: roadmap.md
