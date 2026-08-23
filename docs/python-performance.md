@@ -21,6 +21,7 @@ and full-service capacity are covered by the PostgreSQL performance workflow.
 Install the benchmark and profiling tools into the project environment:
 
 ```console
+uv sync --locked --all-groups
 uv pip install --python .venv/bin/python pytest-benchmark==5.2.3 py-spy==0.4.2
 uv run --no-sync pytest tests/benchmarks -v --benchmark-json=benchmarks.json
 py-spy record --output flamegraph.svg --format flamegraph -- \
