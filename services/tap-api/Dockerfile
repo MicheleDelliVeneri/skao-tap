@@ -21,7 +21,18 @@ COPY --from=builder /srv/.venv /srv/.venv
 # the container can run with a read-only root filesystem
 ENV HOME=/tmp XDG_CACHE_HOME=/tmp/.cache XDG_CONFIG_HOME=/tmp/.config
 USER 10001
+# The default only — EXPOSE is fixed at build time, so a container started
+# with TAP_API_PORT set listens elsewhere and that port has to be published
+# explicitly rather than by docker run -P.
 EXPOSE 8080
+# Follows TAP_API_PORT like the command below, or the health status would
+# describe a port the service is not listening on.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-    CMD ["/srv/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/tap/availability', timeout=4)"]
-CMD ["/srv/.venv/bin/uvicorn", "tap_api.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    CMD ["/srv/.venv/bin/python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/tap/availability' % os.environ.get('TAP_API_PORT', '8080'), timeout=4)"]
+# Run through a shell so the worker count and port come from the environment:
+# ADQL translation is pure-Python ANTLR and holds the GIL, so one process
+# serves one query at a time however many CPUs the pod has, and
+# TAP_API_WORKERS is what lets a deployment use them. exec keeps uvicorn in
+# place for signal handling; the expansions are quoted so a malformed value
+# cannot become extra shell words.
+CMD ["/bin/sh", "-c", "exec /srv/.venv/bin/uvicorn tap_api.main:app --host 0.0.0.0 --port \"${TAP_API_PORT:-8080}\" --workers \"${TAP_API_WORKERS:-1}\""]

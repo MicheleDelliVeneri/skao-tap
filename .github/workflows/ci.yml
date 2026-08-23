@@ -157,6 +157,20 @@ jobs:
             --set postgresql.tuning.shared_buffers=512MB \
             --set postgresql.tuning.max_connections=100 \
             | grep -qE "kind: (PodDisruptionBudget|VerticalPodAutoscaler|CronJob)"
+      - name: Template with several API workers
+        run: |
+          helm template skao-tap deploy/helm/skao-tap \
+            --set tapApi.workers=4 --set tapApi.port=9090 \
+            | grep -q 'TAP_API_WORKERS: "4"'
+          # the port the deployment declares has to be the port the app uses
+          helm template skao-tap deploy/helm/skao-tap --set tapApi.port=9090 \
+            | grep -q 'TAP_API_PORT: "9090"'
+          # and rendering those values is only useful if the pod reads them:
+          # without this the ConfigMap could stop being consumed and the greps
+          # above would still pass
+          helm template skao-tap deploy/helm/skao-tap \
+            --show-only templates/api-deployment.yaml \
+            | grep -A2 'envFrom:' | grep -q 'configMapRef'
       - name: Template with authentication enabled
         run: |
           helm template skao-tap deploy/helm/skao-tap \
