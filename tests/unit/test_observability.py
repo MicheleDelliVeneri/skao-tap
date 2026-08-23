@@ -248,6 +248,100 @@ def test_a_failed_job_is_counted_as_a_failure(monkeypatch, fake_db):
     assert errors(after) == errors(before) + 1
 
 
+def _metric(name: str) -> float:
+    for line in generate_latest(obs.REGISTRY).decode().splitlines():
+        if line.startswith(name):
+            return float(line.split()[-1])
+    return 0.0
+
+
+def _run_a_job_that_is_finalized_mid_stream(fake_db, monkeypatch):
+    """A job whose phase flips to ABORTED after the query started."""
+    from tap_executor import worker
+
+    job = fake_db.add_job(
+        phase="QUEUED",
+        parameters={"QUERY": QUERY, "RESPONSEFORMAT": "csv"},
+        query_sql=QUERY,
+    )
+    claimed = worker.claim_job()
+    real_stream = worker.stream
+
+    def abort_then_stream(*args, **kwargs):
+        fake_db.jobs[job["job_id"]]["phase"] = "ABORTED"
+        return real_stream(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "stream", abort_then_stream)
+    worker.execute_job(claimed)
+
+
+def test_a_job_finalized_while_it_ran_is_still_counted(fake_db, results_dir, monkeypatch):
+    """The work happened and the job reached a final phase; discarding the
+    result is not a reason to discard the outcome."""
+    before = _metric('tap_jobs_completed_total{phase="ABORTED"}')
+    _run_a_job_that_is_finalized_mid_stream(fake_db, monkeypatch)
+    assert _metric('tap_jobs_completed_total{phase="ABORTED"}') == before + 1
+
+
+def test_a_job_finalized_while_it_ran_is_still_timed(fake_db, results_dir, monkeypatch):
+    """It ran a query to the end, so it belongs in the duration histogram —
+    the same argument as the sync stream a client abandoned."""
+    before = _metric('tap_query_duration_seconds_count{kind="async"}')
+    _run_a_job_that_is_finalized_mid_stream(fake_db, monkeypatch)
+    assert _metric('tap_query_duration_seconds_count{kind="async"}') == before + 1
+
+
+def test_an_abort_before_the_query_starts_is_counted_but_not_timed(
+    fake_db, results_dir, monkeypatch
+):
+    """No query ran, so timing it would pull the low buckets down with work
+    that never happened — but the outcome is still an outcome."""
+    from tap_executor import worker
+
+    job = fake_db.add_job(
+        phase="QUEUED",
+        parameters={"QUERY": QUERY, "RESPONSEFORMAT": "csv"},
+        query_sql=QUERY,
+    )
+    claimed = worker.claim_job()
+    fake_db.jobs[job["job_id"]]["phase"] = "ABORTED"  # before the PID is published
+
+    counted = _metric('tap_jobs_completed_total{phase="ABORTED"}')
+    timed = _metric('tap_query_duration_seconds_count{kind="async"}')
+    worker.execute_job(claimed)
+    assert _metric('tap_jobs_completed_total{phase="ABORTED"}') == counted + 1
+    assert _metric('tap_query_duration_seconds_count{kind="async"}') == timed
+
+
+def test_a_deleted_job_is_not_counted_as_an_outcome(fake_db, results_dir, monkeypatch):
+    """A row that is gone has no final phase to report; inventing one would put
+    a wrong outcome in the metric rather than a missing one."""
+    from tap_executor import worker
+
+    job = fake_db.add_job(
+        phase="QUEUED",
+        parameters={"QUERY": QUERY, "RESPONSEFORMAT": "csv"},
+        query_sql=QUERY,
+    )
+    claimed = worker.claim_job()
+    real_stream = worker.stream
+
+    def delete_then_stream(*args, **kwargs):
+        del fake_db.jobs[job["job_id"]]
+        return real_stream(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "stream", delete_then_stream)
+
+    before = generate_latest(obs.REGISTRY).decode()
+    worker.execute_job(claimed)
+    after = generate_latest(obs.REGISTRY).decode()
+
+    def completions(text):
+        return [line for line in text.splitlines() if line.startswith("tap_jobs_completed_total")]
+
+    assert completions(after) == completions(before)
+
+
 def test_the_request_id_does_not_outlive_the_request(client):
     """Work after the response must not be attributed to it."""
     client.get("/tap/availability", headers={obs.REQUEST_ID_HEADER: "scoped-id"})

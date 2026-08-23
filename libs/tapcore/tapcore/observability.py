@@ -58,8 +58,9 @@ DB_CONNECTIONS_IN_USE = Gauge(
 
 QUERY_DURATION = Histogram(
     "tap_query_duration_seconds",
-    "Time to run a user query, from acquiring a connection until the stream"
-    " ends — including a stream the client abandoned.",
+    "Time to run a user query, from acquiring a connection until the work"
+    " ends — including a query that was aborted and a stream the client"
+    " abandoned.",
     ["kind"],  # sync or async
     registry=REGISTRY,
     buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0),

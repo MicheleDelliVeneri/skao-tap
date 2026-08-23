@@ -176,6 +176,56 @@ def claim_job() -> dict | None:
     return uws._row_to_job(row)
 
 
+def _count_finalized_elsewhere(job_id: str) -> None:
+    """Count a job this executor worked on but did not finalize itself.
+
+    Reaching one of these paths means the phase was no longer EXECUTING: an
+    ABORT committed while we ran, or the row was deleted under us. The work
+    happened either way, so leaving it out would make aborts invisible in the
+    one metric that reports outcomes. The phase is read back rather than
+    assumed, so the count says what the job actually became; a deleted row has
+    no outcome left to report, and is only logged.
+    """
+    with db_connection() as conn:
+        row = conn.execute("SELECT phase FROM uws.jobs WHERE job_id = %s", (job_id,)).fetchone()
+    if row is None:
+        log.info("job %s was deleted while running; no outcome to record", job_id)
+        return
+    phase = row[0]
+    if phase == "EXECUTING":
+        # nothing has finalized it after all, so it is not an outcome yet
+        log.warning("job %s is still EXECUTING after failing to finalize", job_id)
+        return
+    JOBS_COMPLETED.labels(phase=phase).inc()
+
+
+class _AsyncDuration:
+    """Records an async job's query duration once, however the job ends.
+
+    A flag and one ``finally`` rather than an observe at each exit: this
+    function returns early at four points — an ABORT before execution, an
+    ABORT during it, an error, and a job finalized under us — and a review
+    found one of them recording nothing at all. With a single recording site,
+    a path added later cannot quietly miss it.
+
+    ``query_ran`` is what keeps the histogram meaning what it says: an ABORT
+    that lands before the cursor executes spent no time querying, and counting
+    its setup as a query duration would pull the low buckets down.
+    """
+
+    def __init__(self, started: float) -> None:
+        self._started = started
+        self.query_ran = False
+
+    def __enter__(self) -> _AsyncDuration:
+        return self
+
+    def __exit__(self, *exc_info) -> bool:
+        if self.query_ran:
+            QUERY_DURATION.labels(kind="async").observe(time.monotonic() - self._started)
+        return False
+
+
 def execute_job(job: dict) -> None:
     job_id = job["job_id"]
     params = job["parameters"] or {}
@@ -191,11 +241,12 @@ def execute_job(job: dict) -> None:
             owner_id=job.get("owner_id"),
             request_id=job.get("request_id"),
         ),
+        _AsyncDuration(started) as duration,
     ):
-        _execute_job_inner(job, job_id, params, backend_pid, started)
+        _execute_job_inner(job, job_id, params, backend_pid, duration)
 
 
-def _execute_job_inner(job: dict, job_id, params, backend_pid, started) -> None:
+def _execute_job_inner(job: dict, job_id, params, backend_pid, duration) -> None:
     log.info("executing job %s", job_id)
     try:
         maxrec = min(int(params.get("MAXREC", settings.default_maxrec)), settings.hard_maxrec)
@@ -239,6 +290,7 @@ def _execute_job_inner(job: dict, job_id, params, backend_pid, started) -> None:
                 ).rowcount
                 if not published:
                     shutil.rmtree(result_dir, ignore_errors=True)
+                    _count_finalized_elsewhere(job_id)
                     log.info("job %s aborted before execution", job_id)
                     return
             # JIT compilation runs uninterruptibly at cursor DECLARE and can
@@ -252,6 +304,7 @@ def _execute_job_inner(job: dict, job_id, params, backend_pid, started) -> None:
             ):
                 cur.itersize = 5000
                 cur.execute(sql)
+                duration.query_ran = True
                 columns = columns_from_cursor(cur.description, tap_meta)
                 limiter = RowLimiter(cur, maxrec)
                 with open(result_path, "wb") as fh:
@@ -270,10 +323,10 @@ def _execute_job_inner(job: dict, job_id, params, backend_pid, started) -> None:
             ).rowcount
         if not completed:  # aborted (or deleted) while running
             shutil.rmtree(result_dir, ignore_errors=True)
+            _count_finalized_elsewhere(job_id)
             log.info("job %s finished but was already finalized; discarding", job_id)
             return
         JOBS_COMPLETED.labels(phase="COMPLETED").inc()
-        QUERY_DURATION.labels(kind="async").observe(time.monotonic() - started)
         log.info("job %s completed (%d rows, %s)", job_id, limiter.count, limiter.status)
     except Exception as exc:
         shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
@@ -301,6 +354,9 @@ def _execute_job_inner(job: dict, job_id, params, backend_pid, started) -> None:
                 JOBS_COMPLETED.labels(phase="ERROR").inc()
                 log.exception("job %s failed", job_id)
             else:
+                # a racing ABORT (or a delete) won: whatever it became is the
+                # outcome, and it is still an outcome
+                _count_finalized_elsewhere(job_id)
                 log.info("job %s aborted while executing", job_id)
 
 
