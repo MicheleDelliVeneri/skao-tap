@@ -15,7 +15,7 @@ import pytest
 # an error on a plain `pytest` run. Skip the module instead.
 pytest.importorskip("pytest_benchmark", reason="benchmarks need pytest-benchmark")
 
-from tapcore.query.adql import adql_to_postgresql, touched_tables
+from tapcore.query.adql import adql_to_postgresql, touched_tables, translate
 from tapcore.query.results import ColumnMeta, RowLimiter, stream
 
 CONE_SEARCH = (
@@ -48,7 +48,13 @@ ROWS = tuple(
 
 
 def _translate_and_inspect() -> set[str]:
+    """The old shape: translate, then re-parse the SQL to list the tables."""
     return touched_tables(adql_to_postgresql(JOIN_QUERY))
+
+
+def _translate_single_pass() -> set[str]:
+    """What the service does now: both from one parse."""
+    return set(translate(JOIN_QUERY).tables)
 
 
 def _serialize(fmt: str) -> bytes:
@@ -63,7 +69,14 @@ def test_benchmark_adql_geometry_translation(benchmark):
 
 
 def test_benchmark_adql_translation_and_table_inspection(benchmark):
+    """Kept as the reference the single-pass benchmark below is measured
+    against — this is what a request used to cost."""
     tables = benchmark(_translate_and_inspect)
+    assert tables == {"ska.continuum_sources", "tap_schema.tables"}
+
+
+def test_benchmark_adql_translation_single_pass(benchmark):
+    tables = benchmark(_translate_single_pass)
     assert tables == {"ska.continuum_sources", "tap_schema.tables"}
 
 

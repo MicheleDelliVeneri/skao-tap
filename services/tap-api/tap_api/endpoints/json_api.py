@@ -25,6 +25,7 @@ import time
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 from tapcore import uws
 from tapcore.config import settings
 from tapcore.db import pool
@@ -113,7 +114,7 @@ async def sync_query(body: QueryRequest):
 
     Set ``format`` to ``parquet`` or ``arrow`` for columnar responses.
     """
-    prepared = prepare_query(_tap_params(body, fmt=body.format))
+    prepared = await run_in_threadpool(prepare_query, _tap_params(body, fmt=body.format))
     chunks, mime = run_sync(prepared)
     return StreamingResponse(chunks, media_type=mime)
 
@@ -163,10 +164,15 @@ def _job_json(job: dict) -> dict:
     return body
 
 
-def _queue(conn, job: dict) -> None:
+def _queue(conn, job: dict, prepared: dict | None = None) -> None:
+    """Move a job to QUEUED, translating its query unless already done.
+
+    ``prepared`` lets a caller that has just validated the same parameters
+    hand the result over rather than pay a second ADQL parse for it.
+    """
     if job["phase"] not in ("PENDING", "HELD"):
         raise UsageError(f"cannot start job in phase {job['phase']}")
-    prepared = prepare_query(job["parameters"])
+    prepared = prepared or prepare_query(job["parameters"])
     uws.update_job(conn, job["job_id"], phase="QUEUED", query_sql=prepared["sql"])
 
 
@@ -175,11 +181,13 @@ async def create_job(body: JobRequest, request: Request):
     params = _tap_params(body, fmt=body.format)
     if body.run_id:
         params["RUNID"] = body.run_id
-    prepare_query(params)  # validate before storing, unlike lenient UWS XML flow
+    # validate before storing, unlike the lenient UWS XML flow — and keep the
+    # result, so running the job now does not re-translate the same query
+    prepared = await run_in_threadpool(prepare_query, params)
     with pool().connection() as conn:
         job = uws.create_job(conn, params, owner_id=owner_of(request))
         if body.run:
-            _queue(conn, job)
+            _queue(conn, job, prepared)
         return _job_json(uws.get_job(conn, job["job_id"]))
 
 
