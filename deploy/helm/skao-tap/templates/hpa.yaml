@@ -169,6 +169,19 @@ The query is not here — whatever publishes this metric owns it, and it has
 to aggregate with max() across executor pods for the same reason the KEDA
 query does. docs/autoscaling.md has the prometheus-adapter rule.
 */}}
+{{- /*
+The selector decides which series this HPA reads, so it also decides what the
+metrics provider has to publish. Both are derived from the same value here:
+unset means namespace-scoped, an explicit {} means no matchers at all.
+*/}}
+{{- $selector := $hpa.tapExecutor.externalMetricSelector }}
+{{- if kindIs "invalid" $selector }}
+{{- $selector = dict "namespace" .Release.Namespace }}
+{{- end }}
+{{- $matchers := list }}
+{{- range $label, $value := $selector }}
+{{- $matchers = append $matchers (printf "%s=\"%s\"" $label (toString $value)) }}
+{{- end }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -177,8 +190,11 @@ metadata:
     {{- include "skao-tap.labels" . | nindent 4 }}
     app.kubernetes.io/component: tap-executor
   annotations:
-    # what the cluster's metrics provider has to return for this to work
-    skao-tap/expected-query: {{ include "skao-tap.backlogQuery" . | quote }}
+    # What the cluster's metrics provider has to return for this to work,
+    # built from the name and selector below rather than from the KEDA query:
+    # a selector of {} means no matchers, and an annotation still claiming a
+    # namespace match would send whoever is debugging this to the wrong place.
+    skao-tap/expected-query: {{ printf "max(%s%s)" $hpa.tapExecutor.externalMetricName (ternary (printf "{%s}" (join "," $matchers)) "" (gt (len $matchers) 0)) | quote }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -191,13 +207,8 @@ spec:
       external:
         metric:
           name: {{ $hpa.tapExecutor.externalMetricName | quote }}
-          {{- /* Unset means the namespace default; an explicit {} means no
-                 selector, which some providers need — a selector that matches
-                 no series is not a stricter autoscaler, it is a dead one. */}}
-          {{- $selector := $hpa.tapExecutor.externalMetricSelector }}
-          {{- if kindIs "invalid" $selector }}
-          {{- $selector = dict "namespace" .Release.Namespace }}
-          {{- end }}
+          {{- /* A selector that matches no series is not a stricter
+                 autoscaler, it is a dead one — so {} sends none at all. */}}
           {{- with $selector }}
           selector:
             matchLabels:

@@ -9,7 +9,7 @@ spec:
   {{- /* omitted when an autoscaler owns it: a helm upgrade that set
          replicas would reset the count the autoscaler had chosen, and
          the two would then take turns overwriting each other */}}
-  {{- if not (include "skao-tap.apiAutoscaled" .) }}
+  {{- if not .Values.horizontalAutoscaling.tapApi.enabled }}
   replicas: {{ .Values.tapApi.replicas }}
   {{- end }}
   selector:

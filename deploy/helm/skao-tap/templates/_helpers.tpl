@@ -86,14 +86,6 @@ PodDisruptionBudget has to reason about: when an autoscaler owns the
 Deployment, `replicas` is not what the cluster will run, `minReplicas` is the
 floor. Usage: include "skao-tap.minReplicas" (dict "ctx" $ "component" "tap-api")
 */}}
-{{- define "skao-tap.apiAutoscaled" -}}
-{{- if .Values.horizontalAutoscaling.tapApi.enabled -}}true{{- end -}}
-{{- end -}}
-
-{{- define "skao-tap.executorAutoscaled" -}}
-{{- if .Values.horizontalAutoscaling.tapExecutor.enabled -}}true{{- end -}}
-{{- end -}}
-
 {{- define "skao-tap.minReplicas" -}}
 {{- $hpa := .ctx.Values.horizontalAutoscaling -}}
 {{- if eq .component "tap-api" -}}

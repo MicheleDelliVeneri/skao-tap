@@ -231,6 +231,21 @@ jobs:
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --set-json 'horizontalAutoscaling.tapExecutor.externalMetricSelector={"job":"tap-executor"}' \
             --show-only templates/hpa.yaml | grep -q 'job: tap-executor'
+          # the annotation says what the provider must publish, so it has to
+          # follow the selector: claiming a namespace match that the HPA is
+          # not asking for sends whoever debugs this to the wrong place
+          helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapExecutor.enabled=true \
+            --set horizontalAutoscaling.tapExecutor.scaler=external \
+            --set-json 'horizontalAutoscaling.tapExecutor.externalMetricSelector={}' \
+            --show-only templates/hpa.yaml \
+            | grep -q 'expected-query: "max(tap_oldest_queued_job_seconds)"'
+          helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapExecutor.enabled=true \
+            --set horizontalAutoscaling.tapExecutor.scaler=external \
+            --set horizontalAutoscaling.tapExecutor.externalMetricName=tap_backlog \
+            --show-only templates/hpa.yaml \
+            | grep -q 'expected-query: "max(tap_backlog{namespace=' 
           # scale-to-zero is refused for the default query and allowed for one
           # that survives having no executors — and the activation threshold
           # is rendered only where it can do anything
