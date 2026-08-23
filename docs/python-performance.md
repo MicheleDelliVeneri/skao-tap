@@ -1,8 +1,9 @@
 # Python performance profiling
 
 The Python performance workflow benchmarks CPU-bound hot paths on pushes to
-`main`, relevant pull requests, and manual dispatches. It uses CodSpeed's
-simulation mode to provide repeatable comparisons and flamegraphs.
+`main`, relevant pull requests, and manual dispatches. It stores both
+machine-readable benchmark results and a Python flamegraph as GitHub artifacts
+for 30 days.
 
 The suite currently measures:
 
@@ -12,25 +13,25 @@ The suite currently measures:
 - JSON serialization of 1,000 typed rows.
 
 These tests intentionally exclude PostgreSQL, network traffic, and disk I/O.
-That keeps pull-request comparisons deterministic. Database capacity is tested
-by the separate PostgreSQL performance workflow.
+That makes their benchmark JSON useful for comparisons between runs. Database
+and full-service capacity are covered by the PostgreSQL performance workflow.
 
 ## Run locally
 
-Create the project environment if you do not have one, install the benchmark
-plugin into it, and run:
+Install the benchmark and profiling tools into the project environment:
 
 ```console
-uv sync --all-groups
-uv pip install --python .venv/bin/python pytest-codspeed==5.0.3
-uv run --no-sync pytest tests/benchmarks -v --codspeed
+uv pip install --python .venv/bin/python pytest-benchmark==5.2.3 py-spy==0.4.2
+uv run --no-sync pytest tests/benchmarks -v --benchmark-json=benchmarks.json
+py-spy record --output flamegraph.svg --format flamegraph -- \
+  .venv/bin/python -m pytest tests/benchmarks -q --benchmark-only
 ```
 
-`--no-sync` is what keeps the plugin installed: a plain `uv run` would restore
-the environment to the lockfile and drop it again. Without the plugin the
-benchmark module skips itself rather than failing.
+The benchmark JSON shows distributions and relative speeds. Open the SVG
+flamegraph and look for the widest application frames: those functions consume
+the largest share of sampled Python time and are the first candidates for
+optimisation.
 
 A result is a regression signal, not an application service-level objective.
-Investigate meaningful changes in the CodSpeed comparison and flamegraph before
-changing a merge policy. New benchmarks should use representative fixed input
-and avoid clocks, randomness, network calls, and database access.
+New benchmarks should use representative fixed input and avoid clocks,
+randomness, network calls, and database access.
