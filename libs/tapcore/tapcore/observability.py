@@ -196,7 +196,12 @@ def tag_sql(sql: str) -> str:
 
 @contextlib.contextmanager
 def pool_wait_timer():
-    """Record how long acquiring a database connection took."""
+    """Record how long acquiring a database connection took.
+
+    Wrap the acquisition and nothing else: held time is not waiting. Recorded
+    in a ``finally``, so a wait that ends in ``PoolTimeout`` is measured too —
+    that is the longest wait there is, and the one the histogram exists for.
+    """
     started = time.perf_counter()
     try:
         yield

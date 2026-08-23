@@ -428,11 +428,16 @@ def main() -> None:
     while True:
         # survive transient failures (e.g. an ABORT's pg_cancel_backend
         # racing a finished execution and cancelling a pooled connection)
+        worked = False
         try:
             job = claim_job()
             if job is not None:
                 execute_job(job)
-                continue
+                worked = True
+            # on their intervals whether or not jobs keep arriving: a backlog
+            # is exactly when the queue metrics are read, and an executor that
+            # never runs out of work must not stop reporting the queue it is
+            # behind on, or stop destroying expired jobs
             if time.monotonic() - last_queue_metrics > QUEUE_METRICS_INTERVAL_S:
                 refresh_queue_metrics()
                 last_queue_metrics = time.monotonic()
@@ -441,7 +446,11 @@ def main() -> None:
                 last_cleanup = time.monotonic()
         except Exception:
             log.exception("executor loop error, retrying")
-        time.sleep(POLL_INTERVAL_S)
+        # only when there was nothing to do: sleeping after a job would cap
+        # throughput at one job per poll interval. A failed pass counts as
+        # nothing done, so a persistent failure backs off instead of spinning.
+        if not worked:
+            time.sleep(POLL_INTERVAL_S)
 
 
 if __name__ == "__main__":

@@ -224,6 +224,41 @@ def test_an_abandoned_stream_is_still_measured():
     assert count() == before + 1
 
 
+def test_the_pool_wait_is_only_the_wait(fake_db):
+    """It is the backpressure signal, so held time must stay out of it: a sync
+    query keeps its connection for the whole of the client's download, and
+    counting that as waiting would make a busy pool and a big result look the
+    same."""
+    from tapcore import db
+
+    before = _metric("tap_db_pool_wait_seconds_sum")
+    with db.connection():
+        time.sleep(0.2)
+    assert _metric("tap_db_pool_wait_seconds_sum") - before < 0.05
+
+
+def test_a_wait_that_ends_in_a_timeout_is_still_recorded(monkeypatch, fake_db):
+    """The longest wait there is must not be the one that goes unmeasured."""
+    from psycopg_pool import PoolTimeout
+    from tapcore import db
+
+    class Exhausted:
+        def connection(self):
+            return self
+
+        def __enter__(self):
+            raise PoolTimeout("no connection is available")
+
+        def __exit__(self, *exc_info):
+            return False
+
+    monkeypatch.setattr(db, "pool", Exhausted)
+    before = _metric("tap_db_pool_wait_seconds_count")
+    with pytest.raises(PoolTimeout), db.connection():
+        pass
+    assert _metric("tap_db_pool_wait_seconds_count") == before + 1
+
+
 def test_a_failed_job_is_counted_as_a_failure(monkeypatch, fake_db):
     """Undercounting failures is worse than not counting them: an alert on
     this metric would have stayed quiet."""

@@ -20,24 +20,28 @@ data:
         metrics_path: /metrics
         static_configs:
           - targets: ["{{ include "skao-tap.fullname" . }}-tap-api:{{ .Values.tapApi.port }}"]
-      # The executor has no Service of its own — it serves no API — so it is
-      # discovered by pod annotation rather than by name.
+      # The executor has no Service of its own — it serves no API — so its
+      # pods are discovered directly. By this release's own labels and the
+      # port the chart configured, not by the scrape annotations: those exist
+      # to tell somebody else's Prometheus what to pick up, and turning them
+      # off with metrics.scrapeAnnotations must not blind the one the chart
+      # deployed on purpose.
       - job_name: tap-executor
         kubernetes_sd_configs:
           - role: pod
             namespaces:
               names: [{{ .Release.Namespace }}]
         relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
             action: keep
-            regex: "true"
+            regex: {{ .Release.Name }}
           - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
             action: keep
             regex: tap-executor
-          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          - source_labels: [__address__]
             action: replace
-            regex: ([^:]+)(?::\d+)?;(\d+)
-            replacement: $1:$2
+            regex: ([^:]+)(?::\d+)?
+            replacement: $1:{{ .Values.config.executorMetricsPort }}
             target_label: __address__
 ---
 {{- if .Values.prometheus.rbac.create }}

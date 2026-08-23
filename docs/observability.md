@@ -50,7 +50,7 @@ of its own, so its metrics get a listener instead.
 
 | Metric | Type | Why it is here |
 | --- | --- | --- |
-| `tap_db_pool_wait_seconds` | histogram | The pool is the real concurrency limit. This is the signal that made a collapse above 8 concurrent queries invisible until it was reproduced locally |
+| `tap_db_pool_wait_seconds` | histogram | The pool is the real concurrency limit. This is the signal that made a collapse above 8 concurrent queries invisible until it was reproduced locally. The wait only — a connection held through a long download is not a busy pool |
 | `tap_db_pool_exhausted_total` | counter | Requests answered `503` because no connection came free |
 | `tap_db_connections_in_use` | gauge | How much of the pool this process is holding |
 | `tap_query_duration_seconds{kind}` | histogram | Query time, `sync` and `async` separately — they have different limits and different users. Every query that ran is in it, including one that was aborted or abandoned: those were slow too, and dropping them would flatter the tail |
@@ -83,7 +83,9 @@ prometheus.io/port: "8080"   # 9100 on the executor
 ```
 
 Set `metrics.scrapeAnnotations: false` to keep an existing Prometheus from
-picking them up.
+picking them up. The chart's own Prometheus, below, is unaffected: it finds
+the executor by the release's labels and the configured port, so turning the
+annotations off does not blind the scraper the chart deployed on purpose.
 
 ### A Prometheus for testing
 

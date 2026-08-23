@@ -3,6 +3,7 @@
 import datetime
 import os
 
+import pytest
 from tap_executor import worker
 
 QUERY_SQL = "SELECT source_id, ra FROM ska.continuum_sources"
@@ -79,3 +80,32 @@ def test_cleanup_expired_removes_jobs_and_results(fake_db, results_dir):
     assert expired["job_id"] not in fake_db.jobs
     assert kept["job_id"] in fake_db.jobs
     assert not os.path.isdir(os.path.join(results_dir, expired["job_id"]))
+
+
+def test_a_busy_executor_still_reports_the_queue(monkeypatch, fake_db, results_dir):
+    """The loop used to `continue` straight past the queue metrics and the
+    cleanup whenever a job was waiting — so a backlog stopped being reported
+    exactly when it existed, and expired jobs stopped being destroyed."""
+    calls = []
+    slept = []
+
+    def cleanup():
+        calls.append("cleanup")
+        if calls.count("cleanup") == 2:
+            raise KeyboardInterrupt  # the only way out of a `while True`
+
+    monkeypatch.setattr(worker, "QUEUE_METRICS_INTERVAL_S", 0)
+    monkeypatch.setattr(worker, "CLEANUP_INTERVAL_S", 0)
+    monkeypatch.setattr(worker, "claim_job", lambda: {"job_id": "always-a-job"})
+    monkeypatch.setattr(worker, "execute_job", lambda job: None)
+    monkeypatch.setattr(worker, "refresh_queue_metrics", lambda: calls.append("metrics"))
+    monkeypatch.setattr(worker, "cleanup_expired", cleanup)
+    monkeypatch.setattr(worker, "_ensure_backend_pid_column", lambda: None)
+    monkeypatch.setattr(worker, "start_http_server", lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker.time, "sleep", lambda seconds: slept.append(seconds))
+
+    with pytest.raises(KeyboardInterrupt):
+        worker.main()
+
+    assert calls.count("metrics") >= 2
+    assert slept == [], "a poll that found work must not throttle the next one"
