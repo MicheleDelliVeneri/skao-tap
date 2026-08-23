@@ -233,6 +233,36 @@ def test_a_real_query_is_still_gated(client, secured, fake_db):
     assert client.get("/tap/sync", params={"QUERY": "SELECT 1", "LANG": "ADQL"}).status_code == 401
 
 
+@pytest.mark.parametrize(
+    ("label", "url"),
+    [
+        # the handler compares REQUEST as-is, so a mis-cased value is a query
+        # to it; an exemption that lowercased would have run it without a token
+        ("mis-cased REQUEST", "/tap/sync?REQUEST=GETCAPABILITIES&LANG=ADQL&QUERY=SELECT+1"),
+        # gather_params keeps the last value, so this is doQuery to the handler
+        (
+            "duplicate REQUEST, query last",
+            "/tap/sync?REQUEST=getCapabilities&REQUEST=doQuery&LANG=ADQL&QUERY=SELECT+1",
+        ),
+    ],
+)
+def test_the_discovery_exemption_cannot_be_widened_into_a_query(
+    client, secured, fake_db, label, url
+):
+    """The exemption must never be wider than the redirect it exists for: a
+    request the handler runs as a query must not reach it as discovery."""
+    response = client.get(url, follow_redirects=False)
+    assert response.status_code == 401, f"{label} bypassed the token requirement"
+
+
+def test_the_last_request_value_decides_like_the_handler(client, secured, fake_db):
+    """Discovery last: the handler redirects, so the exemption applies too."""
+    response = client.get(
+        "/tap/sync?REQUEST=doQuery&REQUEST=getCapabilities", follow_redirects=False
+    )
+    assert response.status_code == 303
+
+
 # -- the setting ------------------------------------------------------------
 
 

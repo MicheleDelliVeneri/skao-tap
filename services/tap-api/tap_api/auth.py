@@ -148,10 +148,20 @@ def _is_capability_discovery(path: str, query_params) -> bool:
     """
     if path.rstrip("/") != "/tap/sync" or query_params is None:
         return False
-    return any(
-        key.upper() == "REQUEST" and value.strip().lower() == "getcapabilities"
-        for key, value in query_params.multi_items()
-    )
+    # The exemption must never be wider than the redirect it exists for, or it
+    # is a way past the token requirement: a request the handler treats as a
+    # query would have been let through as discovery. So mirror the handler
+    # exactly — gather_params upper-cases the key and keeps the last value,
+    # and sync() compares that value to "getCapabilities" as-is.
+    #
+    # Query string only, while gather_params also reads a POST form body. That
+    # is the safe direction: a form-encoded discovery request needs a token
+    # rather than a query slipping through as discovery.
+    request_value = None
+    for key, value in query_params.multi_items():
+        if key.upper() == "REQUEST":
+            request_value = value
+    return request_value == "getCapabilities"
 
 
 def needs_token(path: str, query_params=None) -> bool:
