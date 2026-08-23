@@ -115,20 +115,20 @@ def main() -> int:
             "- No simple saturation, error, temporary-spill, or low-cache-hit rule fired. "
             "Use the attached flamegraph and JSON execution plan for deeper inspection."
         )
-    lines.extend(
-        [
-            "",
-            "## Where to look next",
-            "",
-            "- Open tap-python-flamegraph.svg; wide application frames are the Python "
-            "functions consuming the most sampled time.",
-            "- Open cone-plan.json; compare estimated and actual rows and inspect buffer "
-            "reads around scan, join, sort, and aggregate nodes.",
-            "- Use the per-concurrency pgstat CSV files to distinguish a slow query "
-            "from connection-pool or application saturation.",
-            "",
-        ]
+    lines.extend(["", "## Where to look next", ""])
+    lines.append(
+        "- Open tap-python-flamegraph.svg; wide application frames identify "
+        "the Python functions consuming the most sampled time."
     )
+    lines.append(
+        "- Open cone-plan.json; compare estimated and actual rows, then inspect "
+        "buffer reads around scan, join, sort, and aggregate nodes."
+    )
+    lines.append(
+        "- Use the per-concurrency pgstat CSV files to distinguish a slow query "
+        "from connection-pool or application saturation."
+    )
+    lines.append("")
     print("\n".join(lines))
     return 0
 
