@@ -4,8 +4,9 @@
 #
 # The major version appears twice — the base image and the versioned pgsphere
 # package — and both must move together: postgresql-<N>-pgsphere only builds
-# against server major N.
-FROM postgres:18
+# against server major N. The digest pins the exact base image; refresh it
+# with: docker buildx imagetools inspect postgres:18
+FROM postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941
 RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-18-pgsphere \
     && rm -rf /var/lib/apt/lists/*
