@@ -1,0 +1,28 @@
+# The budget this suite is designed against, and what this machine actually
+# offers. Both are recorded with every run: a number is only comparable to
+# another number taken under the same shape.
+budget:
+  host_cpus: 16
+  host_memory_gib: 24
+  host_storage_gb: 100
+  kubernetes_cpus: 12
+  kubernetes_memory_gib: 16
+  postgres_cpus: 4
+  postgres_memory_gib: 6
+  postgres_storage_cap_gb: 55
+  tap_replicas_min: 1
+  tap_replicas_max: 8
+
+# How the budget is imposed. The cluster runs inside the Docker VM and is
+# capped there (kind has no CPU/memory setting of its own); the load
+# generator runs on the host, outside that cap, so it cannot eat the
+# capacity it is measuring — and its own CPU is watched, because a saturated
+# generator reports the generator's limit as the service's.
+enforcement:
+  kind_node_cpus: 12
+  kind_node_memory: 14g
+  load_generator_on_host: true
+  # Below this the suite refuses to start a run and marks any in flight
+  # invalid: a database that fills the disk mid-measurement produces numbers
+  # that describe the disk.
+  min_free_disk_gb: 15

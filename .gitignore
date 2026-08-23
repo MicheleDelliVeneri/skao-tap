@@ -218,3 +218,4 @@ __marimo__/
 .streamlit/secrets.toml
 site/
 .service-logs/
+benchmarks/tap-performance/results/

@@ -36,6 +36,16 @@ docs = [
     "mkdocs>=1.6",
     "mkdocs-material>=9.5",
 ]
+# benchmarks/tap-performance. Kept out of `dev` because it is heavier than the
+# test suite needs and nothing in CI imports it.
+benchmark = [
+    "matplotlib>=3.9",
+    "pyarrow>=17",
+    "psutil>=6.0",
+    "pyyaml>=6.0",
+    "psycopg[binary]>=3.2",
+    "jinja2>=3.1",
+]
 
 [tool.ruff]
 line-length = 100
