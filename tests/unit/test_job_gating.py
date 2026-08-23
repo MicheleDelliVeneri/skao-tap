@@ -89,6 +89,18 @@ def test_an_unknown_operation_is_refused(auth_settings):
         gated_operations()
 
 
+def test_nothing_can_be_gated_explicitly(auth_settings):
+    auth_settings(auth_gated_operations="none")
+    assert gated_operations() == ()
+
+
+def test_a_list_that_names_no_operation_is_refused(auth_settings):
+    """A typo must not read as "enforce nothing" — that needs the word."""
+    auth_settings(auth_gated_operations=" , ,")
+    with pytest.raises(LookupError, match="names no operation"):
+        gated_operations()
+
+
 def test_every_operation_is_selectable(auth_settings):
     auth_settings(auth_gated_operations=",".join(OPERATIONS))
     assert gated_operations() == OPERATIONS
@@ -100,16 +112,20 @@ def test_every_operation_is_selectable(auth_settings):
 def test_jobs_and_queries_stay_anonymous_by_default(client, default_gates, fake_db):
     """Enabling auth must not, on its own, lock standard VO clients out."""
     job_id = _create(client)
-    assert client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": QUERY}).status_code == 200
+    queried = client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": QUERY})
     mutated = client.post(
         f"/tap/async/{job_id}/destruction",
         data={"DESTRUCTION": "2030-01-01T00:00:00Z"},
         follow_redirects=False,
     )
+    deleted = client.delete(f"/tap/async/{job_id}", follow_redirects=False)
+    json_job = client.post("/api/v1/jobs", json={"query": QUERY})
+    json_query = client.post("/api/v1/query", json={"query": QUERY})
+    assert queried.status_code == 200
     assert mutated.status_code == 303
-    assert client.delete(f"/tap/async/{job_id}", follow_redirects=False).status_code == 303
-    assert client.post("/api/v1/jobs", json={"query": QUERY}).status_code == 201
-    assert client.post("/api/v1/query", json={"query": QUERY}).status_code == 200
+    assert deleted.status_code == 303
+    assert json_job.status_code == 201
+    assert json_query.status_code == 200
 
 
 # -- opting in: every path to a job needs a token ---------------------------
@@ -142,9 +158,12 @@ def test_reading_jobs_stays_open(client, job_gates, fake_db, bearer):
     """Only the mutating verbs are gated. Reads are governed by ownership, so
     an anonymous caller still gets a job list — just not other people's jobs."""
     job_id = _create(client, headers=bearer(groups=[OPER]))
-    assert client.get("/tap/async").status_code == 200
-    assert client.get(f"/tap/async/{job_id}").status_code == 403  # owned by alice
-    assert client.get(f"/tap/async/{job_id}", headers=bearer(groups=[OPER])).status_code == 200
+    listed = client.get("/tap/async")
+    anonymous = client.get(f"/tap/async/{job_id}")
+    owned = client.get(f"/tap/async/{job_id}", headers=bearer(groups=[OPER]))
+    assert listed.status_code == 200
+    assert anonymous.status_code == 403  # owned by alice
+    assert owned.status_code == 200
 
 
 def test_deleting_a_job_needs_a_token(client, job_gates, fake_db, bearer):
@@ -182,13 +201,18 @@ def test_synchronous_querying_is_gated(client, job_gates, fake_db, bearer):
 
 def test_the_json_facade_is_gated_on_the_same_operations(client, job_gates, fake_db, bearer):
     headers = bearer(groups=[OPER])
-    assert client.post("/api/v1/jobs", json={"query": QUERY}).status_code == 401
-    assert client.post("/api/v1/query", json={"query": QUERY}).status_code == 401
+    anonymous_job = client.post("/api/v1/jobs", json={"query": QUERY})
+    anonymous_query = client.post("/api/v1/query", json={"query": QUERY})
     created = client.post("/api/v1/jobs", json={"query": QUERY}, headers=headers)
+    assert anonymous_job.status_code == 401
+    assert anonymous_query.status_code == 401
     assert created.status_code == 201
+
     job_id = created.json()["job_id"]
-    assert client.delete(f"/api/v1/jobs/{job_id}").status_code == 401
-    assert client.delete(f"/api/v1/jobs/{job_id}", headers=headers).status_code == 204
+    anonymous_delete = client.delete(f"/api/v1/jobs/{job_id}")
+    owned_delete = client.delete(f"/api/v1/jobs/{job_id}", headers=headers)
+    assert anonymous_delete.status_code == 401
+    assert owned_delete.status_code == 204
 
 
 def test_an_unconfigured_job_role_denies(

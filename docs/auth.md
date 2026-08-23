@@ -71,9 +71,16 @@ also be granted under `roles` — an enforced operation nobody is granted is
 denied to everyone, so the chart refuses to render that configuration rather
 than shipping a service that answers `403` to its own operators.
 
-Reads are never gated by this setting. What stops one user reading another
-user's job is [ownership](#job-ownership), which is enforced in the job
-store, not at the endpoint.
+Every other `GET` — the job resources, the metadata reads, the VOSI
+documents — stays open whatever is configured. The one exception is
+`GET /tap/sync`, which executes a query rather than reading a resource, so
+`query.sync` covers it in both verbs. What stops one user reading another
+user's job is [ownership](#job-ownership), enforced in the job store rather
+than at the endpoint.
+
+To verify tokens and record job ownership while enforcing nothing, set
+`gatedOperations: ["none"]`. That is the only way to say it: a list that
+names no operation is rejected, so a typo cannot quietly turn the gate off.
 
 `GET /api/v1/auth` reports what the deployment enforces, so clients need not
 discover it by trial:
@@ -236,11 +243,15 @@ reached.
 `gated_operations` lists only what this deployment enforces, so a client can
 tell from it whether it needs a token to query at all.
 
+"Gated call" below means a request covered by an operation this deployment
+enforces. Each operation is independent: enforcing `query.sync` does not
+enforce `jobs.create`, which is why the docs above recommend enforcing them
+together rather than assuming it.
+
 | Request | Auth disabled | Auth enabled |
 | --- | --- | --- |
-| `GET` | 200 | 200 (token verified if present) |
-| Query, `query.sync`/`jobs.create` not enforced | 200 | 200 (token verified if present) |
-| Query, `query.sync`/`jobs.create` enforced, no token | 200 | `401` |
+| `GET`, other than `/tap/sync` | 200 | 200 (token verified if present) |
+| Query whose operation is not enforced | 200 | 200 (token verified if present) |
 | Gated call, no token | 200 | `401` + `WWW-Authenticate: Bearer` |
 | Gated call, forged/expired token | 200 | `401` |
 | Gated call, valid token without the role | 200 | `403` |

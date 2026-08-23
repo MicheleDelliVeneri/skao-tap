@@ -30,22 +30,28 @@ data:
   TAP_IAM_GROUP_CLAIMS: {{ .Values.auth.iam.groupClaims | quote }}
   TAP_IAM_WELL_KNOWN_URL: {{ .Values.auth.iam.wellKnownUrl | quote }}
   TAP_IAM_JWKS_CACHE: {{ .Values.auth.iam.jwksCacheSeconds | int64 | quote }}
+  {{- /* the one spelling that enforces nothing; anything else is a policy */}}
+  {{- $gatesNothing := and (eq (len .Values.auth.gatedOperations) 1) (eq (lower (first .Values.auth.gatedOperations)) "none") }}
   {{- if eq .Values.auth.plugin "iam-groups" }}
   {{- if not .Values.auth.roles }}
   {{- fail "auth.plugin=iam-groups needs auth.roles: every gated operation must name the groups or scopes that grant it (or set anyVerifiedToken), otherwise nothing is granted. See docs/auth.md." }}
   {{- end }}
   {{- /* an operation enforced but never granted denies everyone, which reads
          as a broken deployment rather than as a policy */}}
+  {{- if not $gatesNothing }}
   {{- range $operation := .Values.auth.gatedOperations }}
   {{- if not (hasKey $.Values.auth.roles $operation) }}
   {{- fail (printf "auth.gatedOperations enforces %s but auth.roles has no entry for it, so it would be denied to everyone. Grant it under auth.roles, or drop it from auth.gatedOperations." $operation) }}
   {{- end }}
   {{- end }}
   {{- end }}
+  {{- end }}
+  {{- if not $gatesNothing }}
   {{- $known := list "metadata.ingest" "metadata.amend" "metadata.delete" "jobs.create" "jobs.mutate" "jobs.delete" "query.sync" }}
   {{- range $operation := .Values.auth.gatedOperations }}
   {{- if not (has $operation $known) }}
-  {{- fail (printf "auth.gatedOperations names unknown operation %s; known operations: %s" $operation (join ", " $known)) }}
+  {{- fail (printf "auth.gatedOperations names unknown operation %s; known operations: %s (or the single entry \"none\" to enforce nothing)" $operation (join ", " $known)) }}
+  {{- end }}
   {{- end }}
   {{- end }}
   {{- /* empty means the service default: metadata mutation only */}}

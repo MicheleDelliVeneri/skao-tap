@@ -165,6 +165,13 @@ jobs:
             --set 'auth.roles.jobs\.create.groups={/ska/oper}' \
             --set 'auth.roles.query\.sync.anyVerifiedToken=true' \
             | grep -q 'TAP_AUTH_GATED_OPERATIONS: "jobs.create,query.sync"'
+          helm template skao-tap deploy/helm/skao-tap \
+            --set auth.enabled=true \
+            --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
+            --set auth.iam.audience=science-metadata \
+            --set 'auth.gatedOperations={none}' \
+            --set 'auth.roles.metadata\.delete.groups={/ska/oper}' \
+            | grep -q 'TAP_AUTH_GATED_OPERATIONS: "none"'
       # Each of these is a way to end up with auth "on" but nothing enforced.
       - name: Unsafe authentication configurations are refused
         run: |
@@ -187,6 +194,11 @@ jobs:
                   --set auth.iam.audience=science-metadata \
                   --set 'auth.gatedOperations={jobs.rename}' \
                   --set 'auth.roles.jobs\.rename.groups={/ska/oper}'
+          # "none" is only "enforce nothing" on its own
+          refuses --set auth.enabled=true --set auth.iam.issuer=https://iam.example \
+                  --set auth.iam.audience=science-metadata \
+                  --set 'auth.gatedOperations={none,jobs.create}' \
+                  --set 'auth.roles.jobs\.create.groups={/ska/oper}'
 
   helm-e2e:
     name: Helm chart e2e (kind)

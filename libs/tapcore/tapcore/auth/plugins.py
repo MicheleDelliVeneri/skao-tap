@@ -47,6 +47,9 @@ DEFAULT_GATED_OPERATIONS = (
     "metadata.delete",
 )
 
+#: the one value that enforces nothing while authentication stays on
+NOTHING_GATED = "none"
+
 
 def gated_operations() -> tuple[str, ...]:
     """The operations this deployment enforces, in ``OPERATIONS`` order.
@@ -59,7 +62,20 @@ def gated_operations() -> tuple[str, ...]:
     raw = settings.auth_gated_operations.strip()
     if not raw:
         return DEFAULT_GATED_OPERATIONS
+    if raw.lower() == NOTHING_GATED:
+        # verify tokens and record ownership, enforce nothing. Spelled out
+        # rather than inferred from an empty-ish value, because "nothing is
+        # gated" is the one answer that must never be reached by accident.
+        return ()
     named = tuple(part.strip() for part in raw.split(",") if part.strip())
+    if not named:
+        # e.g. "," or ", ,": a value was set, so the operator meant
+        # something by it, and it was not the default
+        raise LookupError(
+            f"TAP_AUTH_GATED_OPERATIONS is set to {raw!r} but names no operation;"
+            f" leave it empty for the default ({', '.join(DEFAULT_GATED_OPERATIONS)})"
+            f" or set it to {NOTHING_GATED!r} to enforce nothing"
+        )
     unknown = [name for name in named if name not in OPERATIONS]
     if unknown:
         raise LookupError(

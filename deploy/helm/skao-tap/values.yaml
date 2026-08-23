@@ -147,7 +147,10 @@ auth:
   # gating jobs.create alone leaves synchronous querying wide open.
   #
   # Known operations: metadata.ingest, metadata.amend, metadata.delete,
-  # jobs.create, jobs.mutate, jobs.delete, query.sync. With plugin=iam-groups
+  # jobs.create, jobs.mutate, jobs.delete, query.sync. The single entry
+  # ["none"] enforces nothing while still verifying tokens and recording job
+  # ownership; a list that names no operation at all is rejected, so a typo
+  # cannot quietly turn the gate off. With plugin=iam-groups
   # each one listed here must also be granted under `roles` below; the chart
   # refuses to render otherwise, because an enforced operation nobody is
   # granted is denied to everyone.
