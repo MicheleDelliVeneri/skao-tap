@@ -1,12 +1,14 @@
 """Shared query preparation and synchronous (streaming) execution."""
 
 import itertools
+import threading
+import time
 from collections.abc import Iterator
 
 from tapcore.config import settings
 from tapcore.db import pool
 from tapcore.errors import UsageError
-from tapcore.query.adql import adql_to_postgresql, apply_maxrec, check_language, touched_tables
+from tapcore.query.adql import apply_maxrec, check_language, translate
 from tapcore.query.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
 from tapcore.query.upload import (
     UploadedTable,
@@ -38,17 +40,19 @@ def prepare_query(params: dict[str, str]) -> dict:
 
     check_language(params.get("LANG", "ADQL"))
     query = require(params, "QUERY")
-    sql = adql_to_postgresql(query)
+    translation = translate(query)
+    sql = translation.sql
 
-    tables = touched_tables(sql)
-    published = _published_tables()
-    for table in tables:
-        lower = table.lower()
-        if lower.startswith("tap_upload."):
-            if lower.removeprefix("tap_upload.") not in upload_names:
-                raise UsageError(f"table {table} was not uploaded with this request")
-        elif lower not in published:
-            raise UsageError(f"table {table} is not published by this service")
+    tables = translation.tables
+    unpublished = _first_unpublished(tables, _published_tables(), upload_names)
+    if unpublished is not None:
+        # The table list is cached, so "not published" may only mean "not
+        # published when we last looked". A table registered a moment ago must
+        # not be refused for up to the cache's lifetime, so refusing is what
+        # forces a fresh read — rare, and cheap because it is rare.
+        unpublished = _first_unpublished(tables, _published_tables(refresh=True), upload_names)
+    if unpublished is not None:
+        raise UsageError(f"table {unpublished} is not published by this service")
 
     maxrec = params.get("MAXREC")
     if maxrec is not None:
@@ -79,10 +83,72 @@ def prepare_query(params: dict[str, str]) -> dict:
     }
 
 
-def _published_tables() -> set[str]:
-    with pool().connection() as conn:
-        rows = conn.execute("SELECT table_name FROM tap_schema.tables").fetchall()
-    return {r[0].lower() for r in rows}
+def _first_unpublished(
+    tables: frozenset[str], published: frozenset[str], upload_names: set[str]
+) -> str | None:
+    """The first table that is not readable, or None if all of them are.
+
+    Uploads are checked here too, but against the request's own uploads, so
+    they are never affected by the cached list.
+    """
+    for table in tables:
+        lower = table.lower()
+        if lower.startswith("tap_upload."):
+            if lower.removeprefix("tap_upload.") not in upload_names:
+                raise UsageError(f"table {table} was not uploaded with this request")
+        elif lower not in published:
+            return table
+    return None
+
+
+# TAP_SCHEMA's table list changes when a deployment gains a metadata domain or
+# an operator publishes a table — rarely, and never per request, which is how
+# often this used to be read. Cached with a short life so a table published
+# out of band still appears without a restart, and invalidated outright when
+# this service is the one that changed it.
+_PUBLISHED_TTL_S = 30.0
+_published_cache: tuple[float, frozenset[str]] | None = None
+_published_lock = threading.Lock()
+
+
+def _published_tables(*, refresh: bool = False) -> frozenset[str]:
+    """The published table names, from the cache unless it is stale.
+
+    ``refresh`` re-reads under the lock rather than clearing and re-reading,
+    so a concurrent reader cannot slot a stale result in between the two —
+    which is what a caller asking for fresh data is trying to avoid.
+    """
+    global _published_cache
+    asked_at = time.monotonic()
+    cached = _published_cache
+    if not refresh and cached is not None and asked_at - cached[0] < _PUBLISHED_TTL_S:
+        return cached[1]
+    with _published_lock:
+        cached = _published_cache
+        if cached is not None:
+            # A refresh wants a read newer than this call — including one
+            # another thread completed while this one waited on the lock,
+            # which is what stops concurrent misses becoming a stampede of
+            # identical queries.
+            fresh_enough = (
+                cached[0] >= asked_at
+                if refresh
+                else time.monotonic() - cached[0] < _PUBLISHED_TTL_S
+            )
+            if fresh_enough:
+                return cached[1]
+        with pool().connection() as conn:
+            rows = conn.execute("SELECT table_name FROM tap_schema.tables").fetchall()
+        tables = frozenset(r[0].lower() for r in rows)
+        _published_cache = (time.monotonic(), tables)
+        return tables
+
+
+def forget_published_tables() -> None:
+    """Drop the cached table list, for when this service publishes a table."""
+    global _published_cache
+    with _published_lock:
+        _published_cache = None
 
 
 def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[bytes]:

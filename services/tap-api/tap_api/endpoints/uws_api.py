@@ -8,6 +8,7 @@ import time
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
 from tapcore import uws
 from tapcore.config import settings
 from tapcore.db import pool
@@ -38,11 +39,15 @@ def _iso(dt) -> str:
     return dt.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _queue(conn, job: dict) -> None:
-    """Validate the job parameters and move it to QUEUED for the executor."""
+def _queue(conn, job: dict, prepared: dict) -> None:
+    """Move a job to QUEUED, using an already-translated query.
+
+    ``prepared`` is required rather than optional: translating here would put
+    an ADQL parse back on the event loop, since every caller is an async
+    handler. Required means a future caller cannot reintroduce that quietly.
+    """
     if job["phase"] not in ("PENDING", "HELD"):
         raise UsageError(f"cannot start job in phase {job['phase']}")
-    prepared = prepare_query(job["parameters"])
     uws.update_job(conn, job["job_id"], phase="QUEUED", query_sql=prepared["sql"])
 
 
@@ -124,12 +129,18 @@ async def create_job(request: Request):
     files = await gather_upload_files(request)
     sources = resolve_upload_sources(params.get("UPLOAD"), files)
     parse_uploads(sources)  # reject malformed uploads before storing the job
+    # One flag decides both the translation and the queueing, so the prepared
+    # query cannot be missing where it is used. Not an assert: those vanish
+    # under -O, which is exactly when a mistake here would matter.
+    run_now = bool(phase and phase.upper() == "RUN")
+    # translated off the event loop, before the connection is held
+    prepared = await run_in_threadpool(prepare_query, params) if run_now else None
     with pool().connection() as conn:
         job = uws.create_job(conn, params, owner_id=owner_of(request))
         if sources:
             save_upload_sources(job["job_id"], sources)
-        if phase and phase.upper() == "RUN":
-            _queue(conn, job)
+        if run_now and prepared is not None:
+            _queue(conn, job, prepared)
     return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
 
@@ -166,10 +177,16 @@ async def get_phase(job_id: str, request: Request):
 async def post_phase(job_id: str, request: Request):
     params = await gather_params(request)
     phase = params.get("PHASE", "").upper()
+    prepared = None
+    if phase == "RUN":
+        # the job's own parameters, translated off the event loop
+        with pool().connection() as conn:
+            stored = uws.get_job(conn, job_id)
+        prepared = await run_in_threadpool(prepare_query, stored["parameters"])
     with pool().connection() as conn:
         job = uws.get_job(conn, job_id)
-        if phase == "RUN":
-            _queue(conn, job)
+        if prepared is not None:  # set exactly when the phase is RUN
+            _queue(conn, job, prepared)
         elif phase == "ABORT":
             uws.abort_job(conn, job)
         else:

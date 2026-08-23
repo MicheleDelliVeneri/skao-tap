@@ -25,6 +25,7 @@ import time
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 from tapcore import uws
 from tapcore.config import settings
 from tapcore.db import pool
@@ -113,7 +114,7 @@ async def sync_query(body: QueryRequest):
 
     Set ``format`` to ``parquet`` or ``arrow`` for columnar responses.
     """
-    prepared = prepare_query(_tap_params(body, fmt=body.format))
+    prepared = await run_in_threadpool(prepare_query, _tap_params(body, fmt=body.format))
     chunks, mime = run_sync(prepared)
     return StreamingResponse(chunks, media_type=mime)
 
@@ -163,10 +164,15 @@ def _job_json(job: dict) -> dict:
     return body
 
 
-def _queue(conn, job: dict) -> None:
+def _queue(conn, job: dict, prepared: dict) -> None:
+    """Move a job to QUEUED, using an already-translated query.
+
+    ``prepared`` is required rather than optional: translating here would put
+    an ADQL parse back on the event loop, since every caller is an async
+    handler. Required means a future caller cannot reintroduce that quietly.
+    """
     if job["phase"] not in ("PENDING", "HELD"):
         raise UsageError(f"cannot start job in phase {job['phase']}")
-    prepared = prepare_query(job["parameters"])
     uws.update_job(conn, job["job_id"], phase="QUEUED", query_sql=prepared["sql"])
 
 
@@ -175,11 +181,13 @@ async def create_job(body: JobRequest, request: Request):
     params = _tap_params(body, fmt=body.format)
     if body.run_id:
         params["RUNID"] = body.run_id
-    prepare_query(params)  # validate before storing, unlike lenient UWS XML flow
+    # validate before storing, unlike the lenient UWS XML flow — and keep the
+    # result, so running the job now does not re-translate the same query
+    prepared = await run_in_threadpool(prepare_query, params)
     with pool().connection() as conn:
         job = uws.create_job(conn, params, owner_id=owner_of(request))
         if body.run:
-            _queue(conn, job)
+            _queue(conn, job, prepared)
         return _job_json(uws.get_job(conn, job["job_id"]))
 
 
@@ -232,10 +240,16 @@ class PhaseRequest(BaseModel):
 @router.post("/jobs/{job_id}/phase", dependencies=[Depends(require("jobs.mutate"))])
 async def post_phase(job_id: str, body: PhaseRequest):
     phase = body.phase.upper()
+    prepared = None
+    if phase == "RUN":
+        # the job's own parameters, translated off the event loop
+        with pool().connection() as conn:
+            stored = uws.get_job(conn, job_id)
+        prepared = await run_in_threadpool(prepare_query, stored["parameters"])
     with pool().connection() as conn:
         job = uws.get_job(conn, job_id)
-        if phase == "RUN":
-            _queue(conn, job)
+        if prepared is not None:  # set exactly when the phase is RUN
+            _queue(conn, job, prepared)
         elif phase == "ABORT":
             uws.abort_job(conn, job)
         else:

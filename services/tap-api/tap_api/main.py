@@ -16,6 +16,7 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
+from starlette.concurrency import run_in_threadpool
 from tapcore.auth import invalid_token_challenge, verifier
 from tapcore.config import settings
 from tapcore.db import close_pool, pool
@@ -29,7 +30,7 @@ from .endpoints import vosi
 from .endpoints.json_api import router as json_router
 from .endpoints.uws_api import router as uws_router
 from .queries.params import gather_params
-from .queries.query import prepare_query, run_sync
+from .queries.query import forget_published_tables, prepare_query, run_sync
 from .queries.uploads import gather_upload_files, parse_uploads, resolve_upload_sources
 
 # uvicorn only configures its own loggers, so without this the service's own
@@ -77,6 +78,9 @@ def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _bootstrap_metadata()
+    # bootstrap is the one path where this service publishes tables itself;
+    # anything published out of band is picked up by the cache's own expiry
+    forget_published_tables()
     yield
     close_pool()
 
@@ -177,7 +181,10 @@ async def sync(request: Request):
         return RedirectResponse(f"{settings.base_url}/capabilities", status_code=303)
     files = await gather_upload_files(request)
     uploads = parse_uploads(resolve_upload_sources(params.get("UPLOAD"), files))
-    prepared = prepare_query(params)
+    # ADQL translation is tens of milliseconds of pure-Python ANTLR work; on
+    # the event loop it stalls every other request for that long, which is why
+    # throughput stopped rising with concurrency
+    prepared = await run_in_threadpool(prepare_query, params)
     chunks, mime = run_sync(prepared, uploads)
     return StreamingResponse(chunks, media_type=mime)
 
