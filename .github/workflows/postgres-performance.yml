@@ -1,0 +1,193 @@
+name: PostgreSQL performance
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      scale_rows:
+        description: Synthetic catalogue row count
+        required: true
+        default: "1000000"
+      duration:
+        description: Seconds per concurrency level
+        required: true
+        default: "60"
+      clients:
+        description: Space-separated concurrency levels
+        required: true
+        default: "1 8 16 32"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgresql-performance
+  cancel-in-progress: false
+
+env:
+  PERF_SCALE_ROWS: ${{ inputs.scale_rows || '1000000' }}
+  PERF_DURATION: ${{ inputs.duration || '60' }}
+  PERF_CLIENTS: ${{ inputs.clients || '1 8 16 32' }}
+  TAP_DATABASE_URL: postgresql://tap:tap@127.0.0.1:5432/tap
+  TAP_BASE_URL: http://127.0.0.1:8000/tap
+  TAP_RESULTS_DIR: /tmp/skao-tap-performance-results
+  TAP_DEFAULT_MAXREC: "10000"
+  TAP_SYNC_TIMEOUT: "60"
+
+jobs:
+  scale:
+    name: Query scale and bottleneck report
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.9.x"
+          enable-cache: true
+          cache-suffix: postgres-performance
+
+      - name: Validate benchmark inputs
+        run: |
+          [[ "$PERF_SCALE_ROWS" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PERF_DURATION" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PERF_CLIENTS" =~ ^[1-9][0-9]*(\ [1-9][0-9]*)*$ ]]
+
+      - name: Start instrumented PostgreSQL
+        run: |
+          docker build -t skao-tap-ci/tap-db:performance db
+          docker run -d --name tap-db-performance \
+            -e POSTGRES_USER=tap \
+            -e POSTGRES_PASSWORD=tap \
+            -e POSTGRES_DB=tap \
+            -p 5432:5432 \
+            skao-tap-ci/tap-db:performance \
+            -c shared_preload_libraries=pg_stat_statements \
+            -c track_io_timing=on
+          for _ in $(seq 1 60); do
+            docker exec tap-db-performance pg_isready -U tap -d tap && break
+            sleep 2
+          done
+          if ! docker exec tap-db-performance pg_isready -U tap -d tap; then
+            docker logs --tail 200 tap-db-performance
+            exit 1
+          fi
+          docker cp tests/performance/postgres/. tap-db-performance:/tmp/performance/
+
+      - name: Load synthetic sky catalogue
+        run: |
+          docker exec -i tap-db-performance psql \
+            -U tap -d tap -v ON_ERROR_STOP=1 -v scale_rows="$PERF_SCALE_ROWS" \
+            -f /tmp/performance/setup.sql
+
+      - name: Run database-only concurrency sweep
+        run: |
+          mkdir -p performance-results
+          for clients in $PERF_CLIENTS; do
+            jobs=$(( clients < 8 ? clients : 8 ))
+            docker exec tap-db-performance psql -U tap -d tap \
+              -c "SELECT pg_stat_statements_reset()"
+            docker exec tap-db-performance pgbench \
+              -U tap -d tap -n \
+              -c "$clients" -j "$jobs" -T "$PERF_DURATION" -P 10 -r \
+              -D scale_rows="$PERF_SCALE_ROWS" \
+              -f /tmp/performance/point_lookup.sql@7 \
+              -f /tmp/performance/cone_search.sql@3 \
+              | tee "performance-results/pgbench-c${clients}.txt"
+            docker exec tap-db-performance psql -U tap -d tap --csv \
+              -f /tmp/performance/pgstat_report.sql \
+              > "performance-results/pgstat-db-c${clients}.csv"
+          done
+          docker exec tap-db-performance psql -U tap -d tap -X -qAt \
+            -f /tmp/performance/cone_plan.sql \
+            > performance-results/cone-plan.json
+
+      - name: Install TAP service and profiler
+        run: |
+          uv sync --locked --all-groups
+          uv pip install --python .venv/bin/python py-spy==0.4.2
+          mkdir -p "$TAP_RESULTS_DIR"
+
+      - name: Run end-to-end TAP concurrency sweep
+        run: |
+          .venv/bin/python -m uvicorn tap_api.main:app \
+            --host 127.0.0.1 --port 8000 --log-level warning \
+            > performance-results/tap-api.log 2>&1 &
+          api_pid=$!
+          echo "$api_pid" > performance-results/tap-api.pid
+          for _ in $(seq 1 60); do
+            curl --fail --silent "$TAP_BASE_URL/availability" >/dev/null && break
+            sleep 1
+          done
+          curl --fail --silent "$TAP_BASE_URL/availability" >/dev/null
+
+          overall=0
+          for clients in $PERF_CLIENTS; do
+            docker exec tap-db-performance psql -U tap -d tap \
+              -c "SELECT pg_stat_statements_reset()"
+            .venv/bin/python tests/performance/http_load.py \
+              --base-url "$TAP_BASE_URL" \
+              --clients "$clients" \
+              --duration "$PERF_DURATION" \
+              --scale-rows "$PERF_SCALE_ROWS" \
+              --output "performance-results/tap-c${clients}.json" \
+              || overall=1
+            docker exec tap-db-performance psql -U tap -d tap --csv \
+              -f /tmp/performance/pgstat_report.sql \
+              > "performance-results/pgstat-tap-c${clients}.csv"
+          done
+          kill "$api_pid"
+          wait "$api_pid" || true
+          exit "$overall"
+
+      - name: Record application flamegraph under load
+        if: always()
+        run: |
+          .venv/bin/py-spy record \
+            --output performance-results/tap-python-flamegraph.svg \
+            --format flamegraph --rate 100 --subprocesses \
+            -- .venv/bin/python -m uvicorn tap_api.main:app \
+               --host 127.0.0.1 --port 8000 --log-level warning \
+            > performance-results/tap-api-profile.log 2>&1 &
+          profiler_pid=$!
+          for _ in $(seq 1 60); do
+            curl --fail --silent "$TAP_BASE_URL/availability" >/dev/null && break
+            sleep 1
+          done
+          curl --fail --silent "$TAP_BASE_URL/availability" >/dev/null
+          profile_duration=$(( PERF_DURATION < 30 ? PERF_DURATION : 30 ))
+          .venv/bin/python tests/performance/http_load.py \
+            --base-url "$TAP_BASE_URL" \
+            --clients 8 \
+            --duration "$profile_duration" \
+            --scale-rows "$PERF_SCALE_ROWS" \
+            --output performance-results/tap-profile-load.json \
+            || true
+          kill -INT "$profiler_pid"
+          wait "$profiler_pid" || true
+
+      - name: Database and service diagnostics
+        if: always()
+        run: |
+          docker stats tap-db-performance --no-stream \
+            > performance-results/container-stats.txt || true
+          docker exec tap-db-performance psql -U tap -d tap --csv -c \
+            "SELECT wait_event_type, wait_event, count(*) AS sessions
+             FROM pg_stat_activity
+             GROUP BY wait_event_type, wait_event
+             ORDER BY sessions DESC" \
+            > performance-results/postgres-waits.csv || true
+          docker logs --tail 300 tap-db-performance \
+            > performance-results/postgres.log 2>&1 || true
+
+      - name: Upload performance evidence
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: postgresql-performance-${{ github.run_id }}
+          path: performance-results/
+          if-no-files-found: error
+          retention-days: 30
