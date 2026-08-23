@@ -255,7 +255,9 @@ reached.
 ## Behaviour summary
 
 `gated_operations` lists only what this deployment enforces, so a client can
-tell from it whether it needs a token to query at all.
+tell from it whether it needs a token to query at all — and it is empty when
+authentication is disabled, because then nothing is enforced whatever the
+gate set says.
 
 "Gated call" below means a request covered by an operation this deployment
 enforces. The three metadata operations are enforced independently of one

@@ -130,14 +130,9 @@ def test_auth_endpoint_reports_the_policy(client, secured, iam_issuer):
 
 
 def test_auth_endpoint_reports_when_disabled(client):
-    assert client.get("/api/v1/auth").json() == {
-        "enabled": False,
-        "gated_operations": {
-            "metadata.ingest": "POST /api/v1/<mount>",
-            "metadata.amend": "PATCH /api/v1/<mount>/{root_id}",
-            "metadata.delete": "DELETE /api/v1/<mount>/{root_id}",
-        },
-    }
+    """Nothing is enforced, so nothing is listed: naming operations here would
+    tell a client to go and get a token it will never be asked for."""
+    assert client.get("/api/v1/auth").json() == {"enabled": False, "gated_operations": {}}
 
 
 def test_mutations_are_open_when_auth_is_disabled(client, software_payload):
