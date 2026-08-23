@@ -57,10 +57,23 @@ jobs:
             --benchmark-json=performance-results/benchmarks.json
       - name: Record Python flamegraph
         run: |
+          svg=performance-results/python-hot-paths-flamegraph.svg
+          # py-spy sometimes exits non-zero *after* writing its output, having
+          # lost the race to reap a short-lived child ("No child process").
+          # The evidence is the flamegraph, so judge the step by whether the
+          # flamegraph exists rather than by py-spy's exit code.
+          status=0
           .venv/bin/py-spy record \
-            --output performance-results/python-hot-paths-flamegraph.svg \
+            --output "$svg" \
             --format flamegraph --rate 100 \
-            -- .venv/bin/python -m pytest tests/benchmarks -q --benchmark-only
+            -- .venv/bin/python -m pytest tests/benchmarks -q --benchmark-only || status=$?
+          if [ ! -s "$svg" ]; then
+            echo "::error::py-spy exited $status and produced no flamegraph"
+            exit 1
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::py-spy exited $status after writing $svg; keeping the profile"
+          fi
       - name: Upload profiling evidence
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
