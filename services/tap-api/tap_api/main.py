@@ -166,9 +166,14 @@ async def ready():
         # not a broken one — and taking this pod out of rotation now would push
         # its share of the load onto pods in exactly the same state.
         return Response("busy\n", media_type="text/plain")
-    except Exception as exc:
-        log.warning("readiness probe failed: %s", exc)
-        return Response(f"unavailable: {exc}\n", status_code=503, media_type="text/plain")
+    except Exception:
+        # The reason goes to the log, not to the body. This endpoint is
+        # reachable without a token by design, and a psycopg connection error
+        # names the host, port and user it failed to reach — internal topology
+        # that a probe response has no business publishing. The kubelet only
+        # needs the status code.
+        log.warning("readiness probe failed", exc_info=True)
+        return Response("unavailable\n", status_code=503, media_type="text/plain")
     return Response("ready\n", media_type="text/plain")
 
 

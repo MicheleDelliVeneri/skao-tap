@@ -100,9 +100,10 @@ def reset_plugin() -> None:
 
 # Reachable without a token even when one is required everywhere else.
 #
-# Two kinds of request are here. Service discovery and the health check are
+# Two kinds of request are here. Service discovery and the health checks are
 # asked by something that cannot hold a credential: a Kubernetes probe
-# (availability), a registry harvester or a VO client browsing for services
+# (/health/live, /health/ready), a registry harvester or a VO client browsing
+# for services
 # (capabilities, tables, the VOResource record, examples), and a client that
 # has not authenticated yet and is working out how to (/api/v1/auth, the
 # OpenAPI documents). Gating those would mean a service that cannot be

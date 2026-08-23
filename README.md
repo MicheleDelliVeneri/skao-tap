@@ -2,8 +2,6 @@
   <img src="assets/egernia-logo.svg" alt="egernia — IVOA TAP 1.1 for the SKA" width="640">
 </p>
 
-# skao-tap
-
 [![CI](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml)
 [![Security](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/security.yml)
 [![Docs](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/docs.yml)
@@ -13,7 +11,7 @@
 [![Python](https://img.shields.io/badge/python-3.14%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-A draft **IVOA TAP 1.1** (Table Access Protocol) server in Python, built as
+An **IVOA TAP 1.1** (Table Access Protocol) server in Python, built as
 microservices on a PostgreSQL backend, reusing existing libraries for the
 hard parts:
 

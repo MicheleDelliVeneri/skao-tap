@@ -184,6 +184,26 @@ def test_readiness_reports_an_unreachable_database_as_not_ready(client, monkeypa
     assert response.status_code == 503
 
 
+def test_readiness_does_not_publish_why_it_failed(client, monkeypatch):
+    """This endpoint is reachable without a token by design, and a connection
+    error names the host, port and user it could not reach. The kubelet needs
+    the status code; nobody needs the topology."""
+    from tap_api import main as main_module
+
+    def broken() -> None:
+        raise RuntimeError(
+            'connection to server at "db.internal" (10.1.2.3), '
+            "port 5432 failed: FATAL: password authentication failed "
+            'for user "tap"'
+        )
+
+    monkeypatch.setattr(main_module, "_probe_database", broken)
+    response = client.get("/health/ready")
+    assert response.status_code == 503
+    for leaked in ("db.internal", "10.1.2.3", "5432", "tap", "password"):
+        assert leaked not in response.text, leaked
+
+
 def test_availability_is_still_the_vosi_resource(client):
     """The probes moved off it; the standard endpoint has not changed."""
     response = client.get("/tap/availability")
