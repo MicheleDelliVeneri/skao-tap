@@ -192,7 +192,11 @@ jobs:
             --scale-rows "$PERF_SCALE_ROWS" \
             --output performance-results/tap-profile-load.json \
             || true
-          kill -INT "$profiler_pid"
+          # SIGINT is what makes py-spy write the flamegraph, so it stays
+          # explicit rather than left to the trap — but guarded like the trap
+          # is: if the profiler already exited, bash -e would turn tidying up
+          # into the step's failure.
+          kill -INT "$profiler_pid" 2>/dev/null || true
           wait "$profiler_pid" || true
 
       - name: Database and service diagnostics
