@@ -30,12 +30,12 @@ SELECT
     0.001 + mod(id * 17, 100000)::double precision / 100.0
 FROM generate_series(1, :scale_rows) AS series(id);
 
--- The cone workload filters on spoint(radians(ra), radians(dec)), so this
--- expression index is the one that serves it; an index on the position column
--- would only add build time and storage to every run.
+-- The cone workload filters on spoint(radians(ra), radians(dec)), so this is
+-- the only index the benchmarks need beyond the primary key: no workload
+-- filters or orders by flux, and an index nothing uses just adds build time
+-- and storage to every run.
 CREATE INDEX perf_sources_radec_gist ON perf.sources
 USING gist (spoint(radians(ra), radians(dec)));
-CREATE INDEX perf_sources_flux_btree ON perf.sources (flux);
 ANALYZE perf.sources;
 GRANT USAGE ON SCHEMA perf TO tap_reader;
 GRANT SELECT ON perf.sources TO tap_reader;

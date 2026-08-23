@@ -112,7 +112,7 @@ jobs:
               -f /tmp/performance/point_lookup.sql@7 \
               -f /tmp/performance/cone_search.sql@3 \
               | tee "performance-results/pgbench-c${clients}.txt"
-            docker exec tap-db-performance psql -U tap -d tap --csv \
+            docker exec tap-db-performance psql -U tap -d tap --csv -v ON_ERROR_STOP=1 \
               -f /tmp/performance/pgstat_report.sql \
               > "performance-results/pgstat-db-c${clients}.csv"
           done
@@ -151,9 +151,10 @@ jobs:
               --clients "$clients" \
               --duration "$PERF_DURATION" \
               --scale-rows "$PERF_SCALE_ROWS" \
+              --timeout "$TAP_SYNC_TIMEOUT" \
               --output "performance-results/tap-c${clients}.json" \
               || overall=1
-            docker exec tap-db-performance psql -U tap -d tap --csv \
+            docker exec tap-db-performance psql -U tap -d tap --csv -v ON_ERROR_STOP=1 \
               -f /tmp/performance/pgstat_report.sql \
               > "performance-results/pgstat-tap-c${clients}.csv"
           done
@@ -187,6 +188,7 @@ jobs:
             --base-url "$TAP_BASE_URL" \
             --clients 8 \
             --duration "$profile_duration" \
+            --timeout "$TAP_SYNC_TIMEOUT" \
             --scale-rows "$PERF_SCALE_ROWS" \
             --output performance-results/tap-profile-load.json \
             || true
