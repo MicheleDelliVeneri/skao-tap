@@ -1,0 +1,56 @@
+name: Python performance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "libs/tapcore/**"
+      - "services/**"
+      - "tests/benchmarks/**"
+      - ".github/workflows/python-performance.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+  pull_request:
+    paths:
+      - "libs/tapcore/**"
+      - "services/**"
+      - "tests/benchmarks/**"
+      - ".github/workflows/python-performance.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-performance-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmarks:
+    name: Hot-path benchmarks and profiles
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # CodSpeed simulation must use a CPython installed by setup-python,
+      # rather than a uv-managed interpreter.
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.9.x"
+          enable-cache: true
+          cache-suffix: benchmarks
+      - name: Install project and benchmark plugin
+        run: |
+          uv sync --locked --all-groups --python "$(command -v python)"
+          uv pip install --python .venv/bin/python pytest-codspeed==5.0.3
+      - name: Run deterministic benchmarks
+        uses: CodSpeedHQ/action@0ca9cbbf4623b599a6c3ed4fc8a922942705d9f1 # v5.0.2
+        with:
+          mode: simulation
+          run: uv run --no-sync pytest tests/benchmarks -v --codspeed
