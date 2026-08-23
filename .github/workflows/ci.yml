@@ -184,6 +184,78 @@ jobs:
           helm template skao-tap deploy/helm/skao-tap \
             --set tracing.otlpEndpoint=http://collector:4317 \
             | grep -q 'OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4317"'
+      - name: Template with horizontal autoscaling
+        run: |
+          # nothing rendered, and the deployments keep their own replica count
+          helm template skao-tap deploy/helm/skao-tap \
+            | grep -qE "kind: (HorizontalPodAutoscaler|ScaledObject)" \
+            && { echo "::error::an autoscaler rendered by default"; exit 1; }
+          helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapApi.enabled=true \
+            | grep -q "kind: HorizontalPodAutoscaler"
+          # while an autoscaler owns the count, the chart must not send one:
+          # a helm upgrade would reset what the autoscaler had chosen
+          test "$(helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapApi.enabled=true \
+            --show-only templates/api-deployment.yaml | grep -c 'replicas:')" = 0
+          # the PDB follows minReplicas, which is the floor a drain sees
+          helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapApi.enabled=true \
+            --show-only templates/pdb.yaml | grep -q "kind: PodDisruptionBudget"
+          # KEDA by default, with max() rather than sum(): every replica
+          # reports the same shared queue, so sum() would scale on the replica
+          # count and then feed on its own output
+          helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapExecutor.enabled=true \
+            --set prometheus.enabled=true \
+            | grep -q 'query: "max(tap_oldest_queued_job_seconds{namespace=\\"default\\"})"'
+          helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapExecutor.enabled=true \
+            --set prometheus.enabled=true | grep -q "kind: ScaledObject"
+          # and a plain HPA for a cluster that already serves external metrics
+          helm template skao-tap deploy/helm/skao-tap \
+            --set horizontalAutoscaling.tapExecutor.enabled=true \
+            --set horizontalAutoscaling.tapExecutor.scaler=external \
+            --show-only templates/hpa.yaml \
+            | grep -q "type: External"
+      # Every one of these is an autoscaler that would look configured and
+      # either do nothing or make things worse.
+      - name: Unworkable autoscaling configurations are refused
+        run: |
+          refuses() {
+            if helm template skao-tap deploy/helm/skao-tap "$@" >/dev/null 2>&1; then
+              echo "::error::chart rendered an unworkable autoscaling config: $*"
+              exit 1
+            fi
+          }
+          api=(--set horizontalAutoscaling.tapApi.enabled=true)
+          executor=(--set horizontalAutoscaling.tapExecutor.enabled=true
+                    --set prometheus.enabled=true)
+          # a CPU utilisation target is a percentage of the request
+          refuses "${api[@]}" --set tapApi.resources=null
+          # the VPA resizes the pod the HPA is measuring a percentage of
+          refuses "${api[@]}" --set verticalAutoscaling.enabled=true \
+                  --set verticalAutoscaling.updateMode=Auto
+          refuses "${api[@]}" --set horizontalAutoscaling.tapApi.maxReplicas=1
+          refuses "${api[@]}" --set horizontalAutoscaling.tapApi.minReplicas=0
+          # the backlog gauge is exported by the executor itself: at zero
+          # replicas nothing reports the queue that would start one
+          refuses "${executor[@]}" --set horizontalAutoscaling.tapExecutor.minReplicas=0
+          refuses "${executor[@]}" --set horizontalAutoscaling.tapExecutor.scaler=cron
+          refuses "${executor[@]}" \
+                  --set horizontalAutoscaling.tapExecutor.backlogSecondsPerReplica=0
+          # KEDA has to be told which Prometheus has the metric
+          refuses --set horizontalAutoscaling.tapExecutor.enabled=true
+          # scaled out, the pools would exceed the server's max_connections
+          refuses "${api[@]}" --set tapApi.workers=4 \
+                  --set postgresql.tuning.max_connections=100
+          # and the same numbers under the limit still render
+          helm template skao-tap deploy/helm/skao-tap "${api[@]}" \
+            --set tapApi.workers=4 --set postgresql.tuning.max_connections=250 \
+            >/dev/null
+          # recommendation-only VPA alongside a CPU HPA is supported and useful
+          helm template skao-tap deploy/helm/skao-tap "${api[@]}" \
+            --set verticalAutoscaling.enabled=true >/dev/null
       - name: Template with authentication enabled
         run: |
           helm template skao-tap deploy/helm/skao-tap \
@@ -355,9 +427,20 @@ jobs:
             --set image.registry=skao-tap-e2e \
             --set image.tag=e2e \
             --set image.pullPolicy=Never \
+            --set horizontalAutoscaling.tapApi.enabled=true \
+            --set horizontalAutoscaling.tapApi.minReplicas=1 \
             --wait --timeout 5m
       - name: Run chart tests (availability, ADQL query, UPLOAD)
         run: helm test skao-tap --logs --timeout 5m
+      # `helm template` only proves the YAML renders. This is the API server
+      # accepting it, and the HPA finding the Deployment it names — a wrong
+      # scaleTargetRef renders perfectly and scales nothing.
+      - name: The autoscaler attached to the deployment
+        run: |
+          kubectl get hpa skao-tap-tap-api -o jsonpath='{.spec.scaleTargetRef.name}' \
+            | grep -qx skao-tap-tap-api
+          kubectl wait --for=jsonpath='{.status.currentReplicas}'=1 \
+            hpa/skao-tap-tap-api --timeout=2m
       - name: Diagnostics
         if: failure()
         run: |

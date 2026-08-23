@@ -89,6 +89,73 @@ verticalAutoscaling:
       cpu: "2"
       memory: 4Gi
 
+# -- Horizontal autoscaling: more pods when there is more work. Vertical
+# autoscaling (above) sizes one pod; this one changes how many there are, and
+# the two are not interchangeable — a single API pod is capped by its own GIL
+# whatever its CPU limit, and one executor runs one query at a time.
+horizontalAutoscaling:
+  # -- tap-api scales on CPU, which needs no metrics pipeline beyond the
+  # metrics-server every cluster already runs. CPU is the honest signal here:
+  # ADQL translation is pure-Python ANTLR and CPU-bound, so a busy API pod is
+  # a hot CPU. Do not scale the API on database pool waits — those mean the
+  # *database* is the limit, and more API pods would open more connections
+  # and make it worse.
+  tapApi:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    # -- Percentage of the CPU *request* (tapApi.resources.requests.cpu), so
+    # a request must be set for this to mean anything.
+    targetCPUUtilizationPercentage: 70
+    # -- Optional second signal. 0 disables it; memory is a poor scaling
+    # signal for a service that streams results, so it is off by default.
+    targetMemoryUtilizationPercentage: 0
+    # -- Optional autoscaling/v2 `behavior:` block, passed through verbatim,
+    # for sites that want slower scale-down than the 5-minute default.
+    behavior: {}
+
+  # -- tap-executor scales on queue backlog: the age of the oldest QUEUED
+  # job, which is what a user actually waits for. Neither CPU nor memory says
+  # anything useful here — an executor spends its time waiting on PostgreSQL.
+  tapExecutor:
+    enabled: false
+    # -- How the backlog reaches the autoscaler.
+    #   keda     — a KEDA ScaledObject; the PromQL below ships with this
+    #              chart, so nothing else needs configuring. Needs the KEDA
+    #              operator (Apache-2.0, CNCF graduated).
+    #   external — a plain HorizontalPodAutoscaler reading an external
+    #              metric. Nothing extra to install *if* the cluster already
+    #              serves one (prometheus-adapter and friends), but then the
+    #              query lives in that component's config, not here — see
+    #              docs/autoscaling.md.
+    scaler: keda
+    # -- Must be at least 1. The backlog gauge is exported by the executor
+    # itself, so at zero replicas nothing reports it, the series goes stale,
+    # and no amount of queued work can bring a replica back.
+    minReplicas: 1
+    maxReplicas: 8
+    # -- Seconds of backlog one replica is expected to absorb. The autoscaler
+    # divides: 300s of backlog against 60 here asks for 5 replicas. Lower it
+    # to react sooner and to run more executors; raise it to tolerate a queue.
+    backlogSecondsPerReplica: 60
+    pollingIntervalSeconds: 30
+    # -- Prometheus holding the executor metrics. Defaults to the chart's own
+    # when prometheus.enabled=true, which is for trying this out, not for
+    # production — point it at the Prometheus you already run.
+    prometheusAddress: ""
+    # -- PromQL for the backlog. Aggregated with max() on purpose: every
+    # replica reports the same figures for one shared queue, so sum() would
+    # scale on the replica count and feed itself. Namespace-scoped because a
+    # Prometheus watching several namespaces would otherwise autoscale this
+    # release on another one's queue. Override if your scraper does not add a
+    # namespace label, or if two releases share one namespace.
+    query: ""
+    # -- External-metric name, when scaler=external. Must match what the
+    # cluster's metrics provider actually publishes.
+    externalMetricName: tap_oldest_queued_job_seconds
+    # -- Optional autoscaling/v2 `behavior:` block (both scalers).
+    behavior: {}
+
 # -- Scheduled pg_dump backups of the whole database (jobs, TAP_SCHEMA,
 # ingested metadata) to a dedicated PVC, pruned after retentionDays.
 # Works against the in-chart PostgreSQL and externalDatabase alike. For

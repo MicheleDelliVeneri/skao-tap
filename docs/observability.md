@@ -55,7 +55,7 @@ of its own, so its metrics get a listener instead.
 | `tap_db_connections_in_use` | gauge | How much of the pool this process is holding |
 | `tap_query_duration_seconds{kind}` | histogram | Query time, `sync` and `async` separately — they have different limits and different users. Every query that ran is in it, including one that was aborted or abandoned: those were slow too, and dropping them would flatter the tail |
 | `tap_jobs{phase}` | gauge | The job store by phase |
-| `tap_oldest_queued_job_seconds` | gauge | Queue backlog. This is what to autoscale executors on |
+| `tap_oldest_queued_job_seconds` | gauge | Queue backlog, and what executors autoscale on — see [Autoscaling](autoscaling.md) |
 | `tap_jobs_completed_total{phase}` | counter | Job outcomes: `COMPLETED`, `ERROR` and `ABORTED`, labelled with the phase the job actually reached |
 
 Queue metrics are reported by the executor, because the queue is its subject.
@@ -69,7 +69,8 @@ describe one shared queue, not each worker's share.
 - The tail of `tap_db_pool_wait_seconds` growing before that happens — the
   same condition, earlier.
 - `tap_oldest_queued_job_seconds` growing without bound: executors cannot keep
-  up, so add `tapExecutor.replicas`.
+  up, so add `tapExecutor.replicas` — or let an autoscaler do it, which is
+  what this metric is shaped for (see [Autoscaling](autoscaling.md)).
 
 ## Scraping it
 

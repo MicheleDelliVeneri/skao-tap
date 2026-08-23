@@ -6,7 +6,12 @@ metadata:
     {{- include "skao-tap.labels" . | nindent 4 }}
     app.kubernetes.io/component: tap-executor
 spec:
+  {{- /* omitted when an autoscaler owns it: a helm upgrade that set
+         replicas would reset the count the autoscaler had chosen, and
+         the two would then take turns overwriting each other */}}
+  {{- if not (include "skao-tap.executorAutoscaled" .) }}
   replicas: {{ .Values.tapExecutor.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
