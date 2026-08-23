@@ -248,7 +248,7 @@ async def post_phase(job_id: str, body: PhaseRequest):
         prepared = await run_in_threadpool(prepare_query, stored["parameters"])
     with pool().connection() as conn:
         job = uws.get_job(conn, job_id)
-        if phase == "RUN":
+        if prepared is not None:  # set exactly when the phase is RUN
             _queue(conn, job, prepared)
         elif phase == "ABORT":
             uws.abort_job(conn, job)

@@ -129,15 +129,17 @@ async def create_job(request: Request):
     files = await gather_upload_files(request)
     sources = resolve_upload_sources(params.get("UPLOAD"), files)
     parse_uploads(sources)  # reject malformed uploads before storing the job
+    # One flag decides both the translation and the queueing, so the prepared
+    # query cannot be missing where it is used. Not an assert: those vanish
+    # under -O, which is exactly when a mistake here would matter.
+    run_now = bool(phase and phase.upper() == "RUN")
     # translated off the event loop, before the connection is held
-    prepared = (
-        await run_in_threadpool(prepare_query, params) if phase and phase.upper() == "RUN" else None
-    )
+    prepared = await run_in_threadpool(prepare_query, params) if run_now else None
     with pool().connection() as conn:
         job = uws.create_job(conn, params, owner_id=owner_of(request))
         if sources:
             save_upload_sources(job["job_id"], sources)
-        if phase and phase.upper() == "RUN":
+        if run_now and prepared is not None:
             _queue(conn, job, prepared)
     return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
@@ -183,7 +185,7 @@ async def post_phase(job_id: str, request: Request):
         prepared = await run_in_threadpool(prepare_query, stored["parameters"])
     with pool().connection() as conn:
         job = uws.get_job(conn, job_id)
-        if phase == "RUN":
+        if prepared is not None:  # set exactly when the phase is RUN
             _queue(conn, job, prepared)
         elif phase == "ABORT":
             uws.abort_job(conn, job)

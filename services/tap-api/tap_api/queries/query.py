@@ -119,17 +119,24 @@ def _published_tables(*, refresh: bool = False) -> frozenset[str]:
     which is what a caller asking for fresh data is trying to avoid.
     """
     global _published_cache
+    asked_at = time.monotonic()
     cached = _published_cache
-    if not refresh and cached is not None and time.monotonic() - cached[0] < _PUBLISHED_TTL_S:
+    if not refresh and cached is not None and asked_at - cached[0] < _PUBLISHED_TTL_S:
         return cached[1]
     with _published_lock:
         cached = _published_cache
-        # another thread may have refreshed while this one waited; on an
-        # explicit refresh only a read newer than this call will do
-        if cached is not None and time.monotonic() - cached[0] < (
-            0.0 if refresh else _PUBLISHED_TTL_S
-        ):
-            return cached[1]
+        if cached is not None:
+            # A refresh wants a read newer than this call — including one
+            # another thread completed while this one waited on the lock,
+            # which is what stops concurrent misses becoming a stampede of
+            # identical queries.
+            fresh_enough = (
+                cached[0] >= asked_at
+                if refresh
+                else time.monotonic() - cached[0] < _PUBLISHED_TTL_S
+            )
+            if fresh_enough:
+                return cached[1]
         with pool().connection() as conn:
             rows = conn.execute("SELECT table_name FROM tap_schema.tables").fetchall()
         tables = frozenset(r[0].lower() for r in rows)

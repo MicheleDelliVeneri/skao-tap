@@ -9,6 +9,7 @@ re-read on every request.
 
 import pytest
 from tap_api.queries import query as query_module
+from tapcore.errors import UsageError
 from tapcore.query.adql import touched_tables, translate
 
 QUERIES = {
@@ -152,25 +153,32 @@ def test_a_table_published_out_of_band_appears_when_the_window_expires(counting_
     assert counting_pool["n"] == before + 1, "expiry must force a re-read"
 
 
-def test_a_table_published_while_running_is_not_refused(counting_pool, client, fake_db):
+def test_a_table_published_while_running_is_not_refused(counting_pool, fake_db):
     """What the component tests caught: a fixture registers a table in
-    TAP_SCHEMA while the service is up, and a cached "not published" would
-    reject queries against it until the window expired."""
+    TAP_SCHEMA while the service is up, and a cached "not published" rejected
+    queries against it until the window expired.
+
+    Goes through prepare_query, so it is the refuse-then-refresh path itself
+    that is under test rather than its parts.
+    """
     query_module._published_tables()  # warm the cache without the new table
     fake_db.published.append(("ska.late_arrival",))
     reads_before = counting_pool["n"]
 
-    published = query_module._published_tables()
-    assert "ska.late_arrival" not in published  # stale, as expected
-
-    # asking about it refreshes rather than refuses
-    assert (
-        query_module._first_unpublished(frozenset({"ska.late_arrival"}), published, set())
-        == "ska.late_arrival"
+    prepared = query_module.prepare_query(
+        {"LANG": "ADQL", "QUERY": "SELECT ra FROM ska.late_arrival"}
     )
-    query_module.forget_published_tables()
-    assert "ska.late_arrival" in query_module._published_tables()
-    assert counting_pool["n"] > reads_before
+    assert "late_arrival" in prepared["sql"]
+    assert counting_pool["n"] == reads_before + 1, "the miss must force one re-read"
+
+
+def test_a_genuinely_unpublished_table_is_still_refused(counting_pool, fake_db):
+    """And the refresh does not turn the check into a rubber stamp."""
+    query_module._published_tables()
+    reads_before = counting_pool["n"]
+    with pytest.raises(UsageError, match="not published"):
+        query_module.prepare_query({"LANG": "ADQL", "QUERY": "SELECT ra FROM ska.no_such_table"})
+    assert counting_pool["n"] == reads_before + 1, "one re-read, not one per table"
 
 
 def test_queueing_a_job_cannot_translate_on_the_event_loop():
