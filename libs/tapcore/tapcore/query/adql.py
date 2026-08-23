@@ -76,13 +76,15 @@ class _Translator(ADQLQueryTranslator):
             # library's own, so behaviour for such a query is unchanged —
             # including which syntax errors it reports.
             #
-            # Counted and logged, because a silent fallback is how this
-            # optimisation would disappear: a grammar or library bump that
-            # makes SLL fail for everything would restore the old ceiling with
-            # no other symptom than the service being slow again.
-            ADQL_SLOW_PARSES.inc()
+            # Logged on the way in and counted only once the slow parse
+            # succeeds. An invalid query also reaches here — SLL bails on it —
+            # and counting that would put user errors into a metric whose
+            # stated meaning is "the fast path stopped working", so a burst of
+            # bad ADQL would read as a performance regression. Invalid queries
+            # are already visible as 4xx responses.
             log.debug("ADQL fast parse fell back to full context: %s", exc)
             super().parse()
+            ADQL_SLOW_PARSES.inc()
 
     def _parse_sll(self):
         stream = antlr4.CommonTokenStream(ADQLLexer(antlr4.InputStream(self.query)))

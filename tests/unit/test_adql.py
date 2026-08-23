@@ -141,6 +141,18 @@ def test_a_query_the_fast_path_cannot_handle_falls_back(monkeypatch):
     assert ADQL_SLOW_PARSES._value.get() == before + 1
 
 
+def test_an_invalid_query_is_not_counted_as_a_slow_parse():
+    """The counter's stated meaning is "the fast path stopped working". An
+    invalid query bails out of SLL too, and counting it would let a burst of
+    bad ADQL read as a performance regression."""
+    from tapcore.observability import ADQL_SLOW_PARSES
+
+    before = ADQL_SLOW_PARSES._value.get()
+    with pytest.raises(QueryParseError):
+        adql_to_postgresql("SELECT FROM WHERE")
+    assert ADQL_SLOW_PARSES._value.get() == before
+
+
 def test_a_syntax_error_survives_the_fast_path():
     """An invalid query must still be reported as one, with the library's own
     error rather than whatever the bail strategy raised first."""

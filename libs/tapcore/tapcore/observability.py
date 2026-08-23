@@ -88,9 +88,11 @@ JOBS_COMPLETED = Counter(
 
 ADQL_SLOW_PARSES = Counter(
     "tap_adql_slow_parses_total",
-    "ADQL translations that fell back to full-context parsing. Translation is"
-    " most of a request's CPU, and the fast path is 35x cheaper — so this"
-    " rising means the service has quietly returned to its old ceiling.",
+    "ADQL translations that parsed successfully only after falling back to"
+    " full context. Translation is most of a request's CPU and the fast path"
+    " is 35x cheaper, so this rising means the service has quietly returned to"
+    " its old ceiling. A query that is simply invalid does not count here — it"
+    " is a 4xx, not a regression.",
     registry=REGISTRY,
 )
 

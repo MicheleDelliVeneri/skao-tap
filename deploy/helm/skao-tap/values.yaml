@@ -15,7 +15,7 @@ tapApi:
   # The figures that used to be quoted here (59 requests/s with one worker
   # against 210 with four) were measured when translation cost 41 ms per
   # request. It now costs 1.2 ms, so one worker goes much further and the
-  # ratio no longer holds. Set this to the pod's CPU limit, no higher.
+  # ratio no longer holds.
   #
   # Set it to the pod's CPU limit, no higher: past that the workers compete
   # for the same cores and only latency changes. Each worker opens its own
