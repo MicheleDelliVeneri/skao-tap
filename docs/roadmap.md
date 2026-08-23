@@ -49,8 +49,9 @@ decides what the bearer of a token may do.
   cascades through a whole document hierarchy), `jobs.create`,
   `jobs.mutate`, `jobs.delete` and `query.sync`. A deployment chooses which
   it enforces (`auth.gatedOperations`); the default is metadata mutation
-  only, so anonymous querying keeps working and plain VO clients are
-  unaffected unless a site deliberately closes it.
+  only. Whether a request needs a token at all is a separate switch pair —
+  `auth.requireToken` (on by default) and `auth.anonymousQueries` (off), the
+  second of which is what a deployment serving standard VO clients turns on.
 - **Token exchange for downstream calls**: not required — this service calls
   no other SRCNet service on a user's behalf. If that changes, exchange the
   incoming token through the Permissions API (`type=exchange` policies) for

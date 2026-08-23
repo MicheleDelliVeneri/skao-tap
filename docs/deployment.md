@@ -38,7 +38,10 @@ Key values (see `values.yaml` for the full list):
 | `verticalAutoscaling.enabled` | `false` | VPA per service (recommendation mode first) |
 | `postgresql.tuning` | `{}` | postgresql.conf overrides as `-c` server arguments |
 | `backup.enabled` | `false` | Nightly `pg_dump` CronJob to a dedicated PVC |
-| `auth.enabled` | `false` | Gate the mutating metadata endpoints ([guide](auth.md)) |
+| `auth.enabled` | `false` | Require verified tokens and gate the mutating metadata endpoints ([guide](auth.md)) |
+| `auth.requireToken` | `true` | With `auth.enabled`, every request needs a verified token — discovery and the health check aside |
+| `auth.anonymousQueries` | `false` | Let token-less callers read metadata through `/tap/sync` and the `/tap/async` job; what standard VO clients need |
+| `auth.gatedOperations` | `[]` | Which operations need an authorisation decision; empty means metadata mutation only |
 | `auth.plugin` | `iam-groups` | Authorisation plugin: local IAM groups, or the SRCNet Permissions API |
 | `auth.iam.issuer` | `""` | Required when `auth.enabled`; tokens are verified against its JWKS |
 | `auth.iam.audience` | `""` | Required when `auth.enabled`; guards against cross-service token replay |
@@ -256,6 +259,9 @@ All services read environment variables (see `tapcore/config.py`):
 | `TAP_JOB_RETENTION` | `604800` | Default job lifetime before destruction (s) |
 | `TAP_MODEL_PLUGINS` | `all` | Metadata domains to activate (`all` or a comma-separated subset) |
 | `TAP_AUTH_ENABLED` | `false` | Enable authentication/authorisation ([guide](auth.md)) |
+| `TAP_AUTH_REQUIRE_TOKEN` | `true` | Require a verified token on every request bar discovery and the health check |
+| `TAP_AUTH_ANONYMOUS_QUERIES` | `false` | Allow token-less reads through `/tap/sync` and `/tap/async` |
+| `TAP_AUTH_GATED_OPERATIONS` | — | Operations needing an authorisation decision; empty means metadata mutation only, `none` means nothing |
 | `TAP_AUTH_PLUGIN` | `iam-groups` | Which authorisation plugin decides (`iam-groups`, `permissions-api`, or your own) |
 | `TAP_IAM_ISSUER` | — | Token issuer; tokens are always verified against its JWKS |
 | `TAP_IAM_AUDIENCE` | — | Expected token audience; required unless `TAP_IAM_ALLOW_ANY_AUDIENCE=true` |

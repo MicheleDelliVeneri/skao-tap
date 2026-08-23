@@ -172,6 +172,24 @@ jobs:
             --set auth.iam.audience=science-metadata \
             --set auth.permissionsApi.url=https://permissions.srcnet.skao.int/api/v1 \
             | grep -q 'TAP_PERMISSIONS_API_URL'
+      - name: Template serving anonymous VO clients
+        run: |
+          helm template skao-tap deploy/helm/skao-tap \
+            --set auth.enabled=true \
+            --set auth.anonymousQueries=true \
+            --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
+            --set auth.iam.audience=science-metadata \
+            --set 'auth.roles.metadata\.delete.groups={/ska/oper}' \
+            | grep -q 'TAP_AUTH_ANONYMOUS_QUERIES: "true"'
+      - name: Template with the token requirement relaxed
+        run: |
+          helm template skao-tap deploy/helm/skao-tap \
+            --set auth.enabled=true \
+            --set auth.requireToken=false \
+            --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
+            --set auth.iam.audience=science-metadata \
+            --set 'auth.roles.metadata\.delete.groups={/ska/oper}' \
+            | grep -q 'TAP_AUTH_REQUIRE_TOKEN: "false"'
       - name: Template with querying gated as well
         run: |
           helm template skao-tap deploy/helm/skao-tap \

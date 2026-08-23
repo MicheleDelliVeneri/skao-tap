@@ -99,9 +99,14 @@ backup:
 #
 # Disabled by default: a deployment with no IAM behaves exactly as it did
 # before auth existed, which is what local development, the demo notebook and
-# the component tests rely on. Enabling it gates the mutating metadata
-# endpoints; querying (including POST /tap/sync, which is how VO clients send
-# ADQL) stays anonymous so standard tooling keeps working.
+# the component tests rely on.
+#
+# Enabling it does two things. Mutating the metadata endpoints needs a token
+# the plugin approves (see `roles` and `gatedOperations`), and every other
+# request needs a verified token as well — service discovery and the health
+# check aside. That second part includes querying: POST /tap/sync is how VO
+# clients send ADQL, and they carry no token, so a deployment that wants to
+# serve them sets `anonymousQueries: true` below.
 #
 # Whatever the plugin, bearer tokens are always verified by this service
 # against the IAM's JWKS before any authorisation decision is taken.
@@ -112,6 +117,31 @@ auth:
   # "permissions-api" (delegate to the SKA SRC Permissions API). A site can
   # install its own in the skao_tap.auth entry-point group and name it here.
   plugin: iam-groups
+  # -- Require a verified token on every request except service discovery and
+  # the health check (see anonymousQueries below for TAP reads). A metadata
+  # GET then needs nothing more than a valid token, while mutations still
+  # need the grants under `roles`, or a Permissions API decision.
+  #
+  # Requests refused for want of a token answer an IVOA AuthVO challenge
+  # naming the IAM's discovery document, so a client can find the issuer and
+  # go and get a token instead of being told to read the docs.
+  requireToken: true
+  # -- Let callers with no token read metadata through TAP: `/tap/sync` and
+  # the `/tap/async` job with all its sub-resources. Nothing else — not the
+  # JSON API's own query and job facades, which are reached by clients that
+  # *can* authenticate.
+  #
+  # This is the authentication layer's bypass for the TAP read paths: PyVO,
+  # TOPCAT and the rest send no token, so with it off they get 401 on every
+  # query. Off by default, because who may read an archive is a decision to
+  # take rather than inherit.
+  #
+  # It is not the only thing that decides it. requireToken: false makes those
+  # paths anonymous whatever this says, and with this on the authorisation
+  # layer can still refuse a token-less caller if gatedOperations enforces the
+  # query operations. GET /api/v1/auth reports the combined answer as
+  # anonymous_tap_queries.
+  anonymousQueries: false
   iam:
     # -- Token issuer, e.g. https://ska-iam.stfc.ac.uk. Required when enabled.
     issuer: ""

@@ -14,6 +14,21 @@ An operation this deployment does not enforce is let through exactly as it
 would be with auth off — but a token presented on any request is still
 verified and attached to ``request.state.principal``, so ownership and audit
 records get a subject when one is available.
+
+Authentication and authorisation are separate questions here, and the answers
+have different defaults. With ``TAP_AUTH_REQUIRE_TOKEN`` (the default), a
+request needs a *verified token*, reads included; the gate set then decides
+which requests additionally need a *decision* about that token. So a metadata
+`GET` needs a token and nothing more, while deleting a metadata document
+needs a token the plugin (IAM groups, or the SRCNet Permissions API)
+approves.
+
+One set of paths stays open regardless (``ANONYMOUS_PATHS``): the endpoints a
+client reaches *before* it has a token, because the challenge it gets back is
+what names the IAM, plus the health check a probe asks for. Reading metadata
+through TAP — ``/tap/sync`` and the ``/tap/async`` job — can be opened on top
+of that with ``TAP_AUTH_ANONYMOUS_QUERIES``, which is what a deployment that
+wants to serve standard VO clients sets.
 """
 
 import logging
@@ -22,13 +37,16 @@ from fastapi import Request
 from starlette.concurrency import run_in_threadpool
 from tapcore.auth import (
     ANONYMOUS,
+    QUERY_OPERATIONS,
     Principal,
     active_auth_plugin,
     clear_job_viewer,
     gated_operations,
+    missing_token_challenge,
     set_job_viewer,
     verifier,
 )
+from tapcore.auth.challenge import discovery_url
 from tapcore.config import settings
 from tapcore.errors import AuthenticationError, AuthorizationError
 
@@ -80,13 +98,111 @@ def reset_plugin() -> None:
     _GATED = None
 
 
+# Reachable without a token even when one is required everywhere else.
+#
+# Two kinds of request are here. Service discovery and the health check are
+# asked by something that cannot hold a credential: a Kubernetes probe
+# (availability), a registry harvester or a VO client browsing for services
+# (capabilities, tables, the VOResource record, examples), and a client that
+# has not authenticated yet and is working out how to (/api/v1/auth, the
+# OpenAPI documents). Gating those would mean a service that cannot be
+# monitored, registered or discovered.
+ANONYMOUS_PATHS = frozenset(
+    {
+        "/",
+        "/tap/availability",
+        "/tap/capabilities",
+        "/tap/tables",
+        "/tap/registry",
+        "/tap/examples",
+        "/api/v1/auth",
+        # FastAPI registers these three itself, outside the app-level
+        # dependency, so they are exempt by construction as well as by this
+        # list — which is kept so the intent is written down rather than
+        # inferred from a framework detail
+        "/openapi.json",
+        "/docs",
+        "/docs/oauth2-redirect",
+        "/redoc",
+    }
+)
+
+# Reading metadata through TAP itself — a synchronous query and the UWS job
+# that runs one — is the second kind, and unlike the paths above it is a
+# deployment's choice (``auth_anonymous_queries``). Standard VO clients cannot
+# authenticate, so opening these is what decides whether PyVO and TOPCAT can
+# use the service at all; closed by default, because "who may read this
+# archive" is not a question to answer by inheriting a default.
+#
+# Prefixes, because a job is a tree of sub-resources (/phase, /parameters,
+# /results, …) and every one of them belongs to the same read.
+QUERY_PREFIXES = ("/tap/sync", "/tap/async")
+
+
+def _is_capability_discovery(method: str, path: str, query_params) -> bool:
+    """A TAP 1.0 client discovering capabilities through /sync.
+
+    ``GET /tap/sync?REQUEST=getCapabilities`` is not a query: the handler
+    redirects it to /capabilities, which is open. Demanding a token for the
+    redirect while its destination is public would break capability discovery
+    for older clients, and tell them nothing they could act on.
+
+    The exemption must never be wider than the redirect it exists for, or it
+    becomes a way past the token requirement — a request the handler runs as a
+    query would have been let through as discovery. Two things keep it
+    narrower:
+
+    * ``GET`` only. ``gather_params`` merges the POST form *over* the query
+      string, so on a POST the query string does not decide what the handler
+      does: ``POST /tap/sync?REQUEST=getCapabilities`` with a form body of
+      ``REQUEST=doQuery&QUERY=...`` runs the query. Reading the body here to
+      find that out would mean consuming it before the handler can.
+    * The same comparison the handler makes — ``gather_params`` upper-cases
+      the key and keeps the last value, and ``sync()`` compares that value to
+      ``"getCapabilities"`` as-is.
+    """
+    if method.upper() != "GET" or path.rstrip("/") != "/tap/sync":
+        return False
+    if query_params is None:
+        return False
+    request_value = None
+    for key, value in query_params.multi_items():
+        if key.upper() == "REQUEST":
+            request_value = value
+    return request_value == "getCapabilities"
+
+
+def needs_token(path: str, query_params=None, method: str = "GET") -> bool:
+    """Whether a request must carry a verified token.
+
+    ``query_params`` and ``method`` are needed only to recognise capability
+    discovery through /sync.
+    """
+    if not settings.auth_require_token:
+        return False
+    trimmed = path.rstrip("/") or "/"
+    if trimmed in ANONYMOUS_PATHS or path in ANONYMOUS_PATHS:
+        return False
+    if _is_capability_discovery(method, path, query_params):
+        return False
+    return not (
+        settings.auth_anonymous_queries
+        and any(trimmed == prefix or trimmed.startswith(f"{prefix}/") for prefix in QUERY_PREFIXES)
+    )
+
+
 def _bearer(request: Request) -> str | None:
     header = request.headers.get("authorization")
     if not header:
         return None
     scheme, _, credential = header.partition(" ")
     if scheme.lower() != "bearer" or not credential.strip():
-        raise AuthenticationError("Authorization header must be 'Bearer <token>'")
+        # no usable credential was presented, so this is the discovery case:
+        # invalid_token would tell the client to refresh a token it never had
+        raise AuthenticationError(
+            "Authorization header must be 'Bearer <token>'",
+            challenge=missing_token_challenge("Malformed Authorization header"),
+        )
     return credential.strip()
 
 
@@ -129,6 +245,12 @@ async def attach_principal(request: Request) -> None:
         clear_job_viewer()  # no ownership enforcement: behave as before
         return
     who = await run_in_threadpool(principal_of, request)
+    if who.is_anonymous and needs_token(request.url.path, request.query_params, request.method):
+        # the challenge names the IAM, so a client that arrived with nothing
+        # can go and get a token rather than guess which issuer to ask
+        raise AuthenticationError(
+            "this deployment requires a bearer token", challenge=missing_token_challenge()
+        )
     set_job_viewer(who.subject)
 
 
@@ -143,6 +265,10 @@ def require(operation: str):
         active = plugin()
         if active is None:  # auth disabled: behave exactly as before
             return ANONYMOUS
+        if _is_capability_discovery(request.method, request.url.path, request.query_params):
+            # same reasoning as the token requirement: this is discovery, not
+            # a query, and its destination is public either way
+            return getattr(request.state, "principal", ANONYMOUS)
         if operation not in gated():
             # this deployment does not enforce this operation, so the request
             # passes as it would with auth off. attach_principal has already
@@ -150,7 +276,9 @@ def require(operation: str):
             return getattr(request.state, "principal", ANONYMOUS)
         who = await run_in_threadpool(principal_of, request)
         if who.is_anonymous:
-            raise AuthenticationError(f"{operation} requires a bearer token")
+            raise AuthenticationError(
+                f"{operation} requires a bearer token", challenge=missing_token_challenge()
+            )
         context = {
             "operation": operation,
             "method": request.method,
@@ -180,6 +308,20 @@ def owner_of(request: Request) -> str | None:
     return who.subject if who is not None else None
 
 
+def anonymous_tap_queries() -> bool:
+    """Whether a caller with no token can read metadata through TAP.
+
+    Derived, because three settings decide it and a client should not have to
+    combine them: the token requirement can be off entirely, or on with
+    ``anonymous_queries`` reopening the TAP paths — and either way the gate can
+    still refuse a token-less caller if the query operations are enforced.
+    """
+    if plugin() is None:
+        return True
+    reachable = not settings.auth_require_token or settings.auth_anonymous_queries
+    return reachable and not any(name in gated() for name in QUERY_OPERATIONS)
+
+
 def auth_summary() -> dict:
     """What this deployment enforces, for the service's own metadata."""
     active = plugin()
@@ -188,6 +330,12 @@ def auth_summary() -> dict:
     return {
         "enabled": True,
         "plugin": active.name,
+        "token_required": settings.auth_require_token,
+        "anonymous_queries": settings.auth_anonymous_queries,
+        # the answer to "can I query without a token?", so a client does not
+        # have to work it out from the three fields above
+        "anonymous_tap_queries": anonymous_tap_queries(),
+        "discovery_url": discovery_url(),
         "issuer": settings.iam_issuer,
         "audience": settings.iam_audience or None,
     }

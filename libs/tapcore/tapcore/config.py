@@ -3,6 +3,32 @@
 import os
 from dataclasses import dataclass, field
 
+TRUE_VALUES = ("1", "true", "yes", "on")
+FALSE_VALUES = ("0", "false", "no", "off")
+
+
+def _flag(name: str, default: bool) -> bool:
+    """Read a boolean environment variable, refusing anything ambiguous.
+
+    A typo must not decide a security question quietly. Mapping every
+    unrecognised value to False is how ``TAP_AUTH_REQUIRE_TOKEN=flase`` turns
+    the token requirement off without saying so, so an unrecognised value is
+    an error and the service refuses to start. Unset, or set to nothing at
+    all, means the default.
+    """
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in TRUE_VALUES:
+        return True
+    if value in FALSE_VALUES:
+        return False
+    raise ValueError(
+        f"{name}={raw!r} is not a boolean; use one of"
+        f" {', '.join(TRUE_VALUES)} or {', '.join(FALSE_VALUES)}"
+    )
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -40,12 +66,19 @@ class Settings:
     # -- authentication and authorisation ----------------------------------
     # Off by default: a deployment without an IAM keeps working exactly as it
     # did, which is what local development and the demo notebook rely on.
-    auth_enabled: bool = field(
-        default_factory=lambda: (
-            os.getenv("TAP_AUTH_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
-        )
-    )
+    auth_enabled: bool = field(default_factory=lambda: _flag("TAP_AUTH_ENABLED", False))
     auth_plugin: str = field(default_factory=lambda: os.getenv("TAP_AUTH_PLUGIN", "iam-groups"))
+    # With authentication on, every endpoint except service discovery and the
+    # health check needs a verified token — reads included. Authorisation
+    # (which token may do what) stays with auth_gated_operations below.
+    auth_require_token: bool = field(default_factory=lambda: _flag("TAP_AUTH_REQUIRE_TOKEN", True))
+    # Reopen reading metadata through TAP — /tap/sync and the /tap/async job —
+    # to callers with no token. Off by default: standard VO clients cannot
+    # authenticate, so this is the switch that decides whether a deployment
+    # serves them at all, and that is a decision to take rather than inherit.
+    auth_anonymous_queries: bool = field(
+        default_factory=lambda: _flag("TAP_AUTH_ANONYMOUS_QUERIES", False)
+    )
     # per-operation policy for the iam-groups plugin, as JSON:
     # {"metadata.ingest": {"groups": [...], "scopes": [...]}, ...}
     auth_roles: str = field(default_factory=lambda: os.getenv("TAP_AUTH_ROLES", "{}"))
@@ -63,10 +96,7 @@ class Settings:
     # accepting any audience lets tokens minted for other clients of the same
     # IAM be replayed here, so it must be asked for explicitly
     iam_allow_any_audience: bool = field(
-        default_factory=lambda: (
-            os.getenv("TAP_IAM_ALLOW_ANY_AUDIENCE", "false").strip().lower()
-            in ("1", "true", "yes", "on")
-        )
+        default_factory=lambda: _flag("TAP_IAM_ALLOW_ANY_AUDIENCE", False)
     )
     iam_group_claims: str = field(
         default_factory=lambda: os.getenv("TAP_IAM_GROUP_CLAIMS", "groups,wlcg.groups")
@@ -79,11 +109,7 @@ class Settings:
     # The VOResource record served at /tap/registry. Off until a deployment
     # has an IVOA authority to publish under: an identifier is a promise that
     # this URI resolves to this service forever, so it cannot be defaulted.
-    registry_enabled: bool = field(
-        default_factory=lambda: (
-            os.getenv("TAP_REGISTRY_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
-        )
-    )
+    registry_enabled: bool = field(default_factory=lambda: _flag("TAP_REGISTRY_ENABLED", False))
     registry_identifier: str = field(
         default_factory=lambda: os.getenv("TAP_REGISTRY_IDENTIFIER", "")
     )
