@@ -170,6 +170,49 @@ def test_the_auth_endpoint_advertises_the_discovery_url(client, secured, iam_iss
     assert body["discovery_url"] == f"{iam_issuer}/.well-known/openid-configuration"
 
 
+def test_tap_1_0_capability_discovery_is_not_a_query(client, secured):
+    """GET /tap/sync?REQUEST=getCapabilities redirects to /capabilities, which
+    is open — so demanding a token for the redirect breaks older clients while
+    protecting nothing."""
+    response = client.get(
+        "/tap/sync", params={"REQUEST": "getCapabilities"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/capabilities")
+
+
+def test_capability_discovery_survives_the_query_gate_too(
+    client, auth_settings, stub_iam, iam_issuer, iam_audience
+):
+    """Not just the token requirement: a site that gates the query surface
+    must not lose capability discovery either."""
+    oper = "/ska/science-metadata/oper"
+    auth_settings(
+        auth_enabled=True,
+        auth_plugin="iam-groups",
+        auth_roles=json.dumps(
+            {
+                "jobs.create": {"groups": [oper]},
+                "jobs.mutate": {"groups": [oper]},
+                "jobs.delete": {"groups": [oper]},
+                "query.sync": {"groups": [oper]},
+            }
+        ),
+        auth_gated_operations="jobs.create,jobs.mutate,jobs.delete,query.sync",
+        iam_issuer=iam_issuer,
+        iam_audience=iam_audience,
+    )
+    response = client.get(
+        "/tap/sync", params={"REQUEST": "getCapabilities"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+
+
+def test_a_real_query_is_still_gated(client, secured, fake_db):
+    """The exemption is for the discovery form only."""
+    assert client.get("/tap/sync", params={"QUERY": "SELECT 1", "LANG": "ADQL"}).status_code == 401
+
+
 # -- the setting ------------------------------------------------------------
 
 

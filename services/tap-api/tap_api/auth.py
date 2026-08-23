@@ -112,7 +112,7 @@ ANONYMOUS_PATHS = frozenset(
         "/tap/availability",
         "/tap/capabilities",
         "/tap/tables",
-        "/tap/registry",
+        "/tap/registry",  # served once the VOResource work lands
         "/tap/examples",
         "/api/v1/auth",
         "/openapi.json",
@@ -134,12 +134,34 @@ ANONYMOUS_PATHS = frozenset(
 QUERY_PREFIXES = ("/tap/sync", "/tap/async")
 
 
-def needs_token(path: str) -> bool:
-    """Whether a request to ``path`` must carry a verified token."""
+def _is_capability_discovery(path: str, query_params) -> bool:
+    """A TAP 1.0 client discovering capabilities through /sync.
+
+    ``GET /tap/sync?REQUEST=getCapabilities`` is not a query: the handler
+    redirects it to /capabilities, which is open. Demanding a token for the
+    redirect while its destination is public would break capability discovery
+    for older clients, and tell them nothing they could act on.
+    """
+    if path.rstrip("/") != "/tap/sync" or query_params is None:
+        return False
+    return any(
+        key.upper() == "REQUEST" and value.strip().lower() == "getcapabilities"
+        for key, value in query_params.multi_items()
+    )
+
+
+def needs_token(path: str, query_params=None) -> bool:
+    """Whether a request must carry a verified token.
+
+    ``query_params`` is the request's query string, needed only to recognise
+    capability discovery through /sync.
+    """
     if not settings.auth_require_token:
         return False
     trimmed = path.rstrip("/") or "/"
     if trimmed in ANONYMOUS_PATHS or path in ANONYMOUS_PATHS:
+        return False
+    if _is_capability_discovery(path, query_params):
         return False
     return not (
         settings.auth_anonymous_queries
@@ -196,7 +218,7 @@ async def attach_principal(request: Request) -> None:
         clear_job_viewer()  # no ownership enforcement: behave as before
         return
     who = await run_in_threadpool(principal_of, request)
-    if who.is_anonymous and needs_token(request.url.path):
+    if who.is_anonymous and needs_token(request.url.path, request.query_params):
         # the challenge names the IAM, so a client that arrived with nothing
         # can go and get a token rather than guess which issuer to ask
         raise AuthenticationError(
@@ -216,6 +238,10 @@ def require(operation: str):
         active = plugin()
         if active is None:  # auth disabled: behave exactly as before
             return ANONYMOUS
+        if _is_capability_discovery(request.url.path, request.query_params):
+            # same reasoning as the token requirement: this is discovery, not
+            # a query, and its destination is public either way
+            return getattr(request.state, "principal", ANONYMOUS)
         if operation not in gated():
             # this deployment does not enforce this operation, so the request
             # passes as it would with auth off. attach_principal has already

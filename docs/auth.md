@@ -202,9 +202,16 @@ discover it by trial:
 
 ```json
 {"enabled": true, "plugin": "permissions-api",
+ "token_required": true, "anonymous_queries": false,
+ "discovery_url": "https://ska-iam.stfc.ac.uk/.well-known/openid-configuration",
  "issuer": "https://ska-iam.stfc.ac.uk", "audience": "science-metadata",
  "gated_operations": {"metadata.ingest": "POST /api/v1/<mount>", ...}}
 ```
+
+`token_required` and `anonymous_queries` answer "do I need a token?";
+`gated_operations` answers "which requests need my token to be *approved*?".
+A client that wants to know whether it can query anonymously reads the first
+two, not the third.
 
 ## Token verification
 
@@ -355,10 +362,11 @@ reached.
 
 ## Behaviour summary
 
-`gated_operations` lists only what this deployment enforces, so a client can
-tell from it whether it needs a token to query at all — and it is empty when
-authentication is disabled, because then nothing is enforced whatever the
-gate set says.
+`gated_operations` lists only the operations this deployment puts to the
+plugin for a decision, and it is empty when authentication is disabled,
+because then nothing is enforced whatever the gate set says. It does not on
+its own say whether a token is needed — `token_required` and
+`anonymous_queries` in the same response answer that.
 
 "Gated call" below means a request covered by an operation this deployment
 enforces — that is the authorisation layer. The rows above it are the
@@ -371,8 +379,9 @@ always means the whole query surface is enforced.
 | Request | Auth disabled | Auth enabled |
 | --- | --- | --- |
 | Discovery or health endpoint, no token | 200 | 200 |
-| TAP query or job, no token, `anonymousQueries: true` | 200 | 200 |
+| TAP query or job, no token, `anonymousQueries: true`, query operations ungated | 200 | 200 |
 | TAP query or job, no token, `anonymousQueries: false` | 200 | `401` + AuthVO challenge |
+| `GET /tap/sync?REQUEST=getCapabilities`, no token | 303 | 303 — discovery, not a query, whatever is configured |
 | Any other request, no token | 200 | `401` + AuthVO challenge |
 | Any request, forged/expired token | ignored | `401`, `error="invalid_token"` |
 | Metadata `GET`, valid token | 200 | 200 (no role needed) |
