@@ -15,7 +15,7 @@ def _number(row: dict[str, str], key: str) -> float:
 
 
 def _client_count(path: Path) -> int:
-    match = re.search(r"-c(\\d+)", path.stem)
+    match = re.search(r"-c(\d+)", path.stem)
     return int(match.group(1)) if match else 0
 
 
