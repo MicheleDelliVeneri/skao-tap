@@ -48,6 +48,15 @@ def main() -> int:
         )
 
     findings = []
+    # Per-report, not pairwise: an error rate is a property of one run, and
+    # inside the pairwise loop the first level's errors were never reported —
+    # nor any errors at all when a sweep has a single concurrency level.
+    for report in reports:
+        if report["error_rate"] > 0:
+            findings.append(
+                f"{report['clients']} clients produced an error rate of "
+                f"{report['error_rate']:.2%}; inspect tap-api.log and PostgreSQL logs."
+            )
     for previous, current in itertools.pairwise(reports):
         throughput_growth = current["requests_per_second"] / max(
             previous["requests_per_second"], 0.000001
@@ -62,11 +71,6 @@ def main() -> int:
                 f"throughput changed {throughput_growth:.2f}x while p95 latency "
                 f"changed {latency_growth:.2f}x. Check the connection-pool wait "
                 "frames in the Python flamegraph and PostgreSQL wait events."
-            )
-        if current["error_rate"] > 0:
-            findings.append(
-                f"{current['clients']} clients produced an error rate of "
-                f"{current['error_rate']:.2%}; inspect tap-api.log and PostgreSQL logs."
             )
 
     stat_files = sorted(args.results.glob("pgstat-tap-c*.csv"), key=_client_count)
