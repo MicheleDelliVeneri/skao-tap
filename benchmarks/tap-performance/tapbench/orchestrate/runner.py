@@ -107,10 +107,17 @@ def setup(cfg: dict, *, rebuild_images: bool = True) -> dict:
         raise SystemExit("preflight failed:\n  " + "\n  ".join(problems))
     enforcement = cfg["hardware"]["enforcement"]
     cluster.create(enforcement["kind_node_cpus"], enforcement["kind_node_memory"])
-    digests = cluster.build_and_load_images() if rebuild_images else {}
+    if rebuild_images:
+        tag, digests = cluster.build_and_load_images()
+    else:
+        # Keep measuring whatever the release already runs rather than
+        # silently reverting to a mutable tag.
+        tag, digests = cluster.deployed_image_tag(), {}
     cluster.install_keda()
     cluster.install_monitoring()
-    cluster.install_chart()
+    cluster.install_chart({"image.tag": tag} if tag else None)
+    if tag:
+        cluster.verify_running_images(tag)
     prometheus = prom_mod.Prometheus(PROMETHEUS_URL)
     if not prometheus.ready():
         raise SystemExit("Prometheus did not become ready")

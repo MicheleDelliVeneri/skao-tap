@@ -78,31 +78,104 @@ def create(cpus: int, memory: str) -> None:
     log.info("node capped at %s CPUs / %s", cpus, memory)
 
 
-def build_and_load_images() -> dict[str, str]:
-    """Build the three images and load them into the node. Returns digests."""
-    images = {
-        "tapbench/tap-api:bench": ("services/tap-api/Dockerfile", "."),
-        "tapbench/tap-executor:bench": ("services/tap-executor/Dockerfile", "."),
-        "tapbench/tap-db:bench": ("db/Dockerfile", "db"),
-    }
-    digests = {}
-    for tag, (dockerfile, context) in images.items():
+IMAGES = {
+    "tap-api": ("services/tap-api/Dockerfile", "."),
+    "tap-executor": ("services/tap-executor/Dockerfile", "."),
+    "tap-db": ("db/Dockerfile", "db"),
+}
+
+#: The tag the cluster is currently running, so every later `helm upgrade`
+#: keeps deploying the images this run built.
+_image_tag: str | None = None
+
+
+def build_and_load_images() -> tuple[str, dict[str, str]]:
+    """Build the three images under a content-addressed tag and load them.
+
+    The tag is derived from the built image ids rather than being a fixed
+    ``:bench``, and that is not cosmetic. Rebuilding a mutable tag and running
+    ``kind load`` leaves the pod spec byte-identical, so Kubernetes has nothing
+    to roll out and the running pods keep serving the *previous* image — a
+    benchmark that rebuilds its images and then measures the old code, with no
+    symptom except numbers that do not move. A content-addressed tag makes new
+    code a different pod spec, so the rollout is forced and observable.
+    """
+    global _image_tag
+    import hashlib
+
+    digests: dict[str, str] = {}
+    for name, (dockerfile, context) in IMAGES.items():
+        staging = f"tapbench/{name}:staging"
         run(
             "docker",
             "build",
             "-t",
-            tag,
+            staging,
             "-f",
             str(REPO / dockerfile),
             str(REPO / context),
             capture=False,
             timeout=1800,
         )
-        # The image id, recorded with the run: "the same chart at a different
-        # commit" is the most common reason two benchmarks disagree.
-        digests[tag] = run("docker", "image", "inspect", tag, "--format", "{{.Id}}").strip()
-        run("kind", "load", "docker-image", tag, "--name", CLUSTER, timeout=900)
-    return digests
+        digests[name] = run("docker", "image", "inspect", staging, "--format", "{{.Id}}").strip()
+    tag = (
+        "bench-"
+        + hashlib.sha256("".join(digests[name] for name in sorted(digests)).encode()).hexdigest()[
+            :12
+        ]
+    )
+    for name in IMAGES:
+        run("docker", "tag", f"tapbench/{name}:staging", f"tapbench/{name}:{tag}")
+        run(
+            "kind", "load", "docker-image", f"tapbench/{name}:{tag}", "--name", CLUSTER, timeout=900
+        )
+    _image_tag = tag
+    log.info("images built and loaded as %s", tag)
+    return tag, {f"tapbench/{name}:{tag}": digest for name, digest in digests.items()}
+
+
+def deployed_image_tag() -> str | None:
+    """The tag the release is already using, for a run that skips the build."""
+    values = run(
+        "helm",
+        "get",
+        "values",
+        RELEASE,
+        "--kube-context",
+        f"kind-{CLUSTER}",
+        "-o",
+        "json",
+        check=False,
+    )
+    try:
+        return json.loads(values).get("image", {}).get("tag")
+    except Exception:
+        return None
+
+
+def verify_running_images(expected_tag: str) -> None:
+    """Refuse to measure pods that are not running the images just built.
+
+    The check is on the pod spec rather than on an image id, because kind
+    rewrites ids on import — the id in a pod's status has no relation to the
+    one docker built. The tag is what the chart set and what the kubelet
+    resolved, so it is the thing that can actually be compared.
+    """
+    running = kubectl(
+        "get",
+        "pods",
+        "-l",
+        "app.kubernetes.io/instance=" + RELEASE,
+        "-o",
+        "jsonpath={range .items[*]}{.metadata.name}={.spec.containers[*].image}{'\n'}{end}",
+    )
+    wrong = [line for line in running.splitlines() if line.strip() and expected_tag not in line]
+    if wrong:
+        raise RuntimeError(
+            "these pods are not running the images this run built "
+            f"(expected tag {expected_tag}):\n  " + "\n  ".join(wrong)
+        )
+    log.info("all pods confirmed running %s", expected_tag)
 
 
 def install_keda() -> str:
@@ -150,6 +223,15 @@ def install_monitoring() -> None:
 
 
 def install_chart(overrides: dict[str, str] | None = None) -> None:
+    """Deploy the chart, always pinning the image tag this run is measuring.
+
+    Injected here rather than left to the values file so that every later
+    upgrade — switching an autoscaler on, changing a replica count — cannot
+    quietly revert the deployment to a different build.
+    """
+    overrides = dict(overrides or {})
+    if _image_tag:
+        overrides.setdefault("image.tag", _image_tag)
     args = [
         "helm",
         "upgrade",
@@ -164,7 +246,7 @@ def install_chart(overrides: dict[str, str] | None = None) -> None:
         "--timeout",
         "10m",
     ]
-    for key, value in (overrides or {}).items():
+    for key, value in overrides.items():
         args += ["--set", f"{key}={value}"]
     run(*args, capture=False, timeout=900)
     kubectl("apply", "-f", str(SUITE / "manifests/nodeport.yaml"))
