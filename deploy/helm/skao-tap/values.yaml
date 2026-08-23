@@ -285,6 +285,18 @@ voRegistry:
 
 # -- TAP service tuning (mapped to TAP_* environment variables).
 config:
+  # -- Database connections per API or executor process. This is the real
+  # concurrency limit: a process with `dbPoolMax: 8` serves 8 queries at once
+  # and the ninth waits. A pod holds `dbPoolMax x tapApi.workers`, and the
+  # deployment that times `replicas` — keep the total under the server's
+  # max_connections (see postgresql.tuning).
+  dbPoolMin: 1
+  dbPoolMax: 8
+  # -- How long a request waits for a free connection before being told the
+  # service is full. Short on purpose: a request that cannot proceed should
+  # answer 503 with Retry-After rather than hold the client, and anything
+  # proxying for it, for tens of seconds.
+  dbPoolTimeoutSeconds: 5
   defaultMaxrec: 10000
   hardMaxrec: 1000000
   syncTimeoutSeconds: 30

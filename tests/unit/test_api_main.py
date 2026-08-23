@@ -108,3 +108,25 @@ def test_bootstrap_fails_after_attempts(fake_db, monkeypatch):
     monkeypatch.setattr(main.time, "sleep", lambda s: None)
     with pytest.raises(RuntimeError, match="metadata bootstrap failed after 2 attempts"):
         main._bootstrap_metadata(attempts=2)
+
+
+def test_pool_exhaustion_answers_503_with_retry_after(client, monkeypatch):
+    """A full pool is a capacity condition, not a fault.
+
+    Before this, waiting for a connection ran to psycopg's 30s default and
+    then surfaced as a 500 — a hang followed by the wrong answer, which a
+    proxy would not retry.
+    """
+    from psycopg_pool import PoolTimeout
+    from tap_api.queries import query as query_module
+
+    def exhausted():
+        raise PoolTimeout("couldn't get a connection after 5.00 sec")
+
+    monkeypatch.setattr(query_module, "pool", exhausted)
+    response = client.post(
+        "/tap/sync", data={"LANG": "ADQL", "QUERY": "SELECT ra FROM ska.continuum_sources"}
+    )
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    assert "connections are busy" in response.text

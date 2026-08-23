@@ -20,6 +20,9 @@ data:
   {{- /* the container listens where the deployment says it does: without this
          a tapApi.port other than the image default would leave uvicorn on
          8080 while the probes and Service looked elsewhere */}}
+  TAP_DB_POOL_MIN: {{ .Values.config.dbPoolMin | int64 | quote }}
+  TAP_DB_POOL_MAX: {{ .Values.config.dbPoolMax | int64 | quote }}
+  TAP_DB_POOL_TIMEOUT: {{ .Values.config.dbPoolTimeoutSeconds | quote }}
   TAP_API_PORT: {{ .Values.tapApi.port | int64 | quote }}
   TAP_API_WORKERS: {{ .Values.tapApi.workers | int64 | quote }}
   {{- /* VOResource record; disabled by default, see values.yaml */}}

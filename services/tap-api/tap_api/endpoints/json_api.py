@@ -25,7 +25,7 @@ import time
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from starlette.concurrency import run_in_threadpool
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from tapcore import uws
 from tapcore.config import settings
 from tapcore.db import pool
@@ -115,8 +115,9 @@ async def sync_query(body: QueryRequest):
     Set ``format`` to ``parquet`` or ``arrow`` for columnar responses.
     """
     prepared = await run_in_threadpool(prepare_query, _tap_params(body, fmt=body.format))
-    chunks, mime = run_sync(prepared)
-    return StreamingResponse(chunks, media_type=mime)
+    # off the event loop, for the same reason as /tap/sync
+    chunks, mime = await run_in_threadpool(run_sync, prepared)
+    return StreamingResponse(iterate_in_threadpool(chunks), media_type=mime)
 
 
 # ---------------------------------------------------------------------------
