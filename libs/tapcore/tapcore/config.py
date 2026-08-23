@@ -46,6 +46,15 @@ class Settings:
         )
     )
     auth_plugin: str = field(default_factory=lambda: os.getenv("TAP_AUTH_PLUGIN", "iam-groups"))
+    # With authentication on, every endpoint except service discovery and the
+    # health check needs a verified token — reads included. Authorisation
+    # (which token may do what) stays with auth_gated_operations below.
+    auth_require_token: bool = field(
+        default_factory=lambda: (
+            os.getenv("TAP_AUTH_REQUIRE_TOKEN", "true").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+    )
     # per-operation policy for the iam-groups plugin, as JSON:
     # {"metadata.ingest": {"groups": [...], "scopes": [...]}, ...}
     auth_roles: str = field(default_factory=lambda: os.getenv("TAP_AUTH_ROLES", "{}"))

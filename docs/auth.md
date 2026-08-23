@@ -15,6 +15,74 @@ When enabled, two separable things happen to a request:
    verified principal may proceed. That decision is where deployments differ,
    so it sits behind a plugin interface.
 
+The two are configured separately, because the answers differ. By default
+**every request needs a verified token** (`auth.requireToken`) except service
+discovery, the health check, and reading metadata through TAP itself. Only
+some of those requests additionally need an authorisation *decision* — see
+[what is gated](#what-is-gated). So a metadata `GET` needs a token and
+nothing more; deleting a metadata document needs a token the plugin approves.
+
+## Getting a token: the AuthVO challenge
+
+A bare `401` leaves a client guessing which IAM to talk to. A request refused
+for want of a token is answered with an IVOA AuthVO challenge naming the
+OIDC discovery document instead — the same shape the SRCNet
+[DM product streamer](https://gitlab.com/ska-telescope/src/src-dm/ska-src-dm-product-streamer-api)
+uses, so a client written against one works against the other:
+
+```http
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer realm="skao-tap",
+  ivoa_bearer error="invalid_request",
+  error_description="Missing access token",
+  discovery_url="https://ska-iam.stfc.ac.uk/.well-known/openid-configuration"
+```
+
+The RFC 6750 `Bearer` challenge comes first so a client reading only the
+first one still learns it needs a bearer token; the `ivoa_bearer` challenge
+carries the discovery URL. The same text is repeated in the error body — the
+JSON `message` on `/api/v1/*`, the DALI VOTable on `/tap/*` — because that is
+where the reference SRCNet client reads it from.
+
+A client then runs OIDC discovery and a device flow against the IAM, and
+comes back with the token. The service never talks to the IAM on the client's
+behalf; it only says where the IAM is.
+
+Two error codes are distinguished, because the remedy differs:
+
+| `error` | Means | What the client should do |
+| --- | --- | --- |
+| `invalid_request` | no credential was presented | discover the IAM, get a token |
+| `invalid_token` | a credential was presented and did not verify (expired, forged, wrong issuer) | get a *fresh* token; re-running discovery will not help |
+
+`GET /api/v1/auth` advertises the same `discovery_url`, so a client can find
+the IAM without provoking a `401` first.
+
+Audience: this service does not require tokens to carry a service-specific
+`aud`, provided `auth.iam.allowAnyAudience` is set — SRCNet IAM tokens are
+not minted per service here. That is a deliberate trade: any token the IAM
+issued to any of its clients is then accepted here, so the flag has to be set
+explicitly rather than defaulted. No token-exchange step is involved.
+
+## What needs a token
+
+| Requests | Token | Why |
+| --- | --- | --- |
+| `/tap/sync`, `/tap/async` and its sub-resources | no | reading metadata through TAP is what PyVO and TOPCAT do, and they carry no token |
+| `/tap/availability` | no | a Kubernetes probe cannot hold one |
+| `/tap/capabilities`, `/tap/tables`, `/tap/registry`, `/tap/examples` | no | a registry harvester or a VO client browsing for services cannot hold one |
+| `/api/v1/auth`, `/openapi.json`, `/docs` | no | this is where a client works out how to authenticate |
+| everything else — `/api/v1/<mount>` reads and writes, `/api/v1/query`, `/api/v1/jobs` | yes | a JSON client is not the VO toolchain and can be expected to authenticate |
+
+The asymmetry is deliberate but worth stating plainly: the same metadata an
+anonymous caller can read with an ADQL query over `/tap/sync` needs a token
+when read as JSON from `/api/v1/<mount>`. What justifies it is the client
+population, not the data — the VO toolchain cannot authenticate, and locking
+it out would make the service useless as a TAP service. A deployment that
+wants the JSON reads open too sets `auth.requireToken: false`, which restores
+the earlier behaviour (tokens verified when present, demanded only by the
+gated operations).
+
 ## What is gated
 
 Seven operations can be gated. Which ones a deployment actually enforces is
@@ -258,16 +326,17 @@ reached.
 tell from it whether it needs a token to query at all.
 
 "Gated call" below means a request covered by an operation this deployment
-enforces. Each operation is independent: enforcing `query.sync` does not
-enforce `jobs.create`, which is why the docs above recommend enforcing them
-together rather than assuming it.
+enforces — that is the authorisation layer. The rows above it are the
+authentication layer, which applies whether or not an operation is gated.
 
 | Request | Auth disabled | Auth enabled |
 | --- | --- | --- |
-| `GET`, other than `/tap/sync` | 200 | 200 (token verified if present) |
-| Query whose operation is not enforced | 200 | 200 (token verified if present) |
-| Gated call, no token | 200 | `401` + `WWW-Authenticate: Bearer` |
-| Gated call, forged/expired token | 200 | `401` |
+| TAP query or job, no token | 200 | 200 (token verified if present) |
+| Discovery or health endpoint, no token | 200 | 200 |
+| Any other request, no token | 200 | `401` + AuthVO challenge |
+| Any request, forged/expired token | ignored | `401`, `error="invalid_token"` |
+| Metadata `GET`, valid token | 200 | 200 (no role needed) |
+| Gated call, no token | 200 | `401` + AuthVO challenge |
 | Gated call, valid token without the role | 200 | `403` |
 | Gated call, valid token with the role | 200 | 200 |
 | Any call, unverifiable token | ignored | `401` |

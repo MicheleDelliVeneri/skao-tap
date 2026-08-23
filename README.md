@@ -231,8 +231,11 @@ Follow-up work is tracked as numbered packages in `docs/roadmap.md`.
   verified bearer tokens, either from IAM group membership or via the
   [SKA SRC Permissions API](https://gitlab.com/ska-telescope/src/src-service-apis/ska-src-permissions-api)
   — see [docs/auth.md](docs/auth.md). Job creation, mutation, deletion and
-  synchronous querying can be gated too, off by default so anonymous VO
-  clients keep working. Registry registration (VOResource) remains open in
+  synchronous querying can be gated too. Every other request needs a verified
+  token by default — reading metadata through `/tap/sync` or a `/tap/async`
+  job stays anonymous so PyVO and TOPCAT keep working — and a request refused
+  for want of one answers an IVOA AuthVO challenge naming the IAM, so a client
+  can go and get a token. Registry registration (VOResource) remains open in
   package 4.
 - **Service-local logging** — logs are plain `logging` records, outside the
   shared SRCNet observability stack; package 8 adopts

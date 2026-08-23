@@ -1,0 +1,192 @@
+"""What a client that arrives without a token is told.
+
+A bare 401 leaves a client guessing which IAM to talk to. These tests pin the
+IVOA AuthVO challenge — in the header and in the body, since the SRCNet
+reference client reads it from the body — and which paths can still be
+reached before a client has any credential at all.
+"""
+
+import json
+
+import pytest
+from tap_api.auth import needs_token
+
+ROLES = json.dumps({"metadata.delete": {"groups": ["/ska/science-metadata/admin"]}})
+QUERY = "SELECT source_id, ra FROM ska.continuum_sources"
+
+
+@pytest.fixture
+def secured(auth_settings, stub_iam, iam_issuer, iam_audience):
+    auth_settings(
+        auth_enabled=True,
+        auth_plugin="iam-groups",
+        auth_roles=ROLES,
+        iam_issuer=iam_issuer,
+        iam_audience=iam_audience,
+    )
+
+
+@pytest.fixture
+def bearer(make_token):
+    def build(**overrides):
+        return {"Authorization": f"Bearer {make_token(**overrides)}"}
+
+    return build
+
+
+# -- the challenge ----------------------------------------------------------
+
+
+def test_a_request_with_no_token_is_told_where_the_iam_is(client, secured, iam_issuer):
+    response = client.get("/api/v1/software")
+    challenge = response.headers["www-authenticate"]
+    assert response.status_code == 401
+    assert "ivoa_bearer" in challenge
+    assert 'error="invalid_request"' in challenge
+    assert f'discovery_url="{iam_issuer}/.well-known/openid-configuration"' in challenge
+
+
+def test_the_challenge_keeps_the_rfc_6750_scheme_too(client, secured):
+    """A client that reads only the first challenge must still learn it needs
+    a bearer token."""
+    challenge = client.get("/api/v1/software").headers["www-authenticate"]
+    assert challenge.startswith("Bearer ")
+    assert challenge.index("Bearer") < challenge.index("ivoa_bearer")
+
+
+def test_the_challenge_is_in_the_body_as_well(client, secured):
+    """Where the SRCNet reference client (the DM product streamer) reads it."""
+    body = client.get("/api/v1/software").json()
+    assert "WWW-Authenticate: ivoa_bearer" in body["message"]
+    assert 'discovery_url="' in body["message"]
+
+
+def test_a_presented_but_invalid_token_is_a_different_error_code(client, secured, bearer):
+    """invalid_token, not invalid_request: the client had a credential, so
+    re-running discovery is not the fix — getting a fresh token is."""
+    import time
+
+    response = client.get("/api/v1/software", headers=bearer(exp=int(time.time()) - 10))
+    challenge = response.headers["www-authenticate"]
+    assert response.status_code == 401
+    assert 'error="invalid_token"' in challenge
+    assert "expired" in response.json()["message"]
+
+
+def test_an_explicit_well_known_url_wins(client, secured, auth_settings):
+    """An IAM whose discovery document is not at the conventional path."""
+    auth_settings(iam_well_known_url="https://iam.example.org/oidc/config")
+    challenge = client.get("/api/v1/software").headers["www-authenticate"]
+    assert 'discovery_url="https://iam.example.org/oidc/config"' in challenge
+
+
+def test_the_vo_error_document_carries_the_challenge_too(
+    client, auth_settings, stub_iam, iam_issuer, iam_audience, fake_db
+):
+    """The TAP endpoints answer DALI VOTables, not JSON — the challenge has to
+    survive that rendering too. Reached by gating the query surface, the one
+    way a TAP path answers 401."""
+    oper = "/ska/science-metadata/oper"
+    auth_settings(
+        auth_enabled=True,
+        auth_plugin="iam-groups",
+        auth_roles=json.dumps(
+            {
+                "jobs.create": {"groups": [oper]},
+                "jobs.mutate": {"groups": [oper]},
+                "jobs.delete": {"groups": [oper]},
+                "query.sync": {"groups": [oper]},
+            }
+        ),
+        auth_gated_operations="jobs.create,jobs.mutate,jobs.delete,query.sync",
+        iam_issuer=iam_issuer,
+        iam_audience=iam_audience,
+    )
+    response = client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": QUERY})
+    assert response.status_code == 401
+    assert "ivoa_bearer" in response.headers["www-authenticate"]
+    assert response.headers["content-type"].startswith("application/x-votable")
+    assert "ivoa_bearer" in response.text
+
+
+# -- what stays reachable without one ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/tap/availability", "/tap/capabilities", "/tap/tables", "/api/v1/auth", "/openapi.json"],
+)
+def test_discovery_and_health_stay_open(client, secured, path):
+    """A liveness probe, a registry harvester and a client looking for the IAM
+    cannot hold a token; gating these would make the service unmonitorable,
+    unregisterable and undiscoverable."""
+    assert client.get(path).status_code == 200
+
+
+def test_reading_metadata_through_tap_stays_open(client, secured, fake_db):
+    synchronous = client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": QUERY})
+    job = client.post("/tap/async", data={"LANG": "ADQL", "QUERY": QUERY}, follow_redirects=False)
+    assert synchronous.status_code == 200
+    assert job.status_code == 303
+
+
+def test_a_job_subresource_is_open_like_the_job(client, secured, fake_db):
+    created = client.post(
+        "/tap/async", data={"LANG": "ADQL", "QUERY": QUERY}, follow_redirects=False
+    )
+    job_id = created.headers["location"].rsplit("/", 1)[-1]
+    assert client.get(f"/tap/async/{job_id}/phase").status_code == 200
+    assert client.get(f"/tap/async/{job_id}/parameters").status_code == 200
+
+
+def test_the_auth_endpoint_advertises_the_discovery_url(client, secured, iam_issuer):
+    """So a client can find the IAM without having to provoke a 401 first."""
+    body = client.get("/api/v1/auth").json()
+    assert body["token_required"] is True
+    assert body["discovery_url"] == f"{iam_issuer}/.well-known/openid-configuration"
+
+
+# -- the setting ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("path", "required"),
+    [
+        ("/tap/sync", False),
+        ("/tap/async", False),
+        ("/tap/async/abc/results/result", False),
+        ("/tap/capabilities", False),
+        ("/tap/capabilities/", False),
+        ("/api/v1/auth", False),
+        ("/api/v1/software", True),
+        ("/api/v1/query", True),
+        ("/api/v1/jobs", True),
+        ("/api/v1/tables", True),
+    ],
+)
+def test_which_paths_need_a_token(path, required):
+    assert needs_token(path) is required
+
+
+def test_nothing_needs_a_token_when_the_requirement_is_off(auth_settings):
+    auth_settings(auth_require_token=False)
+    assert needs_token("/api/v1/software") is False
+
+
+def test_turning_the_requirement_off_restores_anonymous_reads(
+    client, auth_settings, stub_iam, iam_issuer, iam_audience
+):
+    auth_settings(
+        auth_enabled=True,
+        auth_plugin="iam-groups",
+        auth_roles=ROLES,
+        auth_require_token=False,
+        iam_issuer=iam_issuer,
+        iam_audience=iam_audience,
+    )
+    assert client.get("/api/v1/software").status_code == 200
+
+
+def test_authentication_disabled_leaves_everything_open(client):
+    assert client.get("/api/v1/software").status_code == 200
+    assert client.get("/api/v1/tables").status_code == 200

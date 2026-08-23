@@ -21,6 +21,7 @@ data:
   TAP_AUTH_ENABLED: {{ .Values.auth.enabled | quote }}
   {{- if .Values.auth.enabled }}
   TAP_AUTH_PLUGIN: {{ .Values.auth.plugin | quote }}
+  TAP_AUTH_REQUIRE_TOKEN: {{ .Values.auth.requireToken | quote }}
   TAP_IAM_ISSUER: {{ required "auth.iam.issuer is required when auth.enabled=true (tokens are always verified against the IAM)" .Values.auth.iam.issuer | quote }}
   {{- if not (or .Values.auth.iam.audience .Values.auth.iam.allowAnyAudience) }}
   {{- fail "auth.iam.audience is required when auth.enabled=true: without it, a token issued to any other client of the same IAM is accepted here. Set auth.iam.allowAnyAudience=true to accept that risk deliberately." }}

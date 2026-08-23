@@ -14,6 +14,20 @@ An operation this deployment does not enforce is let through exactly as it
 would be with auth off — but a token presented on any request is still
 verified and attached to ``request.state.principal``, so ownership and audit
 records get a subject when one is available.
+
+Authentication and authorisation are separate questions here, and the answers
+have different defaults. With ``TAP_AUTH_REQUIRE_TOKEN`` (the default), a
+request needs a *verified token*, reads included; the gate set then decides
+which requests additionally need a *decision* about that token. So a metadata
+`GET` needs a token and nothing more, while deleting a metadata document
+needs a token the plugin (IAM groups, or the SRCNet Permissions API)
+approves.
+
+Two sets of paths stay open regardless (see ``ANONYMOUS_PATHS`` and
+``ANONYMOUS_PREFIXES``): the endpoints a client reaches *before* it has a
+token, because the challenge it gets back is what names the IAM; and reading
+metadata through TAP itself — ``/tap/sync`` and the ``/tap/async`` job — so
+the VO toolchain keeps working.
 """
 
 import logging
@@ -26,9 +40,11 @@ from tapcore.auth import (
     active_auth_plugin,
     clear_job_viewer,
     gated_operations,
+    missing_token_challenge,
     set_job_viewer,
     verifier,
 )
+from tapcore.auth.challenge import discovery_url
 from tapcore.config import settings
 from tapcore.errors import AuthenticationError, AuthorizationError
 
@@ -80,6 +96,55 @@ def reset_plugin() -> None:
     _GATED = None
 
 
+# Reachable without a token even when one is required everywhere else.
+#
+# Two kinds of request are here. Service discovery and the health check are
+# asked by something that cannot hold a credential: a Kubernetes probe
+# (availability), a registry harvester or a VO client browsing for services
+# (capabilities, tables, the VOResource record, examples), and a client that
+# has not authenticated yet and is working out how to (/api/v1/auth, the
+# OpenAPI documents). Gating those would mean a service that cannot be
+# monitored, registered or discovered.
+ANONYMOUS_PATHS = frozenset(
+    {
+        "/",
+        "/tap/availability",
+        "/tap/capabilities",
+        "/tap/tables",
+        "/tap/registry",
+        "/tap/examples",
+        "/api/v1/auth",
+        "/openapi.json",
+        "/docs",
+        "/docs/oauth2-redirect",
+        "/redoc",
+    }
+)
+
+# The second kind is reading metadata through TAP itself — a synchronous query
+# and the UWS job that runs one — which stays open so PyVO, TOPCAT and the
+# rest of the VO toolchain keep working against a deployment with
+# authentication on. Prefixes, because a job is a tree of sub-resources
+# (/phase, /parameters, /results, …) and every one of them belongs to the
+# same read.
+#
+# Everything else — the JSON API's own query and job facades, metadata reads
+# under /api/v1/<mount>, and every mutation — needs a verified token.
+ANONYMOUS_PREFIXES = ("/tap/sync", "/tap/async")
+
+
+def needs_token(path: str) -> bool:
+    """Whether a request to ``path`` must carry a verified token."""
+    if not settings.auth_require_token:
+        return False
+    trimmed = path.rstrip("/") or "/"
+    if trimmed in ANONYMOUS_PATHS or path in ANONYMOUS_PATHS:
+        return False
+    return not any(
+        trimmed == prefix or trimmed.startswith(f"{prefix}/") for prefix in ANONYMOUS_PREFIXES
+    )
+
+
 def _bearer(request: Request) -> str | None:
     header = request.headers.get("authorization")
     if not header:
@@ -129,6 +194,12 @@ async def attach_principal(request: Request) -> None:
         clear_job_viewer()  # no ownership enforcement: behave as before
         return
     who = await run_in_threadpool(principal_of, request)
+    if who.is_anonymous and needs_token(request.url.path):
+        # the challenge names the IAM, so a client that arrived with nothing
+        # can go and get a token rather than guess which issuer to ask
+        raise AuthenticationError(
+            "this deployment requires a bearer token", challenge=missing_token_challenge()
+        )
     set_job_viewer(who.subject)
 
 
@@ -150,7 +221,9 @@ def require(operation: str):
             return getattr(request.state, "principal", ANONYMOUS)
         who = await run_in_threadpool(principal_of, request)
         if who.is_anonymous:
-            raise AuthenticationError(f"{operation} requires a bearer token")
+            raise AuthenticationError(
+                f"{operation} requires a bearer token", challenge=missing_token_challenge()
+            )
         context = {
             "operation": operation,
             "method": request.method,
@@ -188,6 +261,8 @@ def auth_summary() -> dict:
     return {
         "enabled": True,
         "plugin": active.name,
+        "token_required": settings.auth_require_token,
+        "discovery_url": discovery_url(),
         "issuer": settings.iam_issuer,
         "audience": settings.iam_audience or None,
     }

@@ -15,7 +15,7 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
-from tapcore.auth import verifier
+from tapcore.auth import invalid_token_challenge, verifier
 from tapcore.config import settings
 from tapcore.db import close_pool, pool
 from tapcore.errors import AuthenticationError, TAPError
@@ -99,17 +99,24 @@ async def tap_error_handler(request: Request, exc: TAPError):
     # DALI mandates VOTable error documents on the TAP endpoints; the JSON
     # API reports the same errors as JSON.
     headers = {}
+    message = exc.message
     if isinstance(exc, AuthenticationError):
-        # RFC 6750: a 401 has to say how to authenticate
-        headers["WWW-Authenticate"] = 'Bearer realm="skao-tap"'
+        # RFC 6750 wants a challenge on a 401; IVOA AuthVO wants one that
+        # names the IAM. Both go in the one header, in that order, so a
+        # client reading only the first still learns it needs a bearer token.
+        challenge = exc.challenge or invalid_token_challenge(exc.message)
+        headers["WWW-Authenticate"] = f'Bearer realm="skao-tap", {challenge}'
+        # and in the body too: that is where the SRCNet reference client (the
+        # DM product streamer's) reads the challenge from
+        message = f"{exc.message}. WWW-Authenticate: {challenge}"
     if request.url.path.startswith("/api/"):
         return JSONResponse(
-            {"error": type(exc).__name__, "message": exc.message},
+            {"error": type(exc).__name__, "message": message},
             status_code=exc.http_status,
             headers=headers,
         )
     return Response(
-        error_votable(exc.message),
+        error_votable(message),
         status_code=exc.http_status,
         media_type=VOTABLE_MIME,
         headers=headers,

@@ -101,17 +101,28 @@ def test_malformed_authorization_header_is_401(client, secured, software_payload
     assert response.status_code == 401
 
 
-def test_reads_and_queries_stay_anonymous(client, secured, software_payload, fake_db, bearer):
+def test_reading_metadata_through_tap_stays_anonymous(client, secured, fake_db):
     """Gating POST /tap/sync would lock every standard VO client out."""
-    client.post("/api/v1/software", json=software_payload, headers=bearer())
-    assert client.get("/api/v1/software").status_code == 200
-    assert client.get(f"/api/v1/software/{software_payload['uri']}").status_code == 200
-    assert client.get("/api/v1/tables").status_code == 200
     query = "SELECT source_id, ra FROM ska.continuum_sources"
     synchronous = client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": query})
-    job = client.post("/api/v1/jobs", json={"query": query})
+    job = client.post("/tap/async", data={"LANG": "ADQL", "QUERY": query}, follow_redirects=False)
     assert synchronous.status_code == 200
-    assert job.status_code == 201
+    assert job.status_code == 303
+
+
+def test_the_json_api_needs_a_token_even_to_read(client, secured, software_payload, bearer):
+    """The VO toolchain is why /tap/sync stays open; a JSON client is not it,
+    and can be expected to authenticate."""
+    client.post("/api/v1/software", json=software_payload, headers=bearer())
+    anonymous_list = client.get("/api/v1/software")
+    anonymous_item = client.get(f"/api/v1/software/{software_payload['uri']}")
+    anonymous_tables = client.get("/api/v1/tables")
+    assert anonymous_list.status_code == 401
+    assert anonymous_item.status_code == 401
+    assert anonymous_tables.status_code == 401
+    # a valid token is all a read needs: no role is configured for reading
+    assert client.get("/api/v1/software", headers=bearer()).status_code == 200
+    assert client.get("/api/v1/tables", headers=bearer()).status_code == 200
 
 
 def test_a_bad_token_is_rejected_even_on_an_open_endpoint(client, secured, forged_keypair, bearer):

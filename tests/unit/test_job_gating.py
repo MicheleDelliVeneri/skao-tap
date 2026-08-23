@@ -133,7 +133,7 @@ def test_every_operation_is_selectable(auth_settings):
 # -- the default: querying stays anonymous ----------------------------------
 
 
-def test_jobs_and_queries_stay_anonymous_by_default(client, default_gates, fake_db):
+def test_tap_queries_and_jobs_stay_anonymous_by_default(client, default_gates, fake_db):
     """Enabling auth must not, on its own, lock standard VO clients out."""
     job_id = _create(client)
     queried = client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": QUERY})
@@ -148,8 +148,10 @@ def test_jobs_and_queries_stay_anonymous_by_default(client, default_gates, fake_
     assert queried.status_code == 200
     assert mutated.status_code == 303
     assert deleted.status_code == 303
-    assert json_job.status_code == 201
-    assert json_query.status_code == 200
+    # the JSON facade is not the VO toolchain: it needs a token to be reached
+    # at all, so these are 401 rather than a gate decision
+    assert json_job.status_code == 401
+    assert json_query.status_code == 401
 
 
 # -- opting in: every path to a job needs a token ---------------------------
