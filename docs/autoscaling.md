@@ -14,10 +14,15 @@ than inherit.
 
 ## The API scales on CPU
 
-ADQL translation is pure-Python ANTLR and holds the GIL, so a busy API pod is
-a hot CPU — measured, not assumed: one worker served 59 requests/s at 8
-concurrent clients where four workers served 210 on the same machine. CPU is
-therefore the signal, and it needs nothing beyond metrics-server:
+ADQL translation is pure-Python ANTLR and holds the GIL, so one worker cannot
+use more than one core however large the pod's CPU limit is — which makes CPU
+the signal, and it needs nothing beyond metrics-server:
+
+!!! note "The worker figures here predate the translation fast path"
+    They were measured when translation cost 41 ms per request; it now costs
+    1.2 ms. More workers still add capacity, but the numbers below understate
+    what one worker does and are being re-measured — see
+    [Performance](performance/index.md).
 
 ```yaml
 horizontalAutoscaling:
