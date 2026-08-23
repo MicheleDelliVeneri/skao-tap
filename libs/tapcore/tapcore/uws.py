@@ -11,6 +11,7 @@ from xml.etree import ElementTree as ET
 from .auth.context import current_job_viewer
 from .config import settings
 from .errors import AuthorizationError, NotFoundError
+from .observability import request_id
 
 JOB_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
@@ -25,7 +26,7 @@ ALL_PHASES = ACTIVE_PHASES | FINAL_PHASES
 JOB_COLUMNS = (
     "job_id, phase, run_id, owner_id, quote, creation_time, start_time, end_time, "
     "execution_duration, destruction, parameters, query_sql, error_type, "
-    "error_message, result_mime, result_size, backend_pid"
+    "error_message, result_mime, result_size, backend_pid, request_id"
 )
 
 
@@ -67,8 +68,9 @@ def create_job(conn, parameters: dict[str, str], owner_id: str | None = None) ->
     conn.execute(
         """
         INSERT INTO uws.jobs (job_id, phase, run_id, owner_id, creation_time,
-                              execution_duration, destruction, parameters)
-        VALUES (%s, 'PENDING', %s, %s, %s, %s, %s, %s::jsonb)
+                              execution_duration, destruction, parameters,
+                              request_id)
+        VALUES (%s, 'PENDING', %s, %s, %s, %s, %s, %s::jsonb, %s)
         """,
         (
             job_id,
@@ -78,6 +80,9 @@ def create_job(conn, parameters: dict[str, str], owner_id: str | None = None) ->
             settings.default_exec_duration_s,
             destruction,
             json.dumps(parameters),
+            # the request that created the job, so the executor's records and
+            # the API's describe the same piece of work
+            request_id(),
         ),
     )
     return get_job(conn, job_id)

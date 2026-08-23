@@ -23,57 +23,18 @@ soft anti-affinity/zone-spread and PodDisruptionBudgets for multi-replica
 services, opt-in VerticalPodAutoscalers per service, `postgresql.tuning`
 server arguments for right-sizing the in-chart database, a scheduled
 `pg_dump` backup CronJob with retention, and documented HA-PostgreSQL,
-PITR and restore procedures — see the deployment guide).
+PITR and restore procedures — see the deployment guide), and package 4
+(identity and registry: INDIGO IAM bearer tokens verified against the
+issuer's JWKS, authorisation behind a plugin with the SRCNet Permissions API
+and local IAM groups shipped, seven gateable operations with the query surface
+enforced as a group, IVOA AuthVO challenges naming the IAM, job ownership and
+attributable deletion, and a VOResource record at /tap/registry — see the
+authentication and registry guides).
 
-## Package 4 — Identity and registry — *current*
+## Package 7 — Queryable region footprints (`s_region`) — *blocked*
 
-Authentication and authorisation follow the SRCNet flow rather than a
-service-local scheme: **INDIGO IAM** issues the tokens, and the
-[SKA SRC Permissions API](https://gitlab.com/ska-telescope/src/src-service-apis/ska-src-permissions-api)
-decides what the bearer of a token may do.
-
-- **INDIGO IAM bearer tokens**: accept `Authorization: Bearer <token>` on
-  `/tap/*` and `/api/v1/*`, validating the access token against the IAM
-  issuer's OIDC discovery document and JWKS (signature, `iss`, `aud`,
-  `exp`, required scopes), with the issuer, audience and JWKS cache TTL as
-  chart values. The token subject becomes the request identity.
-- **Permissions API for authorisation**: no permission logic in this
-  service. Each protected request is checked against a `type=route`
-  policy (HTTP method + path) held by the Permissions API, which maps IAM
-  group membership — read through its `/gms` Group Membership Service
-  endpoint — onto roles and evaluates the route's role expression. The
-  policies for the TAP service are versioned in the Permissions API's
-  environment directories, not here.
-- ~~**What gets protected**~~ *(done)*: seven operations can be gated —
-  `metadata.ingest`/`amend`/`delete` on every metadata domain (a `DELETE`
-  cascades through a whole document hierarchy), `jobs.create`,
-  `jobs.mutate`, `jobs.delete` and `query.sync`. A deployment chooses which
-  it enforces (`auth.gatedOperations`); the default is metadata mutation
-  only. Whether a request needs a token at all is a separate switch pair —
-  `auth.requireToken` (on by default) and `auth.anonymousQueries` (off), the
-  second of which is what a deployment serving standard VO clients turns on.
-- **Token exchange for downstream calls**: not required — this service calls
-  no other SRCNet service on a user's behalf. If that changes, exchange the
-  incoming token through the Permissions API (`type=exchange` policies) for
-  one carrying the target audience rather than forwarding the original.
-- ~~**Job ownership**~~ *(done)*: UWS `ownerId` comes from the validated
-  token subject, and the job list and job resources are scoped to the owner;
-  anonymous jobs stay ownerless and world-visible, as they were. Groundwork
-  for per-user schemas and quotas, which remain open.
-- ~~**Deletion becomes attributable**~~ *(done)*: the audit record written on
-  `DELETE /api/v1/<mount>/{root_id}` names the authenticated subject.
-- **Graceful degradation**: a deployment with no IAM issuer configured
-  behaves exactly as today (fully anonymous), so local development and the
-  demo notebook are unaffected.
-- ~~**VOResource record**~~ *(done)*: `GET /tap/registry` serves a
-  `vs:CatalogService` record built from `voRegistry.*` chart values and the
-  live capability elements, so it cannot drift from `/tap/capabilities`. Off
-  until a deployment has an IVOA authority to publish under — see the
-  [registry guide](registry.md). Submitting the record to a publishing
-  registry stays a deliberate manual step; an OAI-PMH interface for direct
-  harvesting is the remaining piece.
-
-## Package 7 — Queryable region footprints (`s_region`)
+Waiting on `ska-src-mm-notification` 0.1.8, which adds the STC-S validator
+this depends on; the upstream change is raised.
 
 The notification model carries `s_region` (STC-S/pgsphere-style strings,
 e.g. `CIRCLE 3.5867 -30.4 0.25`) on data products and artifacts, but the
@@ -99,7 +60,7 @@ ingested metadata.
 - **Amendments follow**: `PATCH` updates to `s_region` re-derive the
   geometry column.
 
-## Package 8 — Unified SRCNet logging and observability
+## Package 8 — Unified SRCNet logging and observability — *current*
 
 The services currently use ad-hoc `logging.getLogger("tap_api")` /
 `"tapcore"` loggers with the default formatting, so their output does not

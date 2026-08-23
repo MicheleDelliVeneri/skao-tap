@@ -1,0 +1,143 @@
+"""Correlation ids, SQL tagging and the metrics endpoint.
+
+What these pin is the ability to answer "which request caused this?" without
+reproducing anything locally — the thing whose absence made the last three
+performance fixes take a local harness and a sampling profiler.
+"""
+
+import pytest
+from prometheus_client import generate_latest
+from tapcore import observability as obs
+
+QUERY = "SELECT source_id, ra FROM ska.continuum_sources"
+
+
+# -- the correlation id -----------------------------------------------------
+
+
+def test_a_request_gets_an_id_and_is_told_what_it_is(client):
+    response = client.get("/tap/availability")
+    assert response.headers[obs.REQUEST_ID_HEADER]
+
+
+def test_an_id_supplied_by_the_caller_is_kept(client):
+    """A gateway or client that already traces a request must not have that
+    broken here."""
+    response = client.get("/tap/availability", headers={obs.REQUEST_ID_HEADER: "caller-chosen-id"})
+    assert response.headers[obs.REQUEST_ID_HEADER] == "caller-chosen-id"
+
+
+def test_ids_differ_between_requests(client):
+    first = client.get("/tap/availability").headers[obs.REQUEST_ID_HEADER]
+    second = client.get("/tap/availability").headers[obs.REQUEST_ID_HEADER]
+    assert first != second
+
+
+def test_the_job_records_the_request_that_created_it(client, fake_db):
+    """This is what lets an executor's records name the request: the id is on
+    the row, not only in the API's own logs."""
+    created = client.post(
+        "/tap/async",
+        data={"LANG": "ADQL", "QUERY": QUERY},
+        headers={obs.REQUEST_ID_HEADER: "job-origin-id"},
+        follow_redirects=False,
+    )
+    job_id = created.headers["location"].rsplit("/", 1)[-1]
+    assert fake_db.jobs[job_id]["request_id"] == "job-origin-id"
+
+
+# -- tagging the SQL --------------------------------------------------------
+
+
+@pytest.fixture
+def with_request_id():
+    obs.set_request_id("abc123")
+    yield "abc123"
+    obs.set_request_id(None)
+
+
+def test_a_statement_is_tagged_with_the_request(with_request_id):
+    assert obs.tag_sql("SELECT 1") == "SELECT 1 /* rid=abc123 */"
+
+
+def test_the_tag_goes_inside_the_statement(with_request_id):
+    """After the semicolon it would be a second, empty statement."""
+    assert obs.tag_sql("SELECT 1;") == "SELECT 1 /* rid=abc123 */;"
+
+
+def test_a_tagged_statement_still_starts_with_its_verb(with_request_id):
+    """Prefixing would break everything that reads the start of a query."""
+    assert obs.tag_sql("SELECT 1").startswith("SELECT")
+
+
+def test_without_an_id_the_statement_is_untouched():
+    obs.set_request_id(None)
+    assert obs.tag_sql("SELECT 1;") == "SELECT 1;"
+
+
+def test_the_query_carries_the_tag_to_the_database(client, fake_db):
+    client.post(
+        "/tap/sync",
+        data={"LANG": "ADQL", "QUERY": QUERY},
+        headers={obs.REQUEST_ID_HEADER: "deadbeef"},
+    )
+    executed = [s for s in fake_db.statements if "continuum_sources" in s]
+    assert executed, "the query never reached the database"
+    assert any("/* rid=deadbeef */" in s for s in executed)
+
+
+# -- the metrics endpoint ---------------------------------------------------
+
+
+def test_metrics_are_served_without_a_redirect(client):
+    """Scrape configs and pod annotations say /metrics; a scraper that does
+    not follow redirects has to get the exposition from that exact path."""
+    response = client.get("/metrics", follow_redirects=False)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        "tap_db_pool_wait_seconds",  # the signal the pool collapse needed
+        "tap_db_pool_exhausted_total",
+        "tap_db_connections_in_use",
+        "tap_query_duration_seconds",
+        "tap_jobs",
+        "tap_oldest_queued_job_seconds",
+        "tap_jobs_completed_total",
+    ],
+)
+def test_the_endpoint_exposes_the_metric(client, metric):
+    assert metric in client.get("/metrics").text
+
+
+def test_running_a_query_records_its_duration(client, fake_db):
+    before = generate_latest(obs.REGISTRY).decode()
+    client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": QUERY})
+    after = generate_latest(obs.REGISTRY).decode()
+
+    def sync_count(text):
+        for line in text.splitlines():
+            if line.startswith('tap_query_duration_seconds_count{kind="sync"}'):
+                return float(line.split()[-1])
+        return 0.0
+
+    assert sync_count(after) == sync_count(before) + 1
+
+
+def test_the_pool_wait_is_recorded_even_when_it_is_short(client, fake_db):
+    """The histogram has to see the healthy case too, or its tail means
+    nothing."""
+    before = generate_latest(obs.REGISTRY).decode()
+    client.get("/tap/tables")
+    after = generate_latest(obs.REGISTRY).decode()
+
+    def wait_count(text):
+        for line in text.splitlines():
+            if line.startswith("tap_db_pool_wait_seconds_count"):
+                return float(line.split()[-1])
+        return 0.0
+
+    assert wait_count(after) > wait_count(before)

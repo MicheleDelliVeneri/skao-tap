@@ -62,6 +62,16 @@ class Settings:
     wait_max_s: int = field(default_factory=lambda: int(os.getenv("TAP_WAIT_MAX", "60")))
     model_plugins: str = field(default_factory=lambda: os.getenv("TAP_MODEL_PLUGINS", "all"))
     log_level: str = field(default_factory=lambda: os.getenv("TAP_LOG_LEVEL", "INFO"))
+    # Where to send OpenTelemetry traces. Empty means nowhere, and nothing is
+    # instrumented — a deployment without a collector should not pay for one.
+    otlp_endpoint: str = field(
+        default_factory=lambda: os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+    )
+    # Port the executor serves its metrics on; the API serves them on its own
+    # port at /metrics, but a worker loop has no listener of its own.
+    executor_metrics_port: int = field(
+        default_factory=lambda: int(os.getenv("TAP_EXECUTOR_METRICS_PORT", "9100"))
+    )
 
     # -- database connection pool ------------------------------------------
     # The pool bounds how many queries a process can have in flight, so it is

@@ -4,7 +4,6 @@ Implements the TAP 1.1 endpoint set: /sync, /async (UWS 1.1), and the VOSI
 resources /capabilities, /availability, /tables, plus DALI /examples.
 """
 
-import logging
 import time
 from contextlib import asynccontextmanager
 
@@ -16,14 +15,26 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from psycopg_pool import PoolTimeout
+from ska_src_logging import LogContext
+from ska_src_logging.integrations.fastapi import setup_otel_fastapi, setup_uvicorn_logging
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from tapcore.auth import invalid_token_challenge, verifier
 from tapcore.config import settings
-from tapcore.db import close_pool, pool
+from tapcore.db import close_pool
+from tapcore.db import connection as db_connection
 from tapcore.errors import AuthenticationError, OverloadedError, TAPError
 from tapcore.metadata import ingest
 from tapcore.metadata.plugins import active_plugins
+from tapcore.observability import (
+    DB_POOL_EXHAUSTED,
+    REGISTRY,
+    REQUEST_ID_HEADER,
+    configure_logging,
+    new_request_id,
+    set_request_id,
+)
 from tapcore.query.votable import error_votable
 
 from . import auth
@@ -34,16 +45,11 @@ from .queries.params import gather_params
 from .queries.query import forget_published_tables, prepare_query, run_sync
 from .queries.uploads import gather_upload_files, parse_uploads, resolve_upload_sources
 
-# uvicorn only configures its own loggers, so without this the service's own
-# records (schema bootstrap, legacy-table warnings, the metadata deletion
-# audit trail) never reach a handler above WARNING. The executor does the
-# same; package 8 of the roadmap replaces both with ska-src-logging.
-logging.basicConfig(
-    level=settings.log_level.upper(),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
-
-log = logging.getLogger("tap-api")
+# Structured records with SRCNet's shared fields, JSON in a container and
+# coloured console when a human is watching. This also configures uvicorn's
+# own loggers, which otherwise keep their own format.
+log = configure_logging("tap-api")
+setup_uvicorn_logging("tap-api")
 
 
 def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
@@ -59,10 +65,11 @@ def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
         verifier()
     for attempt in range(1, attempts + 1):
         try:
-            with pool().connection() as conn, conn.transaction():
+            with db_connection() as conn, conn.transaction():
                 # forward-migrate deployments whose uws.jobs predates ABORT
                 # support (the column is in db/init for fresh databases)
                 conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS backend_pid integer")
+                conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS request_id text")
                 for plugin in plugins:
                     ingest.ensure_schema(conn, plugin)
             return
@@ -94,6 +101,44 @@ app = FastAPI(
     # decide what a verified principal is then allowed to do
     dependencies=[Depends(auth.attach_principal)],
 )
+
+
+@app.middleware("http")
+async def correlate(request: Request, call_next):
+    """Give every request an id, and put it where the logs and the database
+    can see it.
+
+    An id supplied by the caller is kept — a client or gateway that already
+    traces a request should not have that broken here — and returned on the
+    response so a caller can quote it when reporting a problem.
+    """
+    incoming = request.headers.get(REQUEST_ID_HEADER)
+    rid = incoming or new_request_id()
+    set_request_id(rid)
+    with LogContext(request_id=rid, path=request.url.path):
+        response = await call_next(request)
+    response.headers[REQUEST_ID_HEADER] = rid
+    return response
+
+
+# /metrics rather than the library's default /v1/metrics: this service's own
+# versioned namespace is /api/v1, and the metrics are not part of that API.
+#
+# Served as a route rather than through the library's helper, which mounts a
+# sub-application and so answers /metrics with a 307 to /metrics/. Scrape
+# configs and pod annotations say /metrics, and a scraper that does not follow
+# redirects would see nothing. The exposition is identical — same registry.
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
+
+
+# Traces only when someone is collecting them, so a deployment without a
+# collector pays nothing and needs no extra configuration.
+if settings.otlp_endpoint:
+    setup_otel_fastapi(app, service_name="tap-api", otlp_endpoint=settings.otlp_endpoint)
+    log.info("OpenTelemetry traces exported to %s", settings.otlp_endpoint)
+
 app.include_router(uws_router, prefix="/tap/async")
 app.include_router(json_router)
 
@@ -108,6 +153,7 @@ async def pool_timeout_handler(request: Request, exc: PoolTimeout):
     condition, not a fault. Retry-After lets a client or proxy back off instead
     of retrying immediately into the same wall.
     """
+    DB_POOL_EXHAUSTED.inc()
     log.warning("connection pool exhausted serving %s", request.url.path)
     overloaded = OverloadedError(
         "all database connections are busy; retry shortly"

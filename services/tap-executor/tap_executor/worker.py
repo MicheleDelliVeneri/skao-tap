@@ -8,15 +8,26 @@ the job phase. Also garbage-collects jobs past their destruction time.
 """
 
 import datetime
-import logging
 import os
 import shutil
 import threading
 import time
 
+from prometheus_client import start_http_server
+from ska_src_logging import LogContext
 from tapcore import uws
 from tapcore.config import settings
-from tapcore.db import pool
+from tapcore.db import connection as db_connection
+from tapcore.observability import (
+    JOBS_BY_PHASE,
+    JOBS_COMPLETED,
+    OLDEST_QUEUED_JOB,
+    QUERY_DURATION,
+    REGISTRY,
+    configure_logging,
+    set_request_id,
+    tag_sql,
+)
 from tapcore.query.adql import apply_maxrec, touched_tables
 from tapcore.query.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
 from tapcore.query.upload import (
@@ -27,8 +38,7 @@ from tapcore.query.upload import (
 )
 from tapcore.query.votable import normalize_format
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("tap-executor")
+log = configure_logging("tap-executor")
 
 POLL_INTERVAL_S = 1.0
 CLEANUP_INTERVAL_S = 60.0
@@ -88,7 +98,7 @@ class _AbortWatchdog:
         marker = uws.job_query_marker(self._job_id)
         while not self._stop.wait(self.POLL_S):
             try:
-                with pool().connection() as conn:
+                with db_connection() as conn:
                     row = conn.execute(
                         "SELECT phase FROM uws.jobs WHERE job_id = %s", (self._job_id,)
                     ).fetchone()
@@ -132,7 +142,7 @@ def _reap_backend(job_id: str, pid: int | None) -> None:
         return
     marker = uws.job_query_marker(job_id)
     try:
-        with pool().connection() as conn:
+        with db_connection() as conn:
             for attempt in range(8):
                 row = conn.execute(
                     "SELECT state FROM pg_stat_activity WHERE pid = %s AND query LIKE %s",
@@ -159,7 +169,7 @@ def _reap_backend(job_id: str, pid: int | None) -> None:
 
 
 def claim_job() -> dict | None:
-    with pool().connection() as conn:
+    with db_connection() as conn:
         row = conn.execute(CLAIM_SQL).fetchone()
     if row is None:
         return None
@@ -170,11 +180,22 @@ def execute_job(job: dict) -> None:
     job_id = job["job_id"]
     params = job["parameters"] or {}
     backend_pid = None
+    set_request_id(job.get("request_id"))
+    started = time.monotonic()
+    with LogContext(
+        job_id=job_id,
+        owner_id=job.get("owner_id"),
+        request_id=job.get("request_id"),
+    ):
+        _execute_job_inner(job, job_id, params, backend_pid, started)
+
+
+def _execute_job_inner(job: dict, job_id, params, backend_pid, started) -> None:
     log.info("executing job %s", job_id)
     try:
         maxrec = min(int(params.get("MAXREC", settings.default_maxrec)), settings.hard_maxrec)
         fmt_key, mime, ext = normalize_format(params.get("RESPONSEFORMAT") or params.get("FORMAT"))
-        sql = apply_maxrec(job["query_sql"], maxrec)
+        sql = tag_sql(apply_maxrec(job["query_sql"], maxrec))
 
         uploads = []
         if params.get("UPLOAD"):
@@ -191,7 +212,7 @@ def execute_job(job: dict) -> None:
         # stream from a server-side cursor straight into the result file, so
         # large result sets are never materialized in memory
         result_size = 0
-        with pool().connection() as conn, conn.transaction():
+        with db_connection() as conn, conn.transaction():
             tap_meta = tap_schema_metadata(conn, touched_tables(job["query_sql"]))
             if uploads:
                 create_upload_tables(conn, uploads, settings.query_role)
@@ -205,7 +226,7 @@ def execute_job(job: dict) -> None:
             # conditionally, so an ABORT that already landed is honoured
             # before the query starts and never gains a stale PID
             backend_pid = pid = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
-            with pool().connection() as side:
+            with db_connection() as side:
                 published = side.execute(
                     "UPDATE uws.jobs SET backend_pid = %s"
                     " WHERE job_id = %s AND phase = 'EXECUTING'",
@@ -232,7 +253,7 @@ def execute_job(job: dict) -> None:
                     for chunk in stream(columns, limiter, fmt_key):
                         result_size += fh.write(chunk)
 
-        with pool().connection() as conn:
+        with db_connection() as conn:
             # atomic transition: an ABORT committed at any point (even
             # between this statement and the stream ending) can never be
             # overwritten with COMPLETED
@@ -246,11 +267,13 @@ def execute_job(job: dict) -> None:
             shutil.rmtree(result_dir, ignore_errors=True)
             log.info("job %s finished but was already finalized; discarding", job_id)
             return
+        JOBS_COMPLETED.labels(phase="COMPLETED").inc()
+        QUERY_DURATION.labels(kind="async").observe(time.monotonic() - started)
         log.info("job %s completed (%d rows, %s)", job_id, limiter.count, limiter.status)
     except Exception as exc:
         shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
         _reap_backend(job_id, backend_pid)
-        with pool().connection() as conn:
+        with db_connection() as conn:
             current = uws.get_job(conn, job_id)
             if current["phase"] != "ABORTED":
                 # grace re-read: an ABORT's phase commit can trail the
@@ -259,6 +282,7 @@ def execute_job(job: dict) -> None:
                 current = uws.get_job(conn, job_id)
             if current["phase"] == "ABORTED":
                 # ABORT cancelled our statement mid-run: not an error
+                JOBS_COMPLETED.labels(phase="ABORTED").inc()
                 log.info("job %s aborted while executing", job_id)
                 return
             # atomic: a racing ABORT wins, never overwritten with ERROR
@@ -275,7 +299,7 @@ def execute_job(job: dict) -> None:
 
 
 def cleanup_expired() -> None:
-    with pool().connection() as conn:
+    with db_connection() as conn:
         rows = conn.execute(
             "DELETE FROM uws.jobs WHERE destruction < now() RETURNING job_id"
         ).fetchall()
@@ -289,8 +313,9 @@ def _ensure_backend_pid_column(attempts: int = 30, delay_s: float = 2.0) -> None
     also what CLAIM_SQL needs, so retry until the database is reachable."""
     for attempt in range(1, attempts + 1):
         try:
-            with pool().connection() as conn:
+            with db_connection() as conn:
                 conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS backend_pid integer")
+                conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS request_id text")
             return
         except Exception as exc:
             if attempt == attempts:
@@ -299,11 +324,45 @@ def _ensure_backend_pid_column(attempts: int = 30, delay_s: float = 2.0) -> None
             time.sleep(delay_s)
 
 
+QUEUE_METRICS_INTERVAL_S = 5.0
+
+
+def refresh_queue_metrics() -> None:
+    """Publish the queue's depth and backlog.
+
+    Reported by the executor because the queue is its subject, and because a
+    deployment with no executor running has no queue to speak of. Every
+    replica reports the same figures, so aggregate with max() rather than
+    sum() — the numbers describe one shared queue, not each worker's share.
+    """
+    with db_connection() as conn:
+        counts = conn.execute("SELECT phase, count(*) FROM uws.jobs GROUP BY phase").fetchall()
+        oldest = conn.execute(
+            "SELECT extract(epoch FROM now() - min(creation_time))"
+            " FROM uws.jobs WHERE phase = 'QUEUED'"
+        ).fetchone()
+    # clear first: a phase that no longer has jobs must stop reporting its
+    # last value rather than look stuck
+    JOBS_BY_PHASE.clear()
+    for phase, count in counts:
+        JOBS_BY_PHASE.labels(phase=phase).set(count)
+    OLDEST_QUEUED_JOB.set(float((oldest and oldest[0]) or 0.0))
+
+
 def main() -> None:
-    log.info("tap-executor started (results dir: %s)", settings.results_dir)
+    # A worker loop has no listener of its own, so metrics get one. Without it
+    # the queue is invisible: nothing outside the database could say how deep
+    # it is or how long jobs have waited.
+    start_http_server(settings.executor_metrics_port, registry=REGISTRY)
+    log.info(
+        "tap-executor started (results dir: %s, metrics on :%d)",
+        settings.results_dir,
+        settings.executor_metrics_port,
+    )
     os.makedirs(settings.results_dir, exist_ok=True)
     _ensure_backend_pid_column()
     last_cleanup = 0.0
+    last_queue_metrics = 0.0
     while True:
         # survive transient failures (e.g. an ABORT's pg_cancel_backend
         # racing a finished execution and cancelling a pooled connection)
@@ -312,6 +371,9 @@ def main() -> None:
             if job is not None:
                 execute_job(job)
                 continue
+            if time.monotonic() - last_queue_metrics > QUEUE_METRICS_INTERVAL_S:
+                refresh_queue_metrics()
+                last_queue_metrics = time.monotonic()
             if time.monotonic() - last_cleanup > CLEANUP_INTERVAL_S:
                 cleanup_expired()
                 last_cleanup = time.monotonic()

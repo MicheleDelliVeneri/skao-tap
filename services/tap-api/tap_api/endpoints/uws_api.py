@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse,
 from starlette.concurrency import run_in_threadpool
 from tapcore import uws
 from tapcore.config import settings
-from tapcore.db import pool
+from tapcore.db import connection as db_connection
 from tapcore.errors import NotFoundError, UsageError
 from tapcore.query.upload import save_upload_sources
 from tapcore.query.votable import error_votable
@@ -84,7 +84,7 @@ async def _get_job_waiting(job_id: str, request: Request) -> dict:
     until the phase changes or the wait time expires.
     """
     wait_s, expected = _parse_wait(request)
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
     if wait_s <= 0 or job["phase"] in uws.FINAL_PHASES:
         return job
@@ -92,7 +92,7 @@ async def _get_job_waiting(job_id: str, request: Request) -> dict:
     deadline = time.monotonic() + wait_s
     while job["phase"] == reference and time.monotonic() < deadline:
         await asyncio.sleep(min(WAIT_POLL_S, max(0.0, deadline - time.monotonic())))
-        with pool().connection() as conn:
+        with db_connection() as conn:
             job = uws.get_job(conn, job_id)
     return job
 
@@ -117,7 +117,7 @@ async def job_list(request: Request):
             after = datetime.datetime.fromisoformat(after.replace("Z", "+00:00"))
         except ValueError:
             raise UsageError("AFTER must be an ISO-8601 timestamp") from None
-    with pool().connection() as conn:
+    with db_connection() as conn:
         jobs = uws.list_jobs(conn, phases or None, last, after)
     return Response(uws.joblist_xml(jobs), media_type=XML)
 
@@ -135,7 +135,7 @@ async def create_job(request: Request):
     run_now = bool(phase and phase.upper() == "RUN")
     # translated off the event loop, before the connection is held
     prepared = await run_in_threadpool(prepare_query, params) if run_now else None
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.create_job(conn, params, owner_id=owner_of(request))
         if sources:
             save_upload_sources(job["job_id"], sources)
@@ -161,7 +161,7 @@ async def job_action(job_id: str, request: Request):
 
 @router.delete("/{job_id}", dependencies=[Depends(require("jobs.delete"))])
 async def delete_job(job_id: str):
-    with pool().connection() as conn:
+    with db_connection() as conn:
         uws.delete_job(conn, job_id)
     shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
     return RedirectResponse(f"{settings.base_url}/async", status_code=303)
@@ -180,10 +180,10 @@ async def post_phase(job_id: str, request: Request):
     prepared = None
     if phase == "RUN":
         # the job's own parameters, translated off the event loop
-        with pool().connection() as conn:
+        with db_connection() as conn:
             stored = uws.get_job(conn, job_id)
         prepared = await run_in_threadpool(prepare_query, stored["parameters"])
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
         if prepared is not None:  # set exactly when the phase is RUN
             _queue(conn, job, prepared)
@@ -196,7 +196,7 @@ async def post_phase(job_id: str, request: Request):
 
 @router.get("/{job_id}/executionduration")
 async def get_execution_duration(job_id: str):
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
     return PlainTextResponse(str(job["execution_duration"]))
 
@@ -208,7 +208,7 @@ async def post_execution_duration(job_id: str, request: Request):
         duration = int(params.get("EXECUTIONDURATION", ""))
     except ValueError:
         raise UsageError("EXECUTIONDURATION must be an integer number of seconds") from None
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
         if job["phase"] != "PENDING":
             raise UsageError("executionduration can only be set while the job is PENDING")
@@ -218,7 +218,7 @@ async def post_execution_duration(job_id: str, request: Request):
 
 @router.get("/{job_id}/destruction")
 async def get_destruction(job_id: str):
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
     return PlainTextResponse(_iso(job["destruction"]))
 
@@ -231,7 +231,7 @@ async def post_destruction(job_id: str, request: Request):
         when = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         raise UsageError("DESTRUCTION must be an ISO-8601 timestamp") from None
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
         uws.update_job(conn, job_id, destruction=when)
     return RedirectResponse(_job_url(job["job_id"]), status_code=303)
@@ -239,21 +239,21 @@ async def post_destruction(job_id: str, request: Request):
 
 @router.get("/{job_id}/quote")
 async def get_quote(job_id: str):
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
     return PlainTextResponse(_iso(job["quote"]) if job["quote"] else "")
 
 
 @router.get("/{job_id}/owner")
 async def get_owner(job_id: str):
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
     return PlainTextResponse(job["owner_id"] or "")
 
 
 @router.get("/{job_id}/parameters")
 async def get_parameters(job_id: str):
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
     return Response(uws.job_xml(job), media_type=XML)
 
@@ -261,7 +261,7 @@ async def get_parameters(job_id: str):
 @router.post("/{job_id}/parameters", dependencies=[Depends(require("jobs.mutate"))])
 async def post_parameters(job_id: str, request: Request):
     params = await gather_params(request)
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
         if job["phase"] != "PENDING":
             raise UsageError("parameters can only be updated while the job is PENDING")
@@ -273,14 +273,14 @@ async def post_parameters(job_id: str, request: Request):
 
 @router.get("/{job_id}/results")
 async def get_results(job_id: str):
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
     return Response(uws.job_xml(job), media_type=XML)
 
 
 @router.get("/{job_id}/results/result")
 async def get_result(job_id: str):
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
     if job["phase"] != "COMPLETED":
         raise NotFoundError(f"job {job_id} has no result (phase {job['phase']})")
@@ -296,7 +296,7 @@ async def get_result(job_id: str):
 
 @router.get("/{job_id}/error")
 async def get_error(job_id: str):
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
     return Response(
         error_votable(job["error_message"] or "no error"),

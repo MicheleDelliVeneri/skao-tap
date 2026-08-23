@@ -38,6 +38,10 @@ Key values (see `values.yaml` for the full list):
 | `verticalAutoscaling.enabled` | `false` | VPA per service (recommendation mode first) |
 | `postgresql.tuning` | `{}` | postgresql.conf overrides as `-c` server arguments |
 | `backup.enabled` | `false` | Nightly `pg_dump` CronJob to a dedicated PVC |
+| `metrics.scrapeAnnotations` | `true` | Annotate pods so an existing Prometheus discovers them ([guide](observability.md)) |
+| `prometheus.enabled` | `false` | Deploy a Prometheus for testing; production scrapes with its own |
+| `tracing.otlpEndpoint` | `""` | Export traces; empty means no collector and no instrumentation |
+| `config.executorMetricsPort` | `9100` | Port the executor serves metrics on — it has no API of its own |
 | `config.dbPoolMax` | `8` | Database connections per process — the real limit on concurrent queries |
 | `config.dbPoolTimeoutSeconds` | `5` | How long a request waits for one before answering `503` |
 | `tapApi.workers` | `1` | Uvicorn processes per pod; ADQL translation holds the GIL, so this is what lets a pod use more than one core |

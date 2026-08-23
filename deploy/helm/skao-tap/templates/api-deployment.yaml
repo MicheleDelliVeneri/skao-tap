@@ -13,6 +13,11 @@ spec:
       app.kubernetes.io/component: tap-api
   template:
     metadata:
+      annotations:
+        # the API serves metrics on its own port; a deployment's own Prometheus discovers pods by these
+        prometheus.io/scrape: {{ .Values.metrics.scrapeAnnotations | quote }}
+        prometheus.io/path: /metrics
+        prometheus.io/port: "{{ .Values.tapApi.port }}"
       labels:
         {{- include "skao-tap.labels" . | nindent 8 }}
         app.kubernetes.io/component: tap-api

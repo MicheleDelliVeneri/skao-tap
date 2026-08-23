@@ -1,8 +1,11 @@
 """PostgreSQL access via a shared psycopg3 connection pool."""
 
+import contextlib
+
 from psycopg_pool import ConnectionPool
 
 from .config import settings
+from .observability import DB_CONNECTIONS_IN_USE, pool_wait_timer
 
 _pool: ConnectionPool | None = None
 
@@ -20,6 +23,22 @@ def pool() -> ConnectionPool:
             open=True,
         )
     return _pool
+
+
+@contextlib.contextmanager
+def connection():
+    """A pooled connection, with the wait for it measured.
+
+    Prefer this to ``pool().connection()``: waiting for a connection is the
+    service's real backpressure signal, and it was invisible when a busy pool
+    took a whole worker down with it.
+    """
+    with pool_wait_timer(), pool().connection() as conn:
+        DB_CONNECTIONS_IN_USE.inc()
+        try:
+            yield conn
+        finally:
+            DB_CONNECTIONS_IN_USE.dec()
 
 
 def close_pool() -> None:

@@ -120,10 +120,10 @@ def test_pool_exhaustion_answers_503_with_retry_after(client, monkeypatch):
     from psycopg_pool import PoolTimeout
     from tap_api.queries import query as query_module
 
-    def exhausted():
+    def exhausted(*args, **kwargs):
         raise PoolTimeout("couldn't get a connection after 5.00 sec")
 
-    monkeypatch.setattr(query_module, "pool", exhausted)
+    monkeypatch.setattr(query_module, "db_connection", exhausted)
     response = client.post(
         "/tap/sync", data={"LANG": "ADQL", "QUERY": "SELECT ra FROM ska.continuum_sources"}
     )

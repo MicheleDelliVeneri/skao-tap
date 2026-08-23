@@ -212,7 +212,16 @@ class FakeDB:
             return FakeResult(self.json_tables)
 
         if head.startswith("INSERT INTO UWS.JOBS"):
-            job_id, run_id, owner_id, created, duration, destruction, parameters = params
+            (
+                job_id,
+                run_id,
+                owner_id,
+                created,
+                duration,
+                destruction,
+                parameters,
+                request_id,
+            ) = params
             self.jobs[job_id] = dict.fromkeys(JOB_KEYS) | {
                 "job_id": job_id,
                 "phase": "PENDING",
@@ -222,6 +231,7 @@ class FakeDB:
                 "execution_duration": duration,
                 "destruction": destruction,
                 "parameters": json.loads(parameters),
+                "request_id": request_id,
             }
             return FakeResult(rowcount=1)
 

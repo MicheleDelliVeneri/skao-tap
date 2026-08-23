@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from tapcore import uws
 from tapcore.config import settings
-from tapcore.db import pool
+from tapcore.db import connection as db_connection
 from tapcore.errors import NotFoundError, UsageError
 from tapcore.metadata import ingest
 from tapcore.metadata.plugins import MetadataPlugin, active_plugins
@@ -185,7 +185,7 @@ async def create_job(body: JobRequest, request: Request):
     # validate before storing, unlike the lenient UWS XML flow — and keep the
     # result, so running the job now does not re-translate the same query
     prepared = await run_in_threadpool(prepare_query, params)
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.create_job(conn, params, owner_id=owner_of(request))
         if body.run:
             _queue(conn, job, prepared)
@@ -206,7 +206,7 @@ async def list_jobs(phase: str | None = None, last: int | None = None, after: st
             since = datetime.datetime.fromisoformat(after.replace("Z", "+00:00"))
         except ValueError:
             raise UsageError("after must be an ISO-8601 timestamp") from None
-    with pool().connection() as conn:
+    with db_connection() as conn:
         jobs = uws.list_jobs(conn, phases, last, since)
     return {"jobs": [_job_json(j) for j in jobs]}
 
@@ -220,7 +220,7 @@ async def get_job(job_id: str, wait: int | None = None):
         raise UsageError("wait must be >= -1")
     if wait == -1:
         wait = settings.wait_max_s
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
     if wait and job["phase"] in uws.ACTIVE_PHASES:
         from .uws_api import WAIT_POLL_S
@@ -229,7 +229,7 @@ async def get_job(job_id: str, wait: int | None = None):
         deadline = time.monotonic() + min(wait, settings.wait_max_s)
         while job["phase"] == reference and time.monotonic() < deadline:
             await asyncio.sleep(min(WAIT_POLL_S, max(0.0, deadline - time.monotonic())))
-            with pool().connection() as conn:
+            with db_connection() as conn:
                 job = uws.get_job(conn, job_id)
     return _job_json(job)
 
@@ -244,10 +244,10 @@ async def post_phase(job_id: str, body: PhaseRequest):
     prepared = None
     if phase == "RUN":
         # the job's own parameters, translated off the event loop
-        with pool().connection() as conn:
+        with db_connection() as conn:
             stored = uws.get_job(conn, job_id)
         prepared = await run_in_threadpool(prepare_query, stored["parameters"])
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
         if prepared is not None:  # set exactly when the phase is RUN
             _queue(conn, job, prepared)
@@ -260,7 +260,7 @@ async def post_phase(job_id: str, body: PhaseRequest):
 
 @router.delete("/jobs/{job_id}", status_code=204, dependencies=[Depends(require("jobs.delete"))])
 async def delete_job(job_id: str):
-    with pool().connection() as conn:
+    with db_connection() as conn:
         uws.delete_job(conn, job_id)
     try:
         shutil.rmtree(uws.job_results_dir(job_id))
@@ -278,7 +278,7 @@ async def delete_job(job_id: str):
 
 @router.get("/jobs/{job_id}/result")
 async def get_result(job_id: str):
-    with pool().connection() as conn:
+    with db_connection() as conn:
         job = uws.get_job(conn, job_id)
     if job["phase"] != "COMPLETED":
         raise NotFoundError(f"job {job_id} has no result (phase {job['phase']})")
@@ -304,7 +304,7 @@ async def get_result(job_id: str):
 @router.get("/tables")
 async def tables():
     """JSON rendering of TAP_SCHEMA (machine-friendly alternative to VOSI XML)."""
-    with pool().connection() as conn:
+    with db_connection() as conn:
         rows = conn.execute(
             """
             SELECT t.schema_name, t.table_name, t.description,
@@ -353,7 +353,7 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
     resource = root.name[:-1] if root.name.endswith("s") else root.name
 
     async def ingest_endpoint(document):
-        with pool().connection() as conn:
+        with db_connection() as conn:
             counts = ingest.ingest_document(conn, plugin, document)
         root_id = getattr(document, id_column)
         return {
@@ -380,13 +380,13 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
 
     @domain.get("")
     async def list_endpoint():
-        with pool().connection() as conn:
+        with db_connection() as conn:
             summaries = ingest.list_documents(conn, plugin)
         return {plugin.root_table: summaries}
 
     @domain.get("/{root_id}")
     async def fetch_endpoint(root_id: str):
-        with pool().connection() as conn:
+        with db_connection() as conn:
             document = ingest.fetch_document(conn, plugin, root_id)
         if document is None:
             raise NotFoundError(f"{resource} {root_id} not found")
@@ -395,7 +395,7 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
     @domain.delete("/{root_id}", dependencies=[Depends(require("metadata.delete"))])
     async def delete_endpoint(root_id: str, request: Request):
         """Delete a document; generated foreign keys cascade to every child row."""
-        with pool().connection() as conn:
+        with db_connection() as conn:
             deleted = ingest.delete_document(conn, plugin, root_id, actor=owner_of(request))
         if not deleted:
             raise NotFoundError(f"{resource} {root_id} not found")
@@ -409,7 +409,7 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
         Values are validated field-by-field with the plugin's models and the
         update is always scoped to the given root document.
         """
-        with pool().connection() as conn, conn.transaction():
+        with db_connection() as conn, conn.transaction():
             if ingest.fetch_document(conn, plugin, root_id) is None:
                 raise NotFoundError(f"{resource} {root_id} not found")
             updated = ingest.amend_rows(

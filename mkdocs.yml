@@ -35,4 +35,5 @@ nav:
   - Development: development.md
   - Authentication: auth.md
   - VO Registry: registry.md
+  - Observability: observability.md
   - Roadmap: roadmap.md
