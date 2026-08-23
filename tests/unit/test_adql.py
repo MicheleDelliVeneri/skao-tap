@@ -102,7 +102,7 @@ def test_the_fast_path_translates_exactly_as_the_library_does(query):
     assert adql_to_postgresql(query) == ADQLQueryTranslator(query).to_postgresql()
 
 
-def test_translation_parses_once():
+def test_translation_parses_once(monkeypatch):
     """The library parses in set_query() and again in to_postgresql(),
     discarding the first tree. That doubling was half the cost of every
     request."""
@@ -115,18 +115,16 @@ def test_translation_parses_once():
         calls.append(1)
         return original(self)
 
-    adql_module._Translator._parse_sll = counting
-    try:
-        adql_module.translate("SELECT TOP 5 ra FROM ska.continuum_sources")
-    finally:
-        adql_module._Translator._parse_sll = original
+    monkeypatch.setattr(adql_module._Translator, "_parse_sll", counting)
+    adql_module.translate("SELECT TOP 5 ra FROM ska.continuum_sources")
     assert len(calls) == 1
 
 
-def test_a_query_the_fast_path_cannot_handle_falls_back():
+def test_a_query_the_fast_path_cannot_handle_falls_back(monkeypatch):
     """The fast path is an optimisation, not a replacement: anything it trips
     over has to get the library's own full-context parse and the same answer.
     Forced here rather than waiting for an ambiguous grammar to appear."""
+    from tapcore.observability import ADQL_SLOW_PARSES
     from tapcore.query import adql as adql_module
 
     query = "SELECT TOP 3 ra, dec FROM ska.continuum_sources WHERE flux > 2"
@@ -135,12 +133,12 @@ def test_a_query_the_fast_path_cannot_handle_falls_back():
     def unusable(self):
         raise RuntimeError("pretend SLL could not decide")
 
-    original = adql_module._Translator._parse_sll
-    adql_module._Translator._parse_sll = unusable
-    try:
-        assert adql_module.translate(query).sql == expected
-    finally:
-        adql_module._Translator._parse_sll = original
+    monkeypatch.setattr(adql_module._Translator, "_parse_sll", unusable)
+    before = ADQL_SLOW_PARSES._value.get()
+    assert adql_module.translate(query).sql == expected
+    # The fallback is counted, so a fast path that stops working is visible
+    # rather than just slow.
+    assert ADQL_SLOW_PARSES._value.get() == before + 1
 
 
 def test_a_syntax_error_survives_the_fast_path():

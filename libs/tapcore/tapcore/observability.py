@@ -86,6 +86,14 @@ JOBS_COMPLETED = Counter(
     registry=REGISTRY,
 )
 
+ADQL_SLOW_PARSES = Counter(
+    "tap_adql_slow_parses_total",
+    "ADQL translations that fell back to full-context parsing. Translation is"
+    " most of a request's CPU, and the fast path is 35x cheaper — so this"
+    " rising means the service has quietly returned to its old ceiling.",
+    registry=REGISTRY,
+)
+
 
 # -- logging ----------------------------------------------------------------
 

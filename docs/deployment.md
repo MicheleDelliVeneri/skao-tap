@@ -69,9 +69,8 @@ machine and same queries:
 !!! warning "Measured before the translation fast path"
     These were taken when ADQL translation cost 41 ms of a ~50 ms request. It
     now costs 1.2 ms, so a single worker goes very much further than this table
-    suggests and the ratio between one and four workers is no longer four. The
-    figures are kept only until the re-measurement from the benchmark suite in
-    `benchmarks/tap-performance` lands.
+    suggests, and the ratio between one and four workers no longer holds.
+    They are kept only until a re-measurement replaces them.
 
 Set `tapApi.workers` to the pod's CPU limit and no higher: beyond that the
 workers compete for the same cores and only latency moves. `tapApi.replicas`

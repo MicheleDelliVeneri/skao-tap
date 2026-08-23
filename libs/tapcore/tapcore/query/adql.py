@@ -20,6 +20,7 @@ from queryparser.exceptions import QueryError, QuerySyntaxError
 from queryparser.postgresql import PostgreSQLQueryProcessor
 
 from ..errors import QueryParseError
+from ..observability import ADQL_SLOW_PARSES
 
 log = logging.getLogger("tapcore")
 
@@ -69,11 +70,18 @@ class _Translator(ADQLQueryTranslator):
     def parse(self):
         try:
             self._parse_sll()
-        except Exception:
+        except Exception as exc:
             # Includes ParseCancellationException from the bail strategy, and
             # anything else the fast path trips over. The slow path is the
             # library's own, so behaviour for such a query is unchanged —
             # including which syntax errors it reports.
+            #
+            # Counted and logged, because a silent fallback is how this
+            # optimisation would disappear: a grammar or library bump that
+            # makes SLL fail for everything would restore the old ceiling with
+            # no other symptom than the service being slow again.
+            ADQL_SLOW_PARSES.inc()
+            log.debug("ADQL fast parse fell back to full context: %s", exc)
             super().parse()
 
     def _parse_sll(self):
@@ -82,7 +90,12 @@ class _Translator(ADQLQueryTranslator):
         parser._interp.predictionMode = PredictionMode.SLL
         parser._errHandler = BailErrorStrategy()
         listener = SyntaxErrorListener()
-        parser._listeners = [listener]
+        # The public listener API rather than assigning _listeners: the default
+        # console listener has to go (a parse attempt is not a user-visible
+        # error yet), and reaching into the runtime's internals to do it would
+        # be one antlr4 release away from breaking.
+        parser.removeErrorListeners()
+        parser.addErrorListener(listener)
         tree = parser.query()
         if listener.syntax_errors:
             # Not raised here: a syntax error under SLL may be an artefact of
