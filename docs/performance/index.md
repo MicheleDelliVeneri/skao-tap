@@ -11,7 +11,11 @@ accumulate rather than replace, so a regression has somewhere to show up.
 
 ## Latest
 
-[20260823T184745Z-b16f52f5-db-scaling](20260823T184745Z-b16f52f5-db-scaling/index.md) · [CSV](20260823T184745Z-b16f52f5-db-scaling/summary.csv)
+[20260823T231057Z-f0cd5bd7-db-scaling](20260823T231057Z-f0cd5bd7-db-scaling/index.md) · [CSV](20260823T231057Z-f0cd5bd7-db-scaling/summary.csv)
+
+## Earlier runs
+
+- [20260823T184745Z-b16f52f5-db-scaling](20260823T184745Z-b16f52f5-db-scaling/index.md)
 
 ## Reading these numbers
 

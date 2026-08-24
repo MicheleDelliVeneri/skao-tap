@@ -69,6 +69,34 @@ because that is a healthy service under load — from an unreachable database.
 Both are exempt from authentication, because a kubelet has no token and gating
 them would have meant that enabling auth killed every pod.
 
+### 2026-08-24 — the aggregate query is the case for admission control
+
+Q13 (`GROUP BY` over the whole ObsCore table) across the three sizes, four
+concurrent clients:
+
+| | p95 | throughput |
+| --- | --- | --- |
+| D1, 2 GiB | 393 ms | 11.2 requests/s |
+| D2, 10 GiB | 3,128 ms | 1.7 requests/s |
+| **D3, 25 GiB** | **17,753 ms** | **0.2 requests/s** |
+
+Forty-five times the latency for twelve times the data, and at D3 it is
+`DATABASE_IO_BOUND` with a plan that discards 616,550 rows after reading them.
+Nothing here is a bad plan — a full aggregate over 7.4 million wide rows is
+proportional work — but a user can issue this *synchronously* today, and one
+such request occupies a connection for eighteen seconds. That is what makes
+package 11's `EXPLAIN`-based admission decision worth building: the service
+should be able to recognise this shape and route it to `/async` rather than
+hold a synchronous connection for it.
+
+### 2026-08-24 — the liveness fix holds under the load that broke it
+
+The open-loop family that previously killed the API twice — pool saturation
+starving a database-dependent liveness probe, 32% errors and a 17-minute p95 —
+now runs clean: at the same offered rate, 114.7 requests/s served against 115
+offered, zero errors, p95 52 ms, no restarts. The failure was the probe, not
+the service's capacity.
+
 ### 2026-08-24 — the size sweep was comparing different workloads (fixed)
 
 The corpus was rebuilt for each dataset inside the sweep, sized to the
