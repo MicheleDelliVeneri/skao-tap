@@ -220,6 +220,14 @@ def measure(
                         workload,
                         steps,
                         mode=request_mode,
+                        max_in_flight=int(
+                            timing.get(
+                                "max_in_flight_async"
+                                if request_mode == "async"
+                                else "max_in_flight",
+                                4096,
+                            )
+                        ),
                     )
                 )
                 measured_elapsed = time.time() - started

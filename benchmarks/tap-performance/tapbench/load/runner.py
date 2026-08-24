@@ -203,6 +203,8 @@ async def _issue_async(
     offered_at: float,
     recorder: Recorder,
     poll_interval: float = 0.25,
+    poll_interval_max: float = 2.0,
+    poll_fine_window_s: float = 5.0,
     timeout_s: float = 600.0,
 ) -> None:
     """One UWS job, timed from submission to a terminal phase.
@@ -233,12 +235,22 @@ async def _issue_async(
             ttfb = time.perf_counter() - t0  # the job exists from here
             deadline = t0 + timeout_s
             phase = "PENDING"
+            # Fine-grained while the job is young, then backing off. Every job
+            # in flight holds one of these loops, so at a few thousand
+            # outstanding jobs a flat quarter-second poll is thousands of
+            # requests a second at the service being measured — the harness
+            # bidding against the workload for the same API. The first seconds
+            # stay fine because that is where the SLO is decided; a job already
+            # three minutes into a queue does not need 4 Hz resolution.
+            interval = poll_interval
             while time.perf_counter() < deadline:
                 phase_response = await client.get(f"{location}/phase")
                 phase = phase_response.text.strip()
                 if phase in ("COMPLETED", "ERROR", "ABORTED"):
                     break
-                await asyncio.sleep(poll_interval)
+                await asyncio.sleep(interval)
+                if time.perf_counter() - t0 > poll_fine_window_s:
+                    interval = min(interval * 1.5, poll_interval_max)
             if phase == "COMPLETED":
                 result = await client.get(f"{location}/results/result")
                 size = len(result.content)
@@ -398,8 +410,13 @@ async def open_loop(
     in_flight: set[asyncio.Task] = set()
     dropped = 0
 
-    peak_rate = max(max(s.rate, s.rate_end or s.rate) for s in steps) if steps else 1.0
-    async with _client(int(peak_rate * 4) + 16, timeout_s) as client:
+    # Sized by what can be outstanding, not by the rate. The rate heuristic
+    # gave an async scenario offering 24 jobs/s a 112-connection pool while it
+    # held thousands of jobs at once, so the generator queued on its own pool —
+    # and a socket waiting for a slot is not busy, so the CPU guard cannot see
+    # it. These are ceilings rather than allocations: httpx opens what it needs,
+    # so a generous one costs nothing and removes a silent limiter.
+    async with _client(min(max_in_flight, 8192), timeout_s) as client:
         watcher = asyncio.create_task(recorder.watch_self(stop))
         # A fixed seed, not hash("arrivals"): str hashing is randomised per
         # process, so that would have made the arrival pattern differ between
