@@ -565,11 +565,15 @@ def capacity_headline(results: list[dict], slo_p95_s: float) -> dict:
     out: dict = {}
     c1 = sustainable_capacity(results, slo_p95_s)
     if c1:
+        # Qualified only when the evidence for C1 is an offered-rate ladder that
+        # never failed. A concurrency sweep is bracketed by construction — it
+        # stops when two saturation signals agree — so its C1 needs no caveat,
+        # and attaching one would be its own false statement.
         at_one = bracketed_capacity(results, kind="fixed_replicas", replicas=1, slo_p95_s=slo_p95_s)
         qualifier = (
-            ""
-            if at_one and at_one["bracketed"]
-            else " — a lower bound, since no valid higher rate failed"
+            " — a lower bound, since no valid higher rate failed"
+            if at_one and not at_one["bracketed"]
+            else ""
         )
         out["sustainable single-replica capacity (C1)"] = {
             "value": round(c1, 1),

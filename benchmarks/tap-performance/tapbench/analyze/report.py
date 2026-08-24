@@ -280,6 +280,12 @@ class Plotter:
         # drawn through rates the service met in full measures the ladder that
         # was offered: this run would have drawn 1.0, 1.0, 0.5, 0.25 from four
         # replica counts that all served every request they were given.
+        if not self._select(kind="fixed_replicas"):
+            return self._skip(
+                "scaling_efficiency",
+                "Scaling efficiency",
+                "no fixed-replica measurements in this run",
+            )
         capacities = [c for c in (self.summary.get("replica_capacity") or []) if c["bracketed"]]
         buckets = {c["replicas"]: c["rps"] for c in capacities}
         if not buckets:

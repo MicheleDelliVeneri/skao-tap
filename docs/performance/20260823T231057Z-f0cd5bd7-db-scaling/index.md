@@ -12,7 +12,7 @@ Run `20260823T231057Z-f0cd5bd7-db-scaling` · commit `a5058118203f` · 2026-08-2
 | finding | value | evidence |
 | --- | --- | --- |
 | peak single-replica throughput | **223.1** | sat-D3-c4-r3 at 4 clients, p95 29 ms |
-| sustainable single-replica capacity (C1) | **223.1** | highest successful rps with p95 within the 2.0s SLO and errors under 1% |
+| sustainable single-replica capacity (C1) | **223.1** | highest successful rps over valid measurements with p95 within the 2.0s SLO and errors under 1% |
 
 ## What was measured
 
