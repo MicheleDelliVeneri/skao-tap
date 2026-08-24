@@ -50,6 +50,48 @@ A running log of what the benchmark suite
 established, newest first. Each entry is a measurement rather than an opinion,
 so it can be checked and it can go stale — the run that produced it is named.
 
+### 2026-08-24 — the undershoot is not the harness, and provisioning is not the slow part
+
+Run `20260824T100103Z-d14a207c-keda`: the 0-to-6xC1 spike scenario alone, with
+the generator's in-flight cap raised so it abandons nothing. Run to settle two
+questions the [capped family](#2026-08-24-the-executor-autoscaler-asks-for-three-pods-against-a-three-thousand-job-queue)
+left open, before spending two hours re-running all seven.
+
+**The undershoot survives an honest queue.** Every guard passes: arrivals 0.5 s
+late at p95, nothing abandoned, generator at 7% of the host's cores. The queue
+reached **3,895 jobs** and the oldest waited **190 s** — and the autoscaler
+still asked for **3 replicas out of 8**. The capped run's 2,968-job queue was
+not what limited it; the signal is.
+
+What the cap had been hiding is how bad the overload actually is. The same
+scenario measured at 305 s p95 with 0.05% errors while it was quietly shedding
+39% of its arrivals. Offered in full: **982 s p95 and 13.9% errors**, of which
+1,441 are jobs still `PENDING` when the client gave up at 600 s. A measurement
+that drops a third of its load reports a service that is coping better than it
+is.
+
+**And the first complete scale-out breakdown for this scenario:**
+
+| stage | |
+| --- | --- |
+| detection — metric crosses threshold | 86 s |
+| HPA decision — replica request changes | 4 s |
+| pod creation → scheduled → started → ready | 1 s |
+| routing — Ready to serving traffic | 161 s |
+| **total scale-out** | **251 s** |
+
+Kubernetes is not the slow part. Provisioning a pod takes **one second**;
+detection and routing are 247 of the 251. Detection is the 60 s threshold plus
+the scaler's polling, and it is the part a threshold change would move.
+Routing — 161 s from a pod being Ready to it demonstrably serving — is the part
+worth understanding next, and it is measured by proxy (the first successful
+request completing after Ready), which on a queue this deep may be reporting
+the queue rather than the routing.
+
+API CPU peaked at 0.69 cores and PostgreSQL at 0.32 while all of this happened,
+so raising the cap did not turn the generator's own phase polling into a load on
+the service — the other thing this probe was for.
+
 ### 2026-08-24 — the executor autoscaler asks for three pods against a three-thousand-job queue
 
 Run `20260824T074332Z-b4fa9d64-keda`, D2, all seven autoscaling scenarios
