@@ -26,6 +26,17 @@ tapApi:
   # Scaling out with `replicas` does the same thing across pods, and both can
   # be used together.
   workers: 1
+  # -- Listen-socket accept queue (uvicorn --backlog). When it overflows the
+  # kernel resets connections before the application sees them, so clients
+  # read connection resets rather than refusals. Raise it to absorb sharper
+  # arrival bursts; it does not add capacity, only queueing.
+  backlog: 2048
+  # -- Concurrent connections one worker process accepts before answering
+  # 503 immediately (uvicorn --limit-concurrency, per worker). 0 means
+  # unlimited — the default, and then overload past the accept queue sheds
+  # with resets. Set it to make the service refuse what it cannot serve:
+  # a 503 tells a client to back off, a reset tells it nothing.
+  limitConcurrency: 0
   # -- Externally visible base URL, written into capabilities and result
   # links. Leave empty to default to the in-cluster service URL.
   baseUrl: ""

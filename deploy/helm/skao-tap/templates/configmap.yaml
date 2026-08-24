@@ -30,6 +30,11 @@ data:
   TAP_DB_POOL_TIMEOUT: {{ .Values.config.dbPoolTimeoutSeconds | quote }}
   TAP_API_PORT: {{ .Values.tapApi.port | int64 | quote }}
   TAP_API_WORKERS: {{ .Values.tapApi.workers | int64 | quote }}
+  TAP_API_BACKLOG: {{ .Values.tapApi.backlog | int64 | quote }}
+  {{- /* unset means unlimited in the image, so 0 sends nothing at all */}}
+  {{- if gt (int .Values.tapApi.limitConcurrency) 0 }}
+  TAP_API_LIMIT_CONCURRENCY: {{ .Values.tapApi.limitConcurrency | int64 | quote }}
+  {{- end }}
   {{- /* VOResource record; disabled by default, see values.yaml */}}
   TAP_REGISTRY_ENABLED: {{ .Values.voRegistry.enabled | quote }}
   {{- if .Values.voRegistry.enabled }}
