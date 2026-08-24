@@ -75,7 +75,9 @@ def test_summary_separates_answers_from_drops():
     results = [
         _fake("shed-D1-n1-open-c512", 1, 512, 9000, {"503": 1200}, {"ReadError": 800}),
         _fake("shed-D1-n1-open-c32", 1, 32, 4000, {}, {}),
-        _fake("shed-D1-n1-limit64-c512", 1, 512, 9500, {"503": 2100}, {"ReadTimeout": 3}),
+        _fake(
+            "shed-D1-n1-limit64-c512", 1, 512, 9500, {"503": 2100}, {"503": 2100, "ReadTimeout": 3}
+        ),
         {"kind": "stress", "key": "not-mine", "http": {}},
     ]
     rows = runner.shedding_summary(results)

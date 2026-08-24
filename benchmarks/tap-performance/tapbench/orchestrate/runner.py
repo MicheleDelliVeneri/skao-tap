@@ -1042,6 +1042,9 @@ def shedding_summary(results: list[dict]) -> list[dict]:
         http = result["http"]
         errors = dict(http.get("errors_by_type") or {})
         resets = int(errors.pop("ReadError", 0))
+        # errors_by_type repeats HTTP statuses as digit keys; the statuses
+        # column already carries those, so "other" is transport errors only
+        errors = {k: v for k, v in errors.items() if not str(k).isdigit()}
         statuses = {str(k): int(v) for k, v in (http.get("errors_by_status") or {}).items()}
         rows.append(
             {
