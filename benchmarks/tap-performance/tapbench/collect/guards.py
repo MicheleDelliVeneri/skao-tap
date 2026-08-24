@@ -181,7 +181,8 @@ class Guards:
                 GuardResult(
                     "load_generator_had_headroom",
                     peak < self.generator_cpu_ceiling,
-                    f"generator peaked at {100 * peak:.0f}% of the host's cores; above "
+                    f"generator's busiest process peaked at {100 * peak:.0f}% of one "
+                    f"core (its whole budget: one asyncio loop per process); above "
                     f"{100 * self.generator_cpu_ceiling:.0f}% its own limit becomes "
                     "indistinguishable from the service's",
                     {"generator_cpu_peak": peak},

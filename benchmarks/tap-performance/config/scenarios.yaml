@@ -88,6 +88,11 @@ replica_sweep:
   warmup_seconds: 15
   measure_seconds: 45
   repetitions: 2
+  # One asyncio loop tops out around one core (~400 requests/second of this
+  # workload), which is less than an eight-replica fleet serves: the first
+  # run of this family measured its own generator at the top rungs. Four
+  # processes put the client ceiling far above the fleet's.
+  generator_processes: 4
 
 # Package 13: where does shed load stop being an answer? A closed loop is
 # bounded concurrency by construction — each client has exactly one request

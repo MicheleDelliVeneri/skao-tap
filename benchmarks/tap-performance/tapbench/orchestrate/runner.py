@@ -237,6 +237,8 @@ def measure(
     measure_s: float | None = None,
     request_mode: str = "sync",
     response_format: str = "csv",
+    generator_processes: int = 1,
+    workload_ingredients: dict | None = None,
 ) -> dict | None:
     """Run one load window and record everything about it."""
     if run.done(key):
@@ -293,6 +295,21 @@ def measure(
                     )
                 )
                 measured_elapsed = time.time() - started
+            elif generator_processes > 1:
+                # sharded across processes: one asyncio loop tops out around
+                # one core, and the fleet under test serves more than that
+                assert workload_ingredients is not None
+                recorder, measured_elapsed = load_mod.closed_loop_sharded(
+                    BASE_URL,
+                    concurrency=concurrency or 1,
+                    warmup_s=warmup_s,
+                    measure_s=measure_s,
+                    processes=generator_processes,
+                    mode=request_mode,
+                    response_format=response_format,
+                    **workload_ingredients,
+                )
+                timeline = []
             else:
                 recorder, measured_elapsed = asyncio.run(
                     load_mod.closed_loop(
@@ -450,6 +467,7 @@ def concurrency_sweep(
     repetitions: int | None = None,
     warmup_s: float | None = None,
     measure_s: float | None = None,
+    generator_processes: int = 1,
 ) -> list[dict]:
     """Climb the concurrency ladder until saturation, then stop.
 
@@ -478,6 +496,12 @@ def concurrency_sweep(
         for repetition in range(reps):
             workload = load_mod.Workload(entries, mix, seed=1000 + repetition)
             key = f"{key_prefix}-{dataset}-c{concurrency}-r{repetition}"
+            ingredients = {
+                "entries": entries,
+                "mix": mix,
+                "query_class": None,
+                "seed": 1000 + repetition,
+            }
             result = measure(
                 run,
                 cfg,
@@ -495,6 +519,8 @@ def concurrency_sweep(
                 measure_s=measure_s
                 if measure_s is not None
                 else (20 if quick else timing["measure_seconds"]),
+                generator_processes=generator_processes,
+                workload_ingredients=ingredients,
             )
             if result:
                 measured.append(result)
@@ -848,6 +874,7 @@ def replica_sweep(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
                 repetitions=plan["repetitions"],
                 warmup_s=plan["warmup_seconds"],
                 measure_s=plan["measure_seconds"],
+                generator_processes=int(plan.get("generator_processes", 1)),
             )
     finally:
         cluster.scale("tap-api", 1)

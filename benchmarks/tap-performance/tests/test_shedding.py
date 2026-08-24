@@ -116,3 +116,72 @@ def test_a_connect_error_alone_is_a_drop():
     )
     assert rows[0]["transport_drops"] == 42
     assert rows[0]["other_errors"] == {}
+
+
+# ---------------------------------------------------------------------------
+# The sharded closed loop (package 14's generator fix)
+# ---------------------------------------------------------------------------
+
+
+def test_sharded_loop_splits_concurrency_and_merges_shares(monkeypatch):
+    """Three processes, seven clients: shares 3/2/2 with distinct seeds, one
+    merged recorder — and the busiest process judged against one core."""
+    from tapbench.load import runner as load_mod
+
+    seen = []
+
+    async def fake_closed_loop(base_url, workload, concurrency, warmup_s, measure_s, **kwargs):
+        seen.append((workload.seed, concurrency))
+        recorder = load_mod.Recorder()
+        for i in range(concurrency):
+            recorder.add(
+                load_mod.Sample(
+                    t_start=1.0,
+                    t_offered=1.0,
+                    query_class="Q01",
+                    query_id=f"q{i}",
+                    status=200,
+                    error="",
+                    latency_s=0.01,
+                    ttfb_s=0.01,
+                    response_bytes=10,
+                    rows=-1,
+                    pod="",
+                    mode="sync",
+                    request_id="",
+                )
+            )
+        recorder.cpu_samples.append((1.0, 0.5, 0.1))
+        return recorder, float(measure_s)
+
+    monkeypatch.setattr(load_mod, "closed_loop", fake_closed_loop)
+    monkeypatch.setattr(load_mod.Workload, "__init__", _workload_init_recording_seed)
+    merged, elapsed = load_mod.closed_loop_sharded(
+        "http://example",
+        entries=[],
+        mix={"Q01": 1.0},
+        query_class=None,
+        seed=1000,
+        concurrency=7,
+        warmup_s=0,
+        measure_s=5,
+        processes=3,
+    )
+    assert len(merged.samples) == 7
+    assert merged.generator_cpu_peak == 0.5  # busiest process, one-core budget
+    assert elapsed == 5.0
+
+
+def _workload_init_recording_seed(self, entries, mix, seed):
+    self.seed = seed
+
+
+def test_generator_cpu_peak_is_a_fraction_of_one_core():
+    """The bug this pins: dividing by the host's core count read a loop
+    pinned at 100% of its core as 3% on a 30-core host, and the headroom
+    guard stayed green while the sweep measured its own client."""
+    from tapbench.load import runner as load_mod
+
+    recorder = load_mod.Recorder()
+    recorder.cpu_samples.append((0.0, 1.0, 0.2))  # process at 100% of a core
+    assert recorder.generator_cpu_peak == 1.0
