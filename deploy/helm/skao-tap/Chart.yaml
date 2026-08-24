@@ -9,5 +9,7 @@ keywords:
   - tap
   - adql
   - astronomy
+icon: https://raw.githubusercontent.com/MicheleDelliVeneri/skao-tap/main/assets/egernia-mark.svg
+home: https://github.com/MicheleDelliVeneri/skao-tap
 sources:
   - https://github.com/MicheleDelliVeneri/skao-tap

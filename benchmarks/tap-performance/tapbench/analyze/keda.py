@@ -176,7 +176,7 @@ def timings(
         scaler_values = _series(metrics_rows, "tap_jobs_queued")
         if scaler_values:
             notes.append(
-                "T1 from tap_jobs{phase=\"QUEUED\"}: KEDA published "
+                'T1 from tap_jobs{phase="QUEUED"}: KEDA published '
                 "no keda_scaler_metrics_value for this window"
             )
     t1 = _first_after(
