@@ -846,6 +846,28 @@ def keda_scenarios(
             scale_up=keda_analysis.scaling_up(step_records),
         )
         behaviour = keda_analysis.scale_behaviour(watcher_samples, "skao-tap-tap-executor")
+        # Classified again with the stage breakdown, which does not exist until
+        # here. KEDA_SCALE_LAG is the one class this family is for and
+        # classify() cannot reach it without the timings, so a scenario whose
+        # latency was entirely the scaling delay came out UNKNOWN — 566-second
+        # p95 on a fleet where nothing was saturated, and no name for it.
+        verdicts = bottleneck.classify(
+            metrics_rows=metrics_rows,
+            summary=result.get("http") or {},
+            pg_summary=result.get("postgres") or {},
+            recorder_cpu_peak=result.get("generator_cpu_peak") or 0.0,
+            limits=limits(cfg),
+            keda=timings,
+        )
+        result["bottleneck"] = [
+            {
+                "classification": v.classification,
+                "confidence": v.confidence,
+                "evidence": v.evidence,
+                "explanation": v.explanation,
+            }
+            for v in verdicts
+        ]
         # The scenario's own analysis *on top of* the measurement, not instead
         # of it. Listing the fields to keep dropped the guards, the `invalid`
         # flag and the coordinated-omission block, so a KEDA scenario could not
@@ -989,12 +1011,20 @@ def reclassify(run_dir, cfg: dict) -> dict:
                     strict=True,
                 )
             ]
+        # Timings before the classification, because the classification needs
+        # them: KEDA_SCALE_LAG is the one class this family exists to find and
+        # it cannot fire without the stage breakdown.
+        if "timings" in entry:
+            redone = keda_timings_from_artefacts(run_dir, entry, key, metrics_rows)
+            if redone:
+                entry["timings"] = redone
         verdicts = bottleneck.classify(
             metrics_rows=metrics_rows,
             summary=entry.get("http") or {},
             pg_summary=pg_summary,
             recorder_cpu_peak=entry.get("generator_cpu_peak") or 0.0,
             limits=limits_map,
+            keda=entry.get("timings"),
         )
         # The two client-fidelity rules are re-judged here as well: a rule
         # written after a run can still be applied to it, and a run measured
@@ -1039,11 +1069,6 @@ def reclassify(run_dir, cfg: dict) -> dict:
         if guard_records:
             entry["guards"] = guard_records
             entry["invalid"] = any(not g["ok"] for g in guard_records)
-
-        if "timings" in entry:
-            redone = keda_timings_from_artefacts(run_dir, entry, key, metrics_rows)
-            if redone:
-                entry["timings"] = redone
 
         was = (entry.get("bottleneck") or [{}])[0].get("classification")
         entry["postgres"] = pg_summary
@@ -1092,7 +1117,7 @@ def reclassify(run_dir, cfg: dict) -> dict:
     )
     for key, was, now in changed:
         log.info("reclassified %s: %s -> %s", key, was, now)
-    log.info(
-        "%d of %d measurements changed classification", len(changed), len(summary.get("runs", []))
-    )
+    # Over everything re-judged, not just `runs` — counting the numerator over
+    # both lists and the denominator over one printed "4 of 3".
+    log.info("%d of %d measurements changed classification", len(changed), len(measurements))
     return summary

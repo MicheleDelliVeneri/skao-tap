@@ -306,3 +306,24 @@ def test_a_flapping_scenario_says_its_stages_may_straddle_cycles():
         slo_p95_s=2.0,
     )
     assert any("moved 3 times" in n for n in result["notes"])
+
+
+def test_a_scale_out_delay_is_named_rather_than_left_unknown():
+    """The dead rule this revives: KEDA_SCALE_LAG was written, listed in
+    CLASSES, and never reachable — nothing passed `keda` to classify(). A
+    scenario whose 566-second p95 was entirely the scaling delay, on a fleet
+    where nothing was saturated, came out UNKNOWN."""
+    rows = _rows(("tap_api_cpu_cores", [0.1] * 50), ("api_replicas_ready", [3.0] * 50))
+    quiet = {
+        "metrics_rows": rows,
+        "summary": {"window_seconds": 900.0, "requests": 13000, "error_fraction": 0.001},
+        "pg_summary": {"cache_hit_ratio": 1.0},
+        "recorder_cpu_peak": 0.07,
+        "limits": LIMITS,
+    }
+    assert bottleneck.primary(bottleneck.classify(**quiet)) != "KEDA_SCALE_LAG"
+
+    lagging = bottleneck.classify(**quiet, keda={"latencies_s": {"total_scale_out": 352.0}})
+    assert bottleneck.primary(lagging) == "KEDA_SCALE_LAG"
+    evidence = next(v for v in lagging if v.classification == "KEDA_SCALE_LAG").evidence
+    assert evidence["total_scale_out_s"] == 352.0
