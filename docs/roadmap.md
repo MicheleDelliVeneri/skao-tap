@@ -166,10 +166,12 @@ database, whether `EXPLAIN`-based rejection should refuse the most expensive
 synchronous queries and steer them to `/async`, and whether summary tables or
 materialised views belong in the metadata domains that need them.
 
-## Package 7 — Queryable region footprints (`s_region`) — *blocked*
+## Package 7 — Queryable region footprints (`s_region`)
 
-Waiting on `ska-src-mm-notification` 0.1.8, which adds the STC-S validator
-this depends on; the upstream change is raised.
+Unblocked: `ska-src-mm-notification` 0.1.8 is released and ships the STC-S
+validator this depends on, so the work can start. **First step is the version
+bump** — `services/tap-api/pyproject.toml` still pins `>=0.1.7`, so nothing
+sees the validator until that becomes `>=0.1.8` and `uv.lock` is refreshed.
 
 The notification model carries `s_region` (STC-S/pgsphere-style strings,
 e.g. `CIRCLE 3.5867 -30.4 0.25`) on data products and artifacts, but the
@@ -181,17 +183,17 @@ ingested metadata.
   pgsphere geometry column (`s_region_geom spoly`; circles converted to
   polygon approximations), register it in TAP_SCHEMA, and index it with
   GiST so ADQL `INTERSECTS`/`CONTAINS` over footprints are fast.
-- **ska-src-mm-notification 0.1.8 — fix the region type mismatch**: the
-  model declares `s_region: str | None` with no format validation, while
-  the field's own description promises "pgsphere format or STC-S in ICRS
-  frame" — any string (e.g. `"NOT A REGION"`) validates today, unlike the
-  numeric fields, which carry Ge/Le constraints. The 0.1.8 release should
-  add a pydantic validator for the STC-S grammar (`CIRCLE`, `POLYGON`,
-  `POSITION` in ICRS, sensible coordinate ranges), so malformed regions
-  are rejected at the producer, before they reach any archive.
-- **Reject malformed regions at the API boundary**: until the 0.1.8
-  validator lands upstream, the ingestion endpoint should validate the
-  region syntax itself (and keep doing so afterwards as defense in depth).
+- **Take the 0.1.8 validator** *(upstream, done — needs the pin bump)*: the
+  region type mismatch is fixed. `0.1.7` declared `s_region: str | None`
+  with no format validation, so any string (e.g. `"NOT A REGION"`) validated,
+  unlike the numeric fields with their Ge/Le constraints. `0.1.8` adds
+  `models/regions.py` with `validate_s_region()` — the `CIRCLE`, `POLYGON`
+  and `POSITION` STC-S subset in ICRS with coordinate-range checks — wired
+  as a model validator on `BaseNotificationModel`, so malformed regions are
+  now rejected at the producer, before they reach any archive.
+- **Reject malformed regions at the API boundary**: keep validating region
+  syntax at the ingestion endpoint as defence in depth, since a producer can
+  always be running an older model package than the service.
 - **Amendments follow**: `PATCH` updates to `s_region` re-derive the
   geometry column.
 
