@@ -437,7 +437,19 @@ def measure(
 
 
 def concurrency_sweep(
-    run, cfg: dict, dataset: str, entries: list, *, quick: bool = False
+    run,
+    cfg: dict,
+    dataset: str,
+    entries: list,
+    *,
+    quick: bool = False,
+    replicas: int = 1,
+    kind: str = "concurrency",
+    key_prefix: str = "conc",
+    refine_saturation: bool = True,
+    repetitions: int | None = None,
+    warmup_s: float | None = None,
+    measure_s: float | None = None,
 ) -> list[dict]:
     """Climb the concurrency ladder until saturation, then stop.
 
@@ -445,6 +457,11 @@ def concurrency_sweep(
     routinely noise — a p95 can multiply on a page-cache miss, and throughput
     can plateau for one level and then climb again — and a sweep that stops on
     noise reports a ceiling that is not there.
+
+    The default arguments are the single-replica C1 sweep; the replica-scaling
+    family reuses the same ladder and stop rule per replica count with its own
+    ``kind``, shorter windows, and without the long saturation re-measure
+    (that ceremony exists for C1, the number everything else is a multiple of).
     """
     sweep = cfg["scenarios"]["concurrency_sweep"]
     timing = cfg["scenarios"]["timing"]
@@ -456,24 +473,28 @@ def concurrency_sweep(
     levels = sweep["levels"][:3] if quick else sweep["levels"]
     for concurrency in levels:
         saturated_here = False
-        repetitions = 1 if quick else timing["repetitions"]
+        reps = repetitions if repetitions is not None else (1 if quick else timing["repetitions"])
         measured: list[dict] = []
-        for repetition in range(repetitions):
+        for repetition in range(reps):
             workload = load_mod.Workload(entries, mix, seed=1000 + repetition)
-            key = f"conc-{dataset}-c{concurrency}-r{repetition}"
+            key = f"{key_prefix}-{dataset}-c{concurrency}-r{repetition}"
             result = measure(
                 run,
                 cfg,
                 key=key,
-                kind="concurrency",
+                kind=kind,
                 dataset=dataset,
                 workload=workload,
                 mode="closed",
                 concurrency=concurrency,
-                replicas=1,
+                replicas=replicas,
                 repetition=repetition,
-                warmup_s=10 if quick else timing["warmup_seconds"],
-                measure_s=20 if quick else timing["measure_seconds"],
+                warmup_s=warmup_s
+                if warmup_s is not None
+                else (10 if quick else timing["warmup_seconds"]),
+                measure_s=measure_s
+                if measure_s is not None
+                else (20 if quick else timing["measure_seconds"]),
             )
             if result:
                 measured.append(result)
@@ -504,6 +525,8 @@ def concurrency_sweep(
         if signals["count"] >= sweep["saturation_signals_required"]:
             saturated_here = True
 
+        if saturated_here and not refine_saturation:
+            break
         if saturated_here and not quick:
             # A saturation point earns the longer, more repeated measurement:
             # this is the number that becomes C1 and that every KEDA scenario
@@ -580,24 +603,32 @@ def bracketed_capacity(
     if not met:
         return None
     best = max(met, key=lambda r: r["http"]["successful_rps"])
-    offered = best.get("offered_rps") or 0.0
+
+    def rung(r: dict) -> float:
+        # open-loop rungs are offered rates; closed-loop rungs are held
+        # concurrency — either way, "higher" means "more demand"
+        return r.get("offered_rps") or float(r.get("concurrency") or 0.0)
+
+    offered = rung(best)
     # A higher rung that the service failed, rather than one the generator
     # failed to offer: an invalid point brackets nothing.
     above = [
         r
         for r in at
-        if (r.get("offered_rps") or 0.0) > offered
-        and not r.get("invalid")
-        and not _within_slo(r, slo_p95_s)
+        if rung(r) > offered and not r.get("invalid") and not _within_slo(r, slo_p95_s)
     ]
+    # A closed-loop sweep brackets by construction when it saturated: the
+    # plateau is a measured ceiling even though no rung failed the SLO — a
+    # CPU-bound service under a closed loop degrades in latency, not errors,
+    # and can sit far inside a 2 s SLO at its throughput ceiling.
+    saturated = any((r.get("saturation") or {}).get("count", 0) >= 2 for r in at)
     return {
         "rps": best["http"]["successful_rps"],
         "offered_rps": offered,
         "key": best["key"],
-        "bracketed": bool(above),
-        "next_rung_measured": bool(
-            [r for r in at if (r.get("offered_rps") or 0.0) > offered and not r.get("invalid")]
-        ),
+        "bracketed": bool(above) or saturated,
+        "saturated": saturated,
+        "next_rung_measured": bool([r for r in at if rung(r) > offered and not r.get("invalid")]),
     }
 
 
@@ -701,14 +732,23 @@ def replica_capacities(results: list[dict], slo_p95_s: float) -> list[dict]:
         {
             r["replicas"]
             for r in results
-            if r.get("kind") == "fixed_replicas" and r.get("replicas") is not None
+            if r.get("kind") in ("fixed_replicas", "replica_sweep")
+            and r.get("replicas") is not None
         }
     )
     out = []
     for n in counts:
-        found = bracketed_capacity(results, kind="fixed_replicas", replicas=n, slo_p95_s=slo_p95_s)
-        if found:
-            out.append({"replicas": n, **found})
+        candidates = [
+            (kind, found)
+            for kind in ("replica_sweep", "fixed_replicas")
+            if (found := bracketed_capacity(results, kind=kind, replicas=n, slo_p95_s=slo_p95_s))
+        ]
+        if not candidates:
+            continue
+        # a bracketed capacity beats an open-ended one; among equals, the
+        # higher measured throughput
+        kind, found = max(candidates, key=lambda kc: (kc[1]["bracketed"], kc[1]["rps"]))
+        out.append({"replicas": n, "kind": kind, **found})
     return out
 
 
@@ -739,17 +779,26 @@ def capacity_headline(results: list[dict], slo_p95_s: float) -> dict:
             "evidence": "highest successful rps over valid measurements with p95 within "
             f"the {slo_p95_s}s SLO and errors under 1%{qualifier}",
         }
-    for kind, label, top_n in (("fixed_replicas", "replica scaling efficiency at 8", 8),):
+    for kind, label, top_n in (
+        ("replica_sweep", "replica scaling efficiency at 8", 8),
+        ("fixed_replicas", "replica scaling efficiency at 8", 8),
+    ):
+        if label in out and out[label].get("value") is not None:
+            continue
         one = bracketed_capacity(results, kind=kind, replicas=1, slo_p95_s=slo_p95_s)
         top = bracketed_capacity(results, kind=kind, replicas=top_n, slo_p95_s=slo_p95_s)
         if not (one and top):
             continue
         if one["bracketed"] and top["bracketed"] and one["rps"]:
+            how = (
+                "each a saturated closed-loop sweep's plateau"
+                if kind == "replica_sweep"
+                else "each the last rate met before a measured failure"
+            )
             out[label] = {
                 "value": round(top["rps"] / (top_n * one["rps"]), 3),
                 "evidence": f"{top['rps']:.1f} rps on {_pods(top_n)} against "
-                f"{one['rps']:.1f} on one, each the last rate met before a "
-                "measured failure",
+                f"{one['rps']:.1f} on one, {how}",
             }
             continue
         open_ended = [
@@ -766,6 +815,43 @@ def capacity_headline(results: list[dict], slo_p95_s: float) -> dict:
             "marked invalid.",
         }
     return out
+
+
+def replica_sweep(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
+    """Package 14: a bounded-concurrency sweep at each replica count.
+
+    The open-loop fixed-scaling family kept failing to bracket anything —
+    seventeen of its 24 measurements were generator-capped, because offering
+    a rate at or past capacity open-loop grows the in-flight count without
+    bound. A closed loop cannot be capped that way, and its two-signal stop
+    rule *is* the bracket: a count whose sweep saturated has a measured
+    ceiling (the plateau), not just the largest rate anybody offered.
+
+    Same ladder, same workload seeds at every count, so two counts differ in
+    replicas and nothing else.
+    """
+    plan = cfg["scenarios"]["replica_sweep"]
+    results: list[dict] = []
+    cluster.set_autoscaling(api=False, executor=False)
+    try:
+        for replicas in plan["replicas"]:
+            cluster.scale("tap-api", replicas)
+            results += concurrency_sweep(
+                run,
+                cfg,
+                dataset,
+                entries,
+                replicas=replicas,
+                kind="replica_sweep",
+                key_prefix=f"rsweep-n{replicas}",
+                refine_saturation=False,
+                repetitions=plan["repetitions"],
+                warmup_s=plan["warmup_seconds"],
+                measure_s=plan["measure_seconds"],
+            )
+    finally:
+        cluster.scale("tap-api", 1)
+    return results
 
 
 def fixed_replica_scaling(run, cfg: dict, dataset: str, entries: list, c1: float) -> list[dict]:

@@ -232,7 +232,11 @@ class Plotter:
     # -- replicas -----------------------------------------------------------
 
     def rps_vs_replicas(self) -> Figure:
-        runs = [r for r in self._select(kind="fixed_replicas") if r.get("http")]
+        runs = [
+            r
+            for r in [*self._select(kind="fixed_replicas"), *self._select(kind="replica_sweep")]
+            if r.get("http")
+        ]
         if not runs:
             return self._skip(
                 "rps_vs_replicas",
@@ -288,7 +292,7 @@ class Plotter:
         # drawn through rates the service met in full measures the ladder that
         # was offered: this run would have drawn 1.0, 1.0, 0.5, 0.25 from four
         # replica counts that all served every request they were given.
-        if not self._select(kind="fixed_replicas"):
+        if not (self._select(kind="fixed_replicas") or self._select(kind="replica_sweep")):
             return self._skip(
                 "scaling_efficiency",
                 "Scaling efficiency",
