@@ -750,7 +750,7 @@ def keda_scenarios(
     """The autoscaling scenarios, against the chart's own ScaledObject.
 
     Async submission, not sync queries: the repository's ScaledObject scales
-    executors on the age of the oldest queued job, so a sync workload — which
+    executors on the number of queued jobs, so a sync workload — which
     never creates a job — would leave the scaler metric at zero and measure
     nothing at all.
     """
@@ -758,7 +758,7 @@ def keda_scenarios(
     slo = cfg["scenarios"]["slo"]["p95_seconds"]
     mix = cfg["scenarios"]["query_mix"]["normal"]
     threshold = float(
-        cfg["chart_values"]["horizontalAutoscaling"]["tapExecutor"]["backlogSecondsPerReplica"]
+        cfg["chart_values"]["horizontalAutoscaling"]["tapExecutor"]["queuedJobsPerReplica"]
     )
     cluster.set_autoscaling(api=False, executor=True)
     config = kube.config_snapshot()

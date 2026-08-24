@@ -210,7 +210,7 @@ async def _issue_async(
     """One UWS job, timed from submission to a terminal phase.
 
     This is the load the KEDA scenarios need: the repository's ScaledObject
-    scales executors on the age of the oldest queued job, so only work that
+    scales executors on the number of queued jobs, so only work that
     creates jobs can move it. A sync query never touches that queue.
     """
     started = time.time()

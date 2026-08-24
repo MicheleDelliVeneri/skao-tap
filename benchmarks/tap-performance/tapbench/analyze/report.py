@@ -799,7 +799,7 @@ class Plotter:
         ax = axes[3]
         for metric, colour, label in (
             ("keda_scaler_metrics_value", PALETTE["primary"], "KEDA metric"),
-            ("tap_oldest_queued_job_seconds", PALETTE["third"], "queue backlog (s)"),
+            ("tap_jobs_queued", PALETTE["third"], "queued jobs"),
         ):
             if metrics.get(metric):
                 xs, ys = rel(metrics[metric])
