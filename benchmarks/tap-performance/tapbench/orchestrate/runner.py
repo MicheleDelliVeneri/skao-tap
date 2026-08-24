@@ -587,6 +587,7 @@ def keda_timings_from_artefacts(run_dir, entry: dict, key: str, metrics_rows: li
         deployment="skao-tap-tap-executor",
         threshold=float(entry["threshold"]),
         slo_p95_s=float(entry.get("slo_p95_s") or 2.0),
+        scale_up=keda_analysis.scaling_up(entry.get("steps") or []),
     )
 
 
@@ -779,6 +780,9 @@ def keda_scenarios(
                 steps.append(
                     load_mod.Step(seconds=step["seconds"], rate=c1 * step["rate_multiple"])
                 )
+        step_records = [
+            {"seconds": s.seconds, "rate": s.rate, "rate_end": s.rate_end} for s in steps
+        ]
         workload = load_mod.Workload(entries, mix, seed=4000)
         result = measure(
             run,
@@ -839,6 +843,7 @@ def keda_scenarios(
             deployment="skao-tap-tap-executor",
             threshold=threshold,
             slo_p95_s=slo,
+            scale_up=keda_analysis.scaling_up(step_records),
         )
         behaviour = keda_analysis.scale_behaviour(watcher_samples, "skao-tap-tap-executor")
         # The scenario's own analysis *on top of* the measurement, not instead
@@ -942,6 +947,21 @@ def reclassify(run_dir, cfg: dict) -> dict:
     shutil.copy2(summary_path, run_dir / f"summary.superseded-{int(_time.time())}.json")
 
     limits_map = limits(cfg)
+    # Guard failures the run itself recorded, keyed by measurement. These are
+    # the floor: re-judging may add a failure but must never clear one whose
+    # input the summary no longer carries, or a rerun of the analysis would
+    # quietly pronounce a rejected measurement sound. They also carry the
+    # numbers the verdict was reached on, which is how a scenario saved without
+    # its load timeline can still be re-judged on abandoned arrivals.
+    recorded: dict[str, dict[str, dict]] = {}
+    invalid_path = run_dir / "invalid.json"
+    if invalid_path.exists():
+        for reason in json.loads(invalid_path.read_text()).get("reasons") or []:
+            text = str(reason.get("reason") or "")
+            measurement, _, guard = text.partition(": ")
+            if measurement and guard:
+                recorded.setdefault(measurement, {})[guard.strip()] = reason
+
     changed = []
     # The autoscaling scenarios are analysis like any other and were being
     # skipped: they live under "keda" rather than "runs", so a correction to the
@@ -980,9 +1000,16 @@ def reclassify(run_dir, cfg: dict) -> dict:
         # written after a run can still be applied to it, and a run measured
         # before either rule existed is exactly the run that needs them.
         omission = entry.get("coordinated_omission") or _lateness_from_samples(run_dir, key)
+        was_recorded = recorded.get(key, {})
         dropped = entry.get("arrivals_dropped")
         if dropped is None and "load_timeline" in entry:
             dropped = sum(e.get("dropped_arrivals", 0) for e in entry["load_timeline"] or [])
+        if dropped is None:
+            # Not in the summary, but the run wrote the count into the failure
+            # it recorded at the time.
+            dropped = was_recorded.get("load_generator_offered_the_rate", {}).get(
+                "arrivals_dropped"
+            )
         issued = int(omission.get("samples") or (entry.get("http") or {}).get("requests") or 0)
         if dropped is not None:
             entry["arrivals_dropped"] = dropped
@@ -993,8 +1020,19 @@ def reclassify(run_dir, cfg: dict) -> dict:
             arrivals_dropped=dropped or 0,
             arrivals_issued=issued,
         )
-        kept = [g for g in entry.get("guards") or [] if g["name"] not in {v.name for v in schedule}]
+        judged = {v.name for v in schedule}
+        kept = [g for g in entry.get("guards") or [] if g["name"] not in judged]
         guard_records = kept + [{"name": v.name, "ok": v.ok, "detail": v.detail} for v in schedule]
+        # A failure the run recorded and this pass cannot re-derive is carried
+        # forward rather than dropped. Re-running the analysis must not be able
+        # to turn a rejected measurement into an accepted one by forgetting why
+        # it was rejected.
+        known = {g["name"] for g in guard_records}
+        guard_records += [
+            {"name": name, "ok": False, "detail": reason.get("detail", "recorded during the run")}
+            for name, reason in was_recorded.items()
+            if name not in known
+        ]
         # Only claim validity where something judged it. An entry with no guards
         # at all — the shape the KEDA scenarios were saved in — must not come
         # out of here asserted valid on no evidence.

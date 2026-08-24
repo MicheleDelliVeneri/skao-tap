@@ -39,6 +39,23 @@ def _series(rows: list[dict], metric: str) -> list[tuple[float, float]]:
     return sorted((r["t"], r["value"]) for r in rows if r["metric"] == metric)
 
 
+def scaling_up(steps: list[dict]) -> bool:
+    """Whether the transition at the first step boundary raises the rate.
+
+    A recovery scenario is the mirror of a scale-out: its T1 is the scaler
+    metric falling back *through* the threshold, not crossing it. Read from the
+    profile rather than assumed, because assuming a scale-out gave the
+    4xC1-to-0.2xC1 scenario a two-second "detection" — the metric was already
+    above the threshold from the phase before the transition, so the first
+    crossing after it was found immediately and meant nothing.
+    """
+    if len(steps) < 2:
+        return True
+    before = steps[0].get("rate_end") or steps[0].get("rate") or 0.0
+    after = steps[1].get("rate") or 0.0
+    return after >= before
+
+
 def _series_step(rows: list[dict]) -> float:
     """The Prometheus range step these rows were read at.
 
@@ -206,8 +223,8 @@ def timings(
     if moves > 1:
         notes.append(
             f"the autoscaler moved {moves} times after the transition; these stages "
-            "describe a single scale-out, so any stage pairing a series stamp with a "
-            "Pod stamp may be pairing different cycles"
+            "describe a single scaling transition, so any stage pairing a series "
+            "stamp with a Pod stamp may be pairing different cycles"
         )
 
     # T3-T6 — the new pod's own lifecycle. "New" means created after the load

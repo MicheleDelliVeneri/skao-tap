@@ -656,12 +656,17 @@ class Plotter:
         """One synchronised dashboard per autoscaling scenario."""
         import pyarrow.parquet as pq
 
-        parquet = self.run_dir / "metrics" / f"{scenario['id']}.parquet"
+        # The measurement key, not the scenario id: the series are written as
+        # `keda-K3.parquet`, and looking for `K3.parquet` skipped every
+        # autoscaling dashboard in the family — the run's whole point — with a
+        # reason that was not true.
+        key = scenario.get("key") or f"keda-{scenario['id']}"
+        parquet = self.run_dir / "metrics" / f"{key}.parquet"
         if not parquet.exists():
             return self._skip(
                 f"keda_{scenario['id']}",
                 f"{scenario['id']} — {scenario.get('description', '')}",
-                "no metrics parquet for this scenario",
+                f"no metrics parquet at metrics/{key}.parquet",
             )
         rows = pq.read_table(parquet).to_pydict()
         metrics: dict[str, list[tuple[float, float]]] = {}
