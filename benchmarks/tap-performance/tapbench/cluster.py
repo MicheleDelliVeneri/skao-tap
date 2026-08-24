@@ -8,10 +8,12 @@ is.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import pathlib
 import shutil
+import socket
 import subprocess
 import time
 
@@ -315,8 +317,43 @@ def database_dsn() -> str:
     return "postgresql://tap:tap@127.0.0.1:55433/tap"
 
 
-def port_forward_database() -> subprocess.Popen:
-    process = subprocess.Popen(
+#: One port-forward for the whole process, torn down at exit.
+_forward: subprocess.Popen | None = None
+
+
+def _port_accepts(host: str = "127.0.0.1", port: int = 55433) -> bool:
+    with socket.socket() as probe:
+        probe.settimeout(1.0)
+        return probe.connect_ex((host, port)) == 0
+
+
+def port_forward_database(timeout_s: float = 60.0) -> subprocess.Popen:
+    """Ensure the database is reachable on the host, once per process.
+
+    Started once and reused. One forward per measurement — started, slept on
+    for three seconds, terminated — cost eight and a half minutes between two
+    measurements: a terminated forward does not release the port immediately,
+    the replacement cannot bind, and the wait for it was neither bounded nor
+    logged. Thirty measurements paid that.
+
+    Readiness is established by connecting to the port rather than by sleeping.
+    A fixed sleep is either too short, which fails, or too long, which is the
+    thing being fixed.
+    """
+    global _forward
+    if _forward is not None and _forward.poll() is None and _port_accepts():
+        return _forward
+    if _forward is not None:
+        _forward.terminate()
+        _forward = None
+    if _port_accepts():
+        # Something already forwards this port — another benchmark process, or
+        # a forward this process started and lost track of. Spawning a second
+        # one would leave a doomed kubectl that cannot bind, so the open port
+        # is taken at face value.
+        log.debug("database port already forwarded by another process")
+        return subprocess.Popen(["true"])
+    _forward = subprocess.Popen(
         [
             "kubectl",
             "--context",
@@ -328,8 +365,24 @@ def port_forward_database() -> subprocess.Popen:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    time.sleep(3)
-    return process
+    atexit.register(close_database_forward)
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _port_accepts():
+            log.debug("database port-forward ready")
+            return _forward
+        if _forward.poll() is not None:
+            raise RuntimeError("kubectl port-forward exited before the port opened")
+        time.sleep(0.25)
+    raise RuntimeError(f"database port-forward did not open in {timeout_s:.0f}s")
+
+
+def close_database_forward() -> None:
+    """Tear the shared forward down. Idempotent; registered at exit."""
+    global _forward
+    if _forward is not None and _forward.poll() is None:
+        _forward.terminate()
+    _forward = None
 
 
 def scaled_object_yaml() -> str:

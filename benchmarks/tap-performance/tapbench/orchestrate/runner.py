@@ -132,11 +132,8 @@ def setup(cfg: dict, *, rebuild_images: bool = True) -> dict:
 def ensure_dataset(cfg: dict, names: list[str], out_dir) -> dict:
     """Grow the in-cluster database to each named target."""
     targets = [d for d in cfg["datasets"]["datasets"] if d["name"] in names]
-    forward = cluster.port_forward_database()
-    try:
-        built = dataset_mod.build(cluster.database_dsn(), cfg["datasets"], targets, out_dir)
-    finally:
-        forward.terminate()
+    cluster.port_forward_database()
+    built = dataset_mod.build(cluster.database_dsn(), cfg["datasets"], targets, out_dir)
     return {stat.name: stat.to_json() for stat in built}
 
 
@@ -189,19 +186,22 @@ def measure(
     warmup_s = timing["warmup_seconds"] if warmup_s is None else warmup_s
     measure_s = timing["measure_seconds"] if measure_s is None else measure_s
 
-    prometheus = prom_mod.Prometheus(PROMETHEUS_URL)
-    forward = cluster.port_forward_database()
-    conn = pg_mod.connect(cluster.database_dsn())
-    guard = guards_mod.Guards(min_free_disk_gb=cfg["hardware"]["enforcement"]["min_free_disk_gb"])
-    # Each phase is timed and logged. Without this a stall inside measure() is
-    # invisible: a warmup that overran by 26 minutes showed up only as a gap
-    # between two log lines, with nothing to say which step consumed it.
+    # Every phase is timed, starting here. Set after the setup instead, this
+    # missed eight and a half minutes spent establishing a port-forward — the
+    # gap showed up only as silence between two log lines, which is the same
+    # failure the timing was added to prevent.
     phase_started = time.monotonic()
 
     def phase(name: str) -> None:
         nonlocal phase_started
         log.info("%s: %s took %.1fs", key, name, time.monotonic() - phase_started)
         phase_started = time.monotonic()
+
+    prometheus = prom_mod.Prometheus(PROMETHEUS_URL)
+    cluster.port_forward_database()
+    conn = pg_mod.connect(cluster.database_dsn())
+    guard = guards_mod.Guards(min_free_disk_gb=cfg["hardware"]["enforcement"]["min_free_disk_gb"])
+    phase("setup")
 
     try:
         pg_mod.reset_statements(conn)
@@ -242,7 +242,6 @@ def measure(
         statements = pg_mod.statements(conn)
     finally:
         conn.close()
-        forward.terminate()
 
     # The measured phase as it actually ran, not as it was requested: a worker
     # only checks the clock between requests, so a phase can overrun, and
@@ -671,14 +670,13 @@ def capture_plans(run, cfg: dict, entries: list) -> dict:
     # A second entry per parameterised class, so a flag that depends on the
     # parameters (an empty cone versus a full one) has a chance to show up.
     representative += [items[1] for items in by_class.values() if len(items) > 1]
-    forward = cluster.port_forward_database()
+    cluster.port_forward_database()
+    conn = pg_mod.connect(cluster.database_dsn())
     try:
-        conn = pg_mod.connect(cluster.database_dsn())
         sizes = pg_mod.table_sizes(conn)
         plans = pg_mod.explain(conn, representative, sizes, adql_to_postgresql)
-        conn.close()
     finally:
-        forward.terminate()
+        conn.close()
     tally = pg_mod.write_plans(plans, run.explain_dir)
     return tally
 
