@@ -449,3 +449,16 @@ def test_every_expected_index_is_created_by_the_schema():
     schema = (SUITE / "tapbench/dataset/schema.sql").read_text()
     for index_name in set(pg_mod.EXPECTED_INDEXES.values()):
         assert f"CREATE INDEX IF NOT EXISTS {index_name}" in schema, index_name
+
+
+def test_larger_tiers_declare_their_own_warmup():
+    """The 60 s default demonstrably does not warm D3/D4 (the first
+    repetition at each size was colder than the rest); the tiers whose
+    working sets exceed memory say how long steady state takes."""
+    from tapbench.orchestrate import runner as runner_mod
+
+    cfg = runner_mod.load_config()
+    assert runner_mod.warmup_for(cfg, "D1") is None
+    assert runner_mod.warmup_for(cfg, "D3") == 300.0
+    assert runner_mod.warmup_for(cfg, "D4") == 600.0
+    assert runner_mod.warmup_for(cfg, "D4") > runner_mod.warmup_for(cfg, "D3")

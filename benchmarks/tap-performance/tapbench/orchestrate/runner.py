@@ -212,6 +212,20 @@ def setup(cfg: dict, *, rebuild_images: bool = True) -> dict:
     return digests
 
 
+def warmup_for(cfg: dict, dataset: str) -> float | None:
+    """The tier's own warmup, if it declares one.
+
+    The 60-second default demonstrably does not warm the larger tiers (the
+    first repetition at each size was colder than the rest), so a tier whose
+    working set exceeds memory states how long reaching its steady-state hit
+    ratio takes. None means "use the timing default".
+    """
+    for entry in cfg["datasets"]["datasets"]:
+        if entry["name"] == dataset and "warmup_seconds" in entry:
+            return float(entry["warmup_seconds"])
+    return None
+
+
 def ensure_dataset(cfg: dict, names: list[str], out_dir) -> dict:
     """Grow the in-cluster database to each named target."""
     targets = [d for d in cfg["datasets"]["datasets"] if d["name"] in names]
@@ -538,7 +552,7 @@ def concurrency_sweep(
                 repetition=repetition,
                 warmup_s=warmup_s
                 if warmup_s is not None
-                else (10 if quick else timing["warmup_seconds"]),
+                else (10 if quick else (warmup_for(cfg, dataset) or timing["warmup_seconds"])),
                 measure_s=measure_s
                 if measure_s is not None
                 else (20 if quick else timing["measure_seconds"]),
@@ -1177,7 +1191,7 @@ def stress_classes(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
             mode="closed",
             concurrency=4,
             replicas=1,
-            warmup_s=15,
+            warmup_s=warmup_for(cfg, dataset) or 15,
             measure_s=60,
         )
         if result:
