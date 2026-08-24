@@ -35,6 +35,16 @@ def test_ids_differ_between_requests(client):
     assert first != second
 
 
+def test_every_response_names_the_pod_that_served_it(client):
+    """X-Served-By carries the hostname (the pod name in Kubernetes), so
+    "which replica answered" is stated by the response rather than inferred
+    from a proxy — an inference that on a deep queue measures the queue."""
+    import socket
+
+    response = client.get("/tap/availability")
+    assert response.headers["X-Served-By"] == socket.gethostname()
+
+
 def test_the_job_records_the_request_that_created_it(client, fake_db):
     """This is what lets an executor's records name the request: the id is on
     the row, not only in the API's own logs."""

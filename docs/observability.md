@@ -43,6 +43,12 @@ x-request-id: probe-001
 The SQL comment is appended rather than prefixed, so a statement still starts
 with its verb and anything reading the beginning of a query keeps working.
 
+Every response also carries `X-Served-By`: the hostname of the process that
+answered, which in Kubernetes is the pod name. It exists so "which replica
+served this request" is something the response states rather than something
+inferred from load-balancer behaviour — an inference that, with a queue in
+front of the pods, quietly measures the queue instead of the routing.
+
 ## Metrics
 
 `GET /metrics` on the API, and port `9100` on the executor — it serves no API
