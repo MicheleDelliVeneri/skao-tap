@@ -15,6 +15,59 @@ Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/tap-performance/results/`.
 
+### 2026-08-24 — the large-result cost was the per-cell type question (package 10, delivered)
+
+Package 10 asked where the `SERIALIZATION_BOUND` time went. Into asking,
+110,000 times per Q11 response, what type each cell was — a question the
+column's PostgreSQL type OID had already answered before the first row
+arrived. `_plain()` ran once per cell in every format, up to four
+`isinstance` checks deep; VOTable ran a second per-cell function on top and
+then `saxutils.escape`, three unconditional `str.replace` allocations on
+text (ObsCore identifiers, URLs) that contains none of the three characters
+it looks for. The fix types the dispatch per *column*: a kind now names the
+Python type psycopg produces as well as the wire type, recognised values
+reach the writers untouched, and only `numeric`, timestamps and the
+`opaque` residual carry a per-cell coercion.
+
+Measured by the new `result-formats` family — runs
+`20260824T172808Z-00d532f7` (before) and `20260824T181653Z-a5e3d315`
+(after), same D1 (2.16 GiB, 700k ObsCore rows), same corpus hash, same
+five Q11 query texts in the same order, 4 closed-loop clients, 3
+repetitions, zero errors and zero invalid measurements in either run. Q11,
+10,000 wide rows per response:
+
+| Q11 | rps | p95 | bytes/response |
+| --- | --- | --- | --- |
+| votable | 4.2 → **7.6** (1.82×) | 1,109 → **615 ms** | 3.46 MiB |
+| json | 4.8 → **8.7** (1.83×) | 979 → **544 ms** | 2.74 MiB |
+| csv | 4.4 → **6.2** (1.42×) | 1,060 → **758 ms** | 2.52 MiB |
+| tsv | 4.4 → **6.2** (1.42×) | 1,051 → **748 ms** | 2.52 MiB |
+| parquet | 8.4 → **17.9** (2.12×) | 577 → **307 ms** | 0.54 MiB |
+| arrow | 8.3 → **17.4** (2.09×) | 574 → **313 ms** | 2.16 MiB |
+
+Q10 (1,000 rows) moved the same direction, 1.28–1.51× across the six.
+In-process (`tapbench serialize`, no cluster in the way) the writers
+themselves went arrow 8.01 → 0.93 µs/row, parquet 8.77 → 1.78, json
+15.44 → 5.12, votable 17.94 → 7.04, csv 17.05 → 9.19. The text output is
+byte-for-byte what it was — a differential test over every kind, its
+boundary values and NULL holds it there, and the measured bytes/response
+agree to ±0.03%.
+
+Qualifications: these are warm-cache numbers by design — D1 fits inside
+PostgreSQL's 12 GiB entirely, and the family holds the database cost
+constant to isolate the writer; and the Q11 corpus is five distinct query
+texts (its template uses only the collection parameter), identical across
+formats and builds, so the comparison is clean but the absolute p95 is not
+a cold-archive figure. Two of three after-run parquet repetitions now
+classify `TAP_CPU_BOUND` rather than `SERIALIZATION_BOUND` — for the
+columnar formats the writer has stopped being the dominant cost. What
+remains in CSV, still the slowest of the six, is `_csv.writer`'s own
+quoting logic, which is CPython's floor rather than the service's — the
+recommendation for bulk transfer is Parquet (or Arrow on a fast link), now
+documented in [Result formats](result-formats.md). First run on the new
+30-core/120 GiB host and its budget (24-core node, 8-CPU/12 GiB
+PostgreSQL): absolute numbers do not compare to the old host's family.
+
 ### 2026-08-24 — the depth signal verified: the fleet the queue implies, in seconds
 
 Run `20260824T140134Z-bf7e4b24-keda`: the same seven scenarios, first run on
@@ -175,17 +228,7 @@ attributable rather than uniformly slow:
 | Q13, full aggregate | 393 ms | `DATABASE_CPU_BOUND` |
 
 Those two are the next optimisation targets, and they are unrelated to each
-other — see packages 10 and 11.
-
-## Package 10 — Cheaper large results
-
-Q11 (10,000 wide ObsCore rows) has a p95 of 352 ms and classifies as
-`SERIALIZATION_BOUND`: a busy API and an idle database, so the time is going
-into producing bytes rather than finding rows. Worth investigating in order:
-where the per-row cost actually is (the typed serialisation path builds a
-Python value per cell), whether the VOTable writer or the DSV writer dominates,
-and whether Arrow/Parquet — which already stream in record batches — are
-materially cheaper per row and should be recommended for bulk transfer.
+other — Q11 was package 10 (delivered; see the entry above), Q13 is package 11.
 
 ## Package 11 — Aggregate and scan-bound queries
 

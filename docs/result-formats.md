@@ -81,7 +81,11 @@ database, the connection pool and the network — is
 `make benchmark-result-formats`, which drives Q10 and Q11 through every format
 at fixed concurrency and publishes a per-format p95 and response size. Use it
 to decide what a *deployment* should recommend; use `benchmark-serialize` to
-decide whether a change to the serialisation path did anything.
+decide whether a change to the serialisation path did anything. Measured
+end-to-end (run `20260824T181653Z-a5e3d315`, D1, 10,000 rows per response,
+4 clients): parquet p95 307 ms and 0.54 MiB per response, arrow 313 ms and
+2.16 MiB, json 544 ms, votable 615 ms, csv/tsv ~750 ms — warm-cache figures,
+since the family holds the database cost constant to isolate the writer.
 
 ## How the writers stay cheap
 
