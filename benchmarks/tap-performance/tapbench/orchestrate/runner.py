@@ -973,6 +973,92 @@ def stress_classes(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
     return results
 
 
+def shedding(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
+    """Package 13: hold a bounded-concurrency overload and watch how the
+    excess is refused.
+
+    A closed loop *is* bounded concurrency — each of its N clients has
+    exactly one request outstanding — so holding N far past saturation is
+    the sustained-overload point the open-loop generator cannot keep still
+    (it either abandons arrivals at its in-flight cap or grows without
+    bound). The ladder climbs through the accept backlog (2,048 by default)
+    because the first hypothesis for the resets is the listen queue
+    overflowing before the application ever sees the connection.
+
+    Two passes per replica count: the ceiling off, to find where resets
+    begin; then `tapApi.limitConcurrency` set to the configured value, to
+    show the same held load being refused with 503s instead of dropped at
+    the socket. The flip goes through the chart (a helm upgrade), which
+    resets the replica count, so the scale call follows every flip.
+    """
+    plan = cfg["scenarios"]["shedding"]
+    mix = cfg["scenarios"]["query_mix"]["normal"]
+    settle_s = cfg["scenarios"]["timing"]["settle_seconds"]
+    results: list[dict] = []
+    cluster.set_autoscaling(api=False, executor=False)
+    try:
+        for limited, limit in ((False, 0), (True, int(plan["limit_concurrency"]))):
+            cluster.set_limit_concurrency(limit)
+            for replicas in plan["replicas"]:
+                cluster.scale("tap-api", replicas)
+                for concurrency in plan["held_concurrency"]:
+                    label = f"limit{limit}" if limited else "open"
+                    key = f"shed-{dataset}-n{replicas}-{label}-c{concurrency}"
+                    # A fresh workload per measurement: every point on the
+                    # ladder replays the same request sequence, so the error
+                    # mix is attributable to the held concurrency alone.
+                    workload = load_mod.Workload(entries, mix, seed=9000 + replicas)
+                    result = measure(
+                        run,
+                        cfg,
+                        key=key,
+                        kind="shedding",
+                        dataset=dataset,
+                        workload=workload,
+                        mode="closed",
+                        concurrency=concurrency,
+                        replicas=replicas,
+                        warmup_s=plan["warmup_seconds"],
+                        measure_s=plan["measure_seconds"],
+                    )
+                    if result:
+                        results.append(result)
+                    time.sleep(settle_s)
+    finally:
+        # hand the next family the chart's defaults back
+        cluster.set_limit_concurrency(0)
+        cluster.scale("tap-api", 1)
+    return results
+
+
+def shedding_summary(results: list[dict]) -> list[dict]:
+    """The shedding ladder reduced to the numbers the package asked for:
+    per held concurrency, how much of the shed load was an answer (503)
+    and how much was a socket drop (ReadError and friends)."""
+    rows: list[dict] = []
+    for result in results:
+        if result.get("kind") != "shedding":
+            continue
+        http = result["http"]
+        errors = dict(http.get("errors_by_type") or {})
+        resets = int(errors.pop("ReadError", 0))
+        statuses = {str(k): int(v) for k, v in (http.get("errors_by_status") or {}).items()}
+        rows.append(
+            {
+                "key": result["key"],
+                "replicas": result.get("replicas"),
+                "held_concurrency": result.get("concurrency"),
+                "requests": int(http.get("requests", 0)),
+                "rps": float(http.get("rps", 0.0)),
+                "refused_503": statuses.get("503", 0),
+                "reset_readerror": resets,
+                "other_errors": {k: v for k, v in errors.items() if v},
+            }
+        )
+    rows.sort(key=lambda r: (r["key"].split("-c")[0], r["held_concurrency"] or 0))
+    return rows
+
+
 def result_formats(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
     """One query class, one writer, everything else held still.
 

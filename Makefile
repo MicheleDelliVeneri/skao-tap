@@ -10,6 +10,7 @@
 #   make benchmark-keda                   autoscaling scenarios K1-K7
 #   make benchmark-result-formats         every result writer over the same rows
 #   make benchmark-stress                 just the stress classes (Q09/Q11/Q13/Q14)
+#   make benchmark-shedding               held overload: 503s versus socket drops
 #   make benchmark-serialize              writers only, in process, no cluster
 #   make benchmark-full                   every family, every dataset
 #   make benchmark-report                 redraw plots and HTML for a run
@@ -26,12 +27,12 @@ RESUME_ARG := $(if $(RESUME),--resume $(RESUME),)
 NO_BUILD_ARG := $(if $(NO_BUILD),--no-build,)
 
 .PHONY: benchmark-smoke benchmark-db-scaling benchmark-fixed-scaling \
-        benchmark-keda benchmark-result-formats benchmark-stress benchmark-serialize \
+        benchmark-keda benchmark-result-formats benchmark-stress benchmark-shedding benchmark-serialize \
         benchmark-full benchmark-report benchmark-setup \
         benchmark-teardown benchmark-publish benchmark-help
 
 benchmark-help:
-	@sed -n '1,19p' $(firstword $(MAKEFILE_LIST))
+	@sed -n '1,20p' $(firstword $(MAKEFILE_LIST))
 
 benchmark-setup:
 	$(BENCH) setup $(NO_BUILD_ARG)
@@ -53,6 +54,9 @@ benchmark-result-formats:
 
 benchmark-stress:
 	$(BENCH) stress $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASET),--dataset $(DATASET),)
+
+benchmark-shedding:
+	$(BENCH) shedding $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASET),--dataset $(DATASET),)
 
 # No cluster: the writers on their own, so a change to the serialisation path
 # can be measured in seconds instead of an afternoon.
