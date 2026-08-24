@@ -77,7 +77,31 @@ Set `tapApi.workers` to the pod's CPU limit and no higher: beyond that the
 workers compete for the same cores and only latency moves. `tapApi.replicas`
 does the same across pods, and the two combine.
 
-### Probes
+### Shedding overload with refusals, not resets
+
+Past its capacity the service currently sheds load with connection resets —
+the benchmark suite observed clients reading `ECONNRESET` under sustained
+overload, and a reset tells a client nothing: it cannot distinguish an
+overloaded service from a broken network, so it can only retry blind, which
+adds load. The leading suspect is the listen socket's accept queue
+overflowing before the application ever sees the connection (unconfirmed —
+the rate at which resets begin has not been established).
+
+Two knobs shape this behaviour:
+
+```yaml
+tapApi:
+  backlog: 2048          # accept-queue size (uvicorn --backlog)
+  limitConcurrency: 0    # connections per worker before answering 503
+```
+
+`backlog` sizes the kernel's accept queue; raising it absorbs sharper
+arrival bursts but adds queueing, not capacity. `limitConcurrency` is the
+application-level counterpart: past that many concurrent connections *per
+worker process*, uvicorn answers `503` immediately — a refusal a client can
+back off from. It is off (`0`, unlimited) by default because the right value
+depends on what one worker can actually serve; when set, put it above the
+worker's normal concurrent load and below where resets were observed.
 
 `/health/live` answers whether the process is turning and touches nothing else;
 `/health/ready` answers whether this pod should be sent traffic, and treats a

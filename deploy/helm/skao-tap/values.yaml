@@ -26,6 +26,17 @@ tapApi:
   # Scaling out with `replicas` does the same thing across pods, and both can
   # be used together.
   workers: 1
+  # -- Listen-socket accept queue (uvicorn --backlog). When it overflows the
+  # kernel resets connections before the application sees them, so clients
+  # read connection resets rather than refusals. Raise it to absorb sharper
+  # arrival bursts; it does not add capacity, only queueing.
+  backlog: 2048
+  # -- Concurrent connections one worker process accepts before answering
+  # 503 immediately (uvicorn --limit-concurrency, per worker). 0 means
+  # unlimited — the default, and then overload past the accept queue sheds
+  # with resets. Set it to make the service refuse what it cannot serve:
+  # a 503 tells a client to back off, a reset tells it nothing.
+  limitConcurrency: 0
   # -- Externally visible base URL, written into capabilities and result
   # links. Leave empty to default to the in-cluster service URL.
   baseUrl: ""
@@ -44,6 +55,12 @@ tapApi:
 tapExecutor:
   # -- Executors claim jobs with FOR UPDATE SKIP LOCKED; scaling out is safe
   # provided the results volume is ReadWriteMany (see `results`).
+  #
+  # One executor process is one thread running one job at a time, so it can
+  # never use more than one core: a CPU limit above 1 buys nothing, and a
+  # limit below 1 slows every job. Per-pod throughput is fixed by that single
+  # thread (~2 jobs/s measured on the benchmark hardware) — `replicas`, or
+  # the queue-depth autoscaler below, is the executor's scaling axis.
   replicas: 1
   # -- Override the chart's default spreading (see `scheduling`) wholesale.
   affinity: {}
@@ -121,8 +138,11 @@ horizontalAutoscaling:
     # for sites that want slower scale-down than the 5-minute default.
     behavior: {}
 
-  # -- tap-executor scales on queue backlog: the age of the oldest QUEUED
-  # job, which is what a user actually waits for. Neither CPU nor memory says
+  # -- tap-executor scales on queue depth: the number of QUEUED jobs, which
+  # grows with the work outstanding. Not on the oldest job's age — that
+  # saturates near one job's service time as soon as the queue is being
+  # drained at all (measured: 1,713 jobs queued, oldest 54 s, so an
+  # age-based trigger asked for one pod). Neither CPU nor memory says
   # anything useful here — an executor spends its time waiting on PostgreSQL.
   tapExecutor:
     enabled: false
@@ -136,25 +156,27 @@ horizontalAutoscaling:
     #              query lives in that component's config, not here — see
     #              docs/autoscaling.md.
     scaler: keda
-    # -- Must be at least 1. The backlog gauge is exported by the executor
+    # -- Must be at least 1. The queue gauge is exported by the executor
     # itself, so at zero replicas nothing reports it, the series goes stale,
     # and no amount of queued work can bring a replica back.
     minReplicas: 1
     maxReplicas: 8
-    # -- Seconds of backlog one replica is expected to absorb. The autoscaler
-    # divides: 300s of backlog against 60 here asks for 5 replicas. Lower it
-    # to react sooner and to run more executors; raise it to tolerate a queue.
-    backlogSecondsPerReplica: 60
+    # -- QUEUED jobs one replica is expected to absorb. The autoscaler
+    # divides: 50 queued jobs against 10 here asks for 5 replicas. Lower it
+    # to react sooner and to run more executors; raise it to tolerate a
+    # queue. (One executor works through roughly 2 jobs/s, so the default
+    # is about 5 s of queue per replica.)
+    queuedJobsPerReplica: 10
     pollingIntervalSeconds: 30
-    # -- Backlog that counts as work worth starting a pod for, when
+    # -- Queue depth that counts as work worth starting a pod for, when
     # minReplicas is 0 (KEDA only, and only the 0-to-1 transition — with a
     # minimum of 1 it would do nothing, so it is rendered only when it can).
-    activationBacklogSeconds: 0
+    activationQueuedJobs: 0
     # -- Prometheus holding the executor metrics. Defaults to the chart's own
     # when prometheus.enabled=true, which is for trying this out, not for
     # production — point it at the Prometheus you already run.
     prometheusAddress: ""
-    # -- PromQL for the backlog. Aggregated with max() on purpose: every
+    # -- PromQL for the queue depth. Aggregated with max() on purpose: every
     # replica reports the same figures for one shared queue, so sum() would
     # scale on the replica count and feed itself. Namespace-scoped because a
     # Prometheus watching several namespaces would otherwise autoscale this
@@ -162,8 +184,9 @@ horizontalAutoscaling:
     # namespace label, or if two releases share one namespace.
     query: ""
     # -- External-metric name, when scaler=external. Must match what the
-    # cluster's metrics provider actually publishes.
-    externalMetricName: tap_oldest_queued_job_seconds
+    # cluster's metrics provider actually publishes — the adapter rule in
+    # docs/autoscaling.md publishes tap_jobs{phase="QUEUED"} under this name.
+    externalMetricName: tap_jobs_queued
     # -- matchLabels for that metric. Left unset, the chart scopes it to this
     # release's namespace, which is what prometheus-adapter publishes when its
     # rule overrides `namespace`. Set labels here for a provider that

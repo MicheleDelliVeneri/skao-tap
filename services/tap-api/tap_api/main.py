@@ -4,6 +4,7 @@ Implements the TAP 1.1 endpoint set: /sync, /async (UWS 1.1), and the VOSI
 resources /capabilities, /availability, /tables, plus DALI /examples.
 """
 
+import socket
 import time
 from contextlib import asynccontextmanager
 
@@ -94,6 +95,13 @@ async def lifespan(app: FastAPI):
     close_pool()
 
 
+# Which pod answered. Kubernetes sets the hostname to the pod name, so this
+# turns "which replica served this request" from an inference — a proxy
+# measurement that on a deep queue reports the queue — into something each
+# response states. Read once: it cannot change while the process lives.
+SERVED_BY_HEADER = "X-Served-By"
+SERVED_BY = socket.gethostname()
+
 app = FastAPI(
     title="SKAO TAP service",
     version="0.1.0",
@@ -120,6 +128,7 @@ async def correlate(request: Request, call_next):
     with request_context(rid), LogContext(request_id=rid, path=request.url.path):
         response = await call_next(request)
     response.headers[REQUEST_ID_HEADER] = rid
+    response.headers[SERVED_BY_HEADER] = SERVED_BY
     return response
 
 

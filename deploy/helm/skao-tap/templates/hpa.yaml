@@ -8,10 +8,28 @@ Two different signals, because the two services are limited by different
 things. The API is CPU-bound (pure-Python ANTLR translation, GIL-held), so
 CPU utilisation says what it is doing and metrics-server alone can measure
 it. An executor spends its life waiting on PostgreSQL, so its CPU says
-nothing; what a user actually waits for is the age of the oldest queued job,
-which is why package 8 exported it.
+nothing; the queue is what says whether the executors are keeping up, and
+its *depth* (tap_jobs{phase="QUEUED"}) is the signal — the oldest job's age
+saturates near one job's service time as soon as the queue drains at all
+(measured: 1,713 jobs queued, oldest 54 s, one pod asked for), so scaling
+on age under-scales exactly when it matters and no threshold fixes that.
 */}}
 {{- $hpa := .Values.horizontalAutoscaling }}
+
+{{- /* -- renamed values ---------------------------------------------------- */}}
+
+{{- /*
+The scaling knob changed meaning when the signal changed from the oldest
+job's age to the queue's depth. A value carrying seconds silently read as a
+job count would scale wrongly without a word, so the old names are refused
+with the new ones.
+*/}}
+{{- if hasKey $hpa.tapExecutor "backlogSecondsPerReplica" }}
+{{- fail "horizontalAutoscaling.tapExecutor.backlogSecondsPerReplica was renamed: the executor now scales on queue depth (tap_jobs{phase=\"QUEUED\"}), not the oldest job's age, which saturates under load. Set queuedJobsPerReplica — QUEUED jobs one replica absorbs (one executor runs ~2 jobs/s, so 10 is about 5 s of queue). See docs/autoscaling.md." }}
+{{- end }}
+{{- if hasKey $hpa.tapExecutor "activationBacklogSeconds" }}
+{{- fail "horizontalAutoscaling.tapExecutor.activationBacklogSeconds was renamed to activationQueuedJobs: the executor now scales on queue depth, not the oldest job's age. See docs/autoscaling.md." }}
+{{- end }}
 
 {{- /* -- validation ------------------------------------------------------ */}}
 
@@ -47,14 +65,14 @@ actually breaks. A plain HPA cannot do zero at all without a feature gate.
 {{- fail "horizontalAutoscaling.tapExecutor.minReplicas must be at least 1 with scaler=external: a HorizontalPodAutoscaler cannot scale to zero without the HPAScaleToZero feature gate" }}
 {{- end }}
 {{- if not $hpa.tapExecutor.query }}
-{{- fail "horizontalAutoscaling.tapExecutor.minReplicas 0 needs your own horizontalAutoscaling.tapExecutor.query: the default reads tap_oldest_queued_job_seconds, which the executor itself exports, so with no executors running nothing reports the queue, the series goes stale, and no amount of queued work can start a pod again. Point `query` at a series that survives having no executors (a recording rule, or an exporter reading the database) and scale-to-zero is sound. See docs/autoscaling.md." }}
+{{- fail "horizontalAutoscaling.tapExecutor.minReplicas 0 needs your own horizontalAutoscaling.tapExecutor.query: the default reads tap_jobs{phase=\"QUEUED\"}, which the executor itself exports, so with no executors running nothing reports the queue, the series goes stale, and no amount of queued work can start a pod again. Point `query` at a series that survives having no executors (a recording rule, or an exporter reading the database) and scale-to-zero is sound. See docs/autoscaling.md." }}
 {{- end }}
 {{- end }}
 {{- if not (has $hpa.tapExecutor.scaler (list "keda" "external")) }}
 {{- fail (printf "horizontalAutoscaling.tapExecutor.scaler is %q; expected \"keda\" or \"external\"" $hpa.tapExecutor.scaler) }}
 {{- end }}
-{{- if lt (int $hpa.tapExecutor.backlogSecondsPerReplica) 1 }}
-{{- fail "horizontalAutoscaling.tapExecutor.backlogSecondsPerReplica must be at least 1: it is the divisor that turns seconds of backlog into a replica count" }}
+{{- if lt (int $hpa.tapExecutor.queuedJobsPerReplica) 1 }}
+{{- fail "horizontalAutoscaling.tapExecutor.queuedJobsPerReplica must be at least 1: it is the divisor that turns queue depth into a replica count" }}
 {{- end }}
 {{- end }}
 
@@ -117,7 +135,7 @@ spec:
 ---
 {{- end }}
 
-{{- /* -- tap-executor: queue backlog ------------------------------------- */}}
+{{- /* -- tap-executor: queue depth --------------------------------------- */}}
 
 {{- if $hpa.tapExecutor.enabled }}
 {{- if eq $hpa.tapExecutor.scaler "keda" }}
@@ -149,17 +167,17 @@ spec:
   triggers:
     - type: prometheus
       metadata:
-        serverAddress: {{ include "skao-tap.backlogPrometheus" . | quote }}
-        query: {{ include "skao-tap.backlogQuery" . | quote }}
-        # seconds of backlog per replica: 300s of queue against 60 here asks
-        # for 5 executors
-        threshold: {{ int $hpa.tapExecutor.backlogSecondsPerReplica | quote }}
+        serverAddress: {{ include "skao-tap.queueDepthPrometheus" . | quote }}
+        query: {{ include "skao-tap.queueDepthQuery" . | quote }}
+        # queued jobs per replica: 50 queued against 10 here asks for
+        # 5 executors
+        threshold: {{ int $hpa.tapExecutor.queuedJobsPerReplica | quote }}
         {{- /* Only when it can do something: activationThreshold governs the
                0-to-1 transition alone, so at a minimum of 1 it would be a
                setting that looks live and is not. Damping for the scaling
                range belongs in `behavior`. */}}
         {{- if eq (int $hpa.tapExecutor.minReplicas) 0 }}
-        activationThreshold: {{ int $hpa.tapExecutor.activationBacklogSeconds | quote }}
+        activationThreshold: {{ int $hpa.tapExecutor.activationQueuedJobs | quote }}
         {{- end }}
 ---
 {{- else }}
@@ -215,10 +233,10 @@ spec:
               {{- toYaml . | nindent 14 }}
           {{- end }}
         target:
-          # AverageValue, so the HPA divides the backlog by the replica count:
-          # desired = ceil(backlog / backlogSecondsPerReplica)
+          # AverageValue, so the HPA divides the depth by the replica count:
+          # desired = ceil(queued / queuedJobsPerReplica)
           type: AverageValue
-          averageValue: {{ int $hpa.tapExecutor.backlogSecondsPerReplica | quote }}
+          averageValue: {{ int $hpa.tapExecutor.queuedJobsPerReplica | quote }}
   {{- with $hpa.tapExecutor.behavior }}
   behavior:
     {{- toYaml . | nindent 4 }}

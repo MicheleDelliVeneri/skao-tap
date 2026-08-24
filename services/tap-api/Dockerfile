@@ -35,4 +35,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
 # TAP_API_WORKERS is what lets a deployment use them. exec keeps uvicorn in
 # place for signal handling; the expansions are quoted so a malformed value
 # cannot become extra shell words.
-CMD ["/bin/sh", "-c", "exec /srv/.venv/bin/uvicorn tap_api.main:app --host 0.0.0.0 --port \"${TAP_API_PORT:-8080}\" --workers \"${TAP_API_WORKERS:-1}\""]
+# TAP_API_BACKLOG sizes the listen socket's accept queue (uvicorn's default
+# is 2048); when it overflows, the kernel drops or resets connections before
+# the application ever sees them — the client reads a reset, not a refusal.
+# TAP_API_LIMIT_CONCURRENCY (per worker process; unset means unlimited) is
+# the application-level counterpart: past that many concurrent connections
+# uvicorn answers 503 immediately, so overload sheds with a refusal a client
+# can back off from instead of a reset it can only retry blind.
+CMD ["/bin/sh", "-c", "exec /srv/.venv/bin/uvicorn tap_api.main:app --host 0.0.0.0 --port \"${TAP_API_PORT:-8080}\" --workers \"${TAP_API_WORKERS:-1}\" --backlog \"${TAP_API_BACKLOG:-2048}\" ${TAP_API_LIMIT_CONCURRENCY:+--limit-concurrency \"${TAP_API_LIMIT_CONCURRENCY}\"}"]

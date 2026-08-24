@@ -198,6 +198,18 @@ class FakeDB:
         if "FROM pg_stat_activity" in text:
             return FakeResult()  # cancelled backend no longer active
 
+        if text.startswith("SELECT phase, count(*) FROM uws.jobs"):
+            counts: dict[str, int] = {}
+            for job in self.jobs.values():
+                counts[job["phase"]] = counts.get(job["phase"], 0) + 1
+            return FakeResult(list(counts.items()))
+
+        if text.startswith("SELECT extract(epoch FROM now() - min(creation_time))"):
+            queued = [j["creation_time"] for j in self.jobs.values() if j["phase"] == "QUEUED"]
+            if not queued:
+                return FakeResult([(None,)])
+            return FakeResult([((self._now - min(queued)).total_seconds(),)])
+
         if text.startswith("SELECT phase FROM uws.jobs"):
             job = self.jobs.get(params[0])
             return FakeResult([(job["phase"],)] if job else [])

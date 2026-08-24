@@ -61,7 +61,7 @@ graph TB
     ex1 -->|"claim: FOR UPDATE SKIP LOCKED"| pg
     ex1 -->|"server-side cursor"| pg
     ex1 -->|"writes result.{vot,csv,parquet,arrows}"| vol
-    keda -.->|"reads tap_oldest_queued_job_seconds"| ex1
+    keda -.->|"reads tap_jobs{phase=QUEUED}"| ex1
     keda -.->|"sets replicas"| execs
 
     classDef store fill:#fdf6e3,stroke:#b58900,color:#16202a
@@ -307,7 +307,13 @@ saturates one core no matter how large the pod's CPU limit is. Measured:
 **tap-executor** replicas cooperate through the database. `FOR UPDATE SKIP
 LOCKED` means each claim takes a different row without blocking, so M
 executors give M concurrent jobs with no broker, no leases and no split-brain.
-Each executor runs one query at a time, so M is the async concurrency.
+Each executor runs one query at a time, so M is the async concurrency — and
+one executor can never use more than one core, so give it a CPU limit of 1
+or none at all. Measured under sustained load an executor pins at ~0.96
+cores with zero throttling against a 2-core limit: the second core is
+headroom that cannot be used, and it makes utilisation numbers lie. Per-pod
+throughput (~2 jobs/s) is fixed by the single thread; replicas are the
+scaling axis.
 
 **The results volume must be `ReadWriteMany`** as soon as more than one pod
 writes or reads it — the executor writes result files and the API serves them.
@@ -331,7 +337,7 @@ replicas, so the ceiling becomes the pooler's rather than the sum of every
 pod's.
 
 **Autoscaling** replaces the static counts: the API on CPU, the executors on
-queue backlog. Both are opt-in and have their own page —
+queue depth. Both are opt-in and have their own page —
 [Autoscaling](autoscaling.md).
 
 **Resilience defaults** are on: soft pod anti-affinity across nodes and a zone

@@ -408,6 +408,11 @@ def refresh_queue_metrics() -> None:
     JOBS_BY_PHASE.clear()
     for phase, count in counts:
         JOBS_BY_PHASE.labels(phase=phase).set(count)
+    # QUEUED is the autoscaler's series, so an empty queue must report 0
+    # rather than disappear: max() over no series is empty, and an autoscaler
+    # reading emptiness cannot tell "drained" from "broken"
+    if not any(phase == "QUEUED" for phase, _ in counts):
+        JOBS_BY_PHASE.labels(phase="QUEUED").set(0)
     OLDEST_QUEUED_JOB.set(float((oldest and oldest[0]) or 0.0))
 
 

@@ -43,6 +43,12 @@ x-request-id: probe-001
 The SQL comment is appended rather than prefixed, so a statement still starts
 with its verb and anything reading the beginning of a query keeps working.
 
+Every response also carries `X-Served-By`: the hostname of the process that
+answered, which in Kubernetes is the pod name. It exists so "which replica
+served this request" is something the response states rather than something
+inferred from load-balancer behaviour — an inference that, with a queue in
+front of the pods, quietly measures the queue instead of the routing.
+
 ## Metrics
 
 `GET /metrics` on the API, and port `9100` on the executor — it serves no API
@@ -54,8 +60,8 @@ of its own, so its metrics get a listener instead.
 | `tap_db_pool_exhausted_total` | counter | Requests answered `503` because no connection came free |
 | `tap_db_connections_in_use` | gauge | How much of the pool this process is holding |
 | `tap_query_duration_seconds{kind}` | histogram | Query time, `sync` and `async` separately — they have different limits and different users. Every query that ran is in it, including one that was aborted or abandoned: those were slow too, and dropping them would flatter the tail |
-| `tap_jobs{phase}` | gauge | The job store by phase |
-| `tap_oldest_queued_job_seconds` | gauge | Queue backlog, and what executors autoscale on — see [Autoscaling](autoscaling.md) |
+| `tap_jobs{phase}` | gauge | The job store by phase. `phase="QUEUED"` is the queue's depth and what executors autoscale on — see [Autoscaling](autoscaling.md) |
+| `tap_oldest_queued_job_seconds` | gauge | How long the head of the queue has waited — a latency figure for dashboards and alerts, **not** a scaling signal: it saturates near one job's service time once the queue is draining at all (measured: 1,713 queued, oldest 54 s) |
 | `tap_jobs_completed_total{phase}` | counter | Job outcomes: `COMPLETED`, `ERROR` and `ABORTED`, labelled with the phase the job actually reached |
 
 Queue metrics are reported by the executor, because the queue is its subject.
@@ -68,9 +74,12 @@ describe one shared queue, not each worker's share.
   raise `config.dbPoolMax`, `tapApi.workers` or `tapApi.replicas`.
 - The tail of `tap_db_pool_wait_seconds` growing before that happens — the
   same condition, earlier.
-- `tap_oldest_queued_job_seconds` growing without bound: executors cannot keep
+- `tap_jobs{phase="QUEUED"}` growing without bound: executors cannot keep
   up, so add `tapExecutor.replicas` — or let an autoscaler do it, which is
   what this metric is shaped for (see [Autoscaling](autoscaling.md)).
+  `tap_oldest_queued_job_seconds` is the companion alert on *waiting time* —
+  useful as an SLO figure, but do not scale on it: it stops growing once the
+  queue drains at all, however deep it is.
 
 ## Scraping it
 

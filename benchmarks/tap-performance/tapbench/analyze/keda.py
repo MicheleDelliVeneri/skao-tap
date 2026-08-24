@@ -170,11 +170,13 @@ def timings(
     scaler_values = _series(metrics_rows, "keda_scaler_metrics_value")
     if not scaler_values:
         # Non-KEDA (CPU HPA) scenarios have no such series; fall back to the
-        # service's own queue gauge, which is the same quantity KEDA reads.
-        scaler_values = _series(metrics_rows, "tap_oldest_queued_job_seconds")
+        # service's own queue-depth gauge, which is the same quantity KEDA
+        # reads — the threshold is denominated in queued jobs, so the age
+        # gauge would be the wrong unit here.
+        scaler_values = _series(metrics_rows, "tap_jobs_queued")
         if scaler_values:
             notes.append(
-                "T1 from tap_oldest_queued_job_seconds: KEDA published "
+                'T1 from tap_jobs{phase="QUEUED"}: KEDA published '
                 "no keda_scaler_metrics_value for this window"
             )
     t1 = _first_after(

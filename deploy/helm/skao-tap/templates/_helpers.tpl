@@ -96,33 +96,36 @@ floor. Usage: include "skao-tap.minReplicas" (dict "ctx" $ "component" "tap-api"
 {{- end -}}
 
 {{- /*
-The Prometheus the executor's backlog is read from. Defaults to the chart's
-own only when it is deployed — that one is for trying this out, and a
+The Prometheus the executor's queue depth is read from. Defaults to the
+chart's own only when it is deployed — that one is for trying this out, and a
 production autoscaler should read the Prometheus the site already runs.
 */}}
-{{- define "skao-tap.backlogPrometheus" -}}
+{{- define "skao-tap.queueDepthPrometheus" -}}
 {{- $spec := .Values.horizontalAutoscaling.tapExecutor -}}
 {{- if $spec.prometheusAddress -}}
 {{- $spec.prometheusAddress -}}
 {{- else if .Values.prometheus.enabled -}}
 {{- printf "http://%s-prometheus:9090" (include "skao-tap.fullname" .) -}}
 {{- else -}}
-{{- fail "horizontalAutoscaling.tapExecutor.prometheusAddress is required: the backlog is a Prometheus gauge, so an autoscaler needs to know which Prometheus has it (or set prometheus.enabled=true to try it with the chart's own). See docs/autoscaling.md." -}}
+{{- fail "horizontalAutoscaling.tapExecutor.prometheusAddress is required: the queue depth is a Prometheus gauge, so an autoscaler needs to know which Prometheus has it (or set prometheus.enabled=true to try it with the chart's own). See docs/autoscaling.md." -}}
 {{- end -}}
 {{- end -}}
 
 {{- /*
-PromQL for the queue backlog. max() rather than sum(): every replica reports
-the same figures for one shared queue, so sum() would scale on the replica
+PromQL for the queue depth: the number of QUEUED jobs, not the oldest job's
+age — depth grows with the work outstanding, where age saturates near one
+job's service time as soon as the queue drains at all (measured: 1,713
+queued, oldest 54 s). max() rather than sum(): every replica reports the
+same figures for one shared queue, so sum() would scale on the replica
 count and then feed on its own output. Namespace-scoped so a Prometheus
 watching several namespaces does not autoscale this release on another one's
 queue.
 */}}
-{{- define "skao-tap.backlogQuery" -}}
+{{- define "skao-tap.queueDepthQuery" -}}
 {{- $spec := .Values.horizontalAutoscaling.tapExecutor -}}
 {{- if $spec.query -}}
 {{- $spec.query -}}
 {{- else -}}
-{{- printf "max(tap_oldest_queued_job_seconds{namespace=\"%s\"})" .Release.Namespace -}}
+{{- printf "max(tap_jobs{phase=\"QUEUED\",namespace=\"%s\"})" .Release.Namespace -}}
 {{- end -}}
 {{- end -}}
