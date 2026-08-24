@@ -68,14 +68,20 @@ QUERY_DURATION = Histogram(
 
 JOBS_BY_PHASE = Gauge(
     "tap_jobs",
-    "UWS jobs in the store, by phase.",
+    "UWS jobs in the store, by phase. phase=\"QUEUED\" is the queue's depth"
+    " and what to scale on: it grows with the work outstanding, where the"
+    " oldest job's age saturates once the queue is being drained at all.",
     ["phase"],
     registry=REGISTRY,
 )
 
 OLDEST_QUEUED_JOB = Gauge(
     "tap_oldest_queued_job_seconds",
-    "Age of the oldest QUEUED job — the queue's backlog, and what to scale on.",
+    "Age of the oldest QUEUED job — how long the head of the queue has"
+    " waited. A latency figure for dashboards and alerts, not a scaling"
+    " signal: under steady drain it tops out near one job's service time"
+    " however deep the queue behind it is (measured: 1,713 jobs queued,"
+    " oldest 54 s). Scale on tap_jobs{phase=\"QUEUED\"} instead.",
     registry=REGISTRY,
 )
 

@@ -109,3 +109,26 @@ def test_a_busy_executor_still_reports_the_queue(monkeypatch, fake_db, results_d
 
     assert calls.count("metrics") >= 2
     assert slept == [], "a poll that found work must not throttle the next one"
+
+
+def test_refresh_queue_metrics_reports_queue_depth(fake_db):
+    from tapcore.observability import REGISTRY
+
+    _queued_job(fake_db)
+    _queued_job(fake_db)
+    worker.refresh_queue_metrics()
+    assert REGISTRY.get_sample_value("tap_jobs", {"phase": "QUEUED"}) == 2.0
+    assert REGISTRY.get_sample_value("tap_oldest_queued_job_seconds") >= 0.0
+
+
+def test_refresh_queue_metrics_keeps_queued_series_alive_at_zero(fake_db):
+    """The autoscaler reads max(tap_jobs{phase="QUEUED"}). max() over no
+    series is empty, and an autoscaler reading emptiness cannot tell a
+    drained queue from a broken exporter — so an empty queue must report 0
+    rather than disappear."""
+    from tapcore.observability import REGISTRY
+
+    fake_db.add_job(phase="COMPLETED")  # some other phase present, no QUEUED
+    worker.refresh_queue_metrics()
+    assert REGISTRY.get_sample_value("tap_jobs", {"phase": "QUEUED"}) == 0.0
+    assert REGISTRY.get_sample_value("tap_oldest_queued_job_seconds") == 0.0

@@ -6,7 +6,7 @@ are limited by different things.
 | | Signal | Needs |
 | --- | --- | --- |
 | tap-api | CPU utilisation | metrics-server, which every cluster runs |
-| tap-executor | `tap_oldest_queued_job_seconds` | KEDA, or an external-metrics provider |
+| tap-executor | `tap_jobs{phase="QUEUED"}` | KEDA, or an external-metrics provider |
 
 Off by default. A single-replica deployment is a valid one, and handing the
 replica count to an autoscaler is a decision an operator should make rather
@@ -71,22 +71,41 @@ verticalAutoscaling:
   controlledResources: ["memory"]
 ```
 
-## The executor scales on the queue
+## The executor scales on the queue's depth
 
 An executor spends its time waiting on PostgreSQL, so its CPU says nothing
-about whether it is keeping up. What a user waits for is the queue, and
-package 8 exports exactly that: `tap_oldest_queued_job_seconds`, the age of
-the oldest `QUEUED` job.
+about whether it is keeping up. The queue is the signal — and specifically
+its **depth**, `tap_jobs{phase="QUEUED"}`, the number of jobs waiting.
 
-The knob is seconds of backlog one replica should absorb, and the autoscaler
-divides:
+Not the oldest job's age, which is what this chart originally scaled on.
+The age of the head of the queue measures how long *one* job has waited,
+and as soon as the queue is being drained at all it tops out near a job's
+service time — however much work is piling up behind it. The benchmark
+suite caught it plainly: **1,713 jobs queued, the oldest 54 s old, and the
+age-based trigger asked for one pod.** No threshold fixes that — the signal
+saturates, so a lower threshold moves where it saturates, not whether.
+Depth grows with the work outstanding, which is what a scaling signal is
+for. (`tap_oldest_queued_job_seconds` is still exported: it is a fine
+latency figure for dashboards and alerts — just not a scaling signal.)
+
+The knob is the number of queued jobs one replica should absorb, and the
+autoscaler divides:
 
 ```
-replicas = ceil(backlog_seconds / backlogSecondsPerReplica)
+replicas = ceil(queued_jobs / queuedJobsPerReplica)
 ```
 
-So 300 s of backlog against the default 60 asks for 5 executors. Lower it to
-react sooner and run more; raise it to tolerate a queue.
+So 50 queued jobs against the default 10 asks for 5 executors. One executor
+works through roughly 2 jobs/s, so the default is about 5 s of queue per
+replica. Lower it to react sooner and run more; raise it to tolerate a
+queue.
+
+!!! note "Renamed values"
+    `backlogSecondsPerReplica` and `activationBacklogSeconds` are refused by
+    the chart with a message naming their replacements
+    (`queuedJobsPerReplica`, `activationQueuedJobs`): the unit changed from
+    seconds to jobs, and a value silently read in the wrong unit would scale
+    wrongly without a word.
 
 ### With KEDA (default)
 
@@ -95,7 +114,7 @@ horizontalAutoscaling:
   tapExecutor:
     enabled: true
     maxReplicas: 8
-    backlogSecondsPerReplica: 60
+    queuedJobsPerReplica: 10
     prometheusAddress: http://prometheus-operated.monitoring:9090
 ```
 
@@ -107,14 +126,14 @@ rather than in another release's values.
 The query it ships is
 
 ```promql
-max(tap_oldest_queued_job_seconds{namespace="<release namespace>"})
+max(tap_jobs{phase="QUEUED",namespace="<release namespace>"})
 ```
 
 `max()`, not `sum()`. Every replica reports the same figures for one shared
 queue, so `sum()` would scale on the replica count — more executors, bigger
 sum, more executors, which is an autoscaler feeding on its own output. The
 namespace selector keeps a Prometheus that watches several namespaces from
-scaling this release on another one's backlog. Override `query` if your
+scaling this release on another one's queue. Override `query` if your
 scraper adds no `namespace` label, or if two releases share one namespace.
 (`query` reaches KEDA only — the `external` scaler below has its own knob for
 the same job.)
@@ -141,13 +160,13 @@ aggregate the same way:
 # prometheus-adapter values
 rules:
   external:
-    - seriesQuery: 'tap_oldest_queued_job_seconds'
+    - seriesQuery: 'tap_jobs{phase="QUEUED"}'
       resources:
         overrides:
           namespace: {resource: namespace}
       name:
-        as: tap_oldest_queued_job_seconds
-      metricsQuery: max(<<.Series>>{<<.LabelMatchers>>})
+        as: tap_jobs_queued
+      metricsQuery: max(<<.Series>>{<<.LabelMatchers>>,phase="QUEUED"})
 ```
 
 `max(...)` there for the same reason as above. Getting it wrong in that file
@@ -187,10 +206,10 @@ horizontalAutoscaling:
   tapExecutor:
     minReplicas: 0
     query: max(tap_queue_depth_from_db)   # not exported by the executor
-    activationBacklogSeconds: 5           # backlog worth starting a pod for
+    activationQueuedJobs: 1               # queue worth starting a pod for
 ```
 
-`activationBacklogSeconds` governs the 0→1 transition only, so the chart
+`activationQueuedJobs` governs the 0→1 transition only, so the chart
 renders it only when the minimum is 0; at a minimum of 1 it would be a
 setting that looks live and does nothing. A plain HPA (`scaler: external`)
 cannot reach zero at all without the `HPAScaleToZero` feature gate, and is
@@ -239,7 +258,7 @@ horizontalAutoscaling:
 ```
 
 That is where hysteresis belongs for the scaling range.
-`activationBacklogSeconds` is a different thing and covers only the 0→1
+`activationQueuedJobs` is a different thing and covers only the 0→1
 transition, which is why it is rendered only when the minimum is 0.
 
 ## Checking it works
@@ -255,7 +274,7 @@ $ kubectl describe scaledobject tap-executor   # trigger errors show here
 An HPA reporting `<unknown>` for its target is the usual symptom: for the API
 that means no CPU request or no metrics-server; for the executor, that the
 metrics provider is not serving the metric — check the Prometheus named in
-`prometheusAddress` actually has `tap_oldest_queued_job_seconds`, which needs
+`prometheusAddress` actually has `tap_jobs{phase="QUEUED"}`, which needs
 the executor pods being scraped in the first place (see
 [Observability](observability.md)).
 

@@ -23,7 +23,7 @@ Autoscaling is on, so `replicas` is no longer what runs:
   tap-api       {{ .Values.horizontalAutoscaling.tapApi.minReplicas }}-{{ .Values.horizontalAutoscaling.tapApi.maxReplicas }} pods, on {{ .Values.horizontalAutoscaling.tapApi.targetCPUUtilizationPercentage }}% CPU
 {{- end }}
 {{- if .Values.horizontalAutoscaling.tapExecutor.enabled }}
-  tap-executor  {{ .Values.horizontalAutoscaling.tapExecutor.minReplicas }}-{{ .Values.horizontalAutoscaling.tapExecutor.maxReplicas }} pods, one per {{ .Values.horizontalAutoscaling.tapExecutor.backlogSecondsPerReplica }}s of queue backlog ({{ .Values.horizontalAutoscaling.tapExecutor.scaler }})
+  tap-executor  {{ .Values.horizontalAutoscaling.tapExecutor.minReplicas }}-{{ .Values.horizontalAutoscaling.tapExecutor.maxReplicas }} pods, one per {{ .Values.horizontalAutoscaling.tapExecutor.queuedJobsPerReplica }} queued jobs ({{ .Values.horizontalAutoscaling.tapExecutor.scaler }})
 {{- end }}
 A fresh install starts at one pod per service and is scaled up from there, so
 give it a minute before reading the pod count.

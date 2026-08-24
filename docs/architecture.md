@@ -61,7 +61,7 @@ graph TB
     ex1 -->|"claim: FOR UPDATE SKIP LOCKED"| pg
     ex1 -->|"server-side cursor"| pg
     ex1 -->|"writes result.{vot,csv,parquet,arrows}"| vol
-    keda -.->|"reads tap_oldest_queued_job_seconds"| ex1
+    keda -.->|"reads tap_jobs{phase=QUEUED}"| ex1
     keda -.->|"sets replicas"| execs
 
     classDef store fill:#fdf6e3,stroke:#b58900,color:#16202a
@@ -331,7 +331,7 @@ replicas, so the ceiling becomes the pooler's rather than the sum of every
 pod's.
 
 **Autoscaling** replaces the static counts: the API on CPU, the executors on
-queue backlog. Both are opt-in and have their own page —
+queue depth. Both are opt-in and have their own page —
 [Autoscaling](autoscaling.md).
 
 **Resilience defaults** are on: soft pod anti-affinity across nodes and a zone

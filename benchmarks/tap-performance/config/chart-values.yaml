@@ -43,7 +43,7 @@ horizontalAutoscaling:
     scaler: keda
     minReplicas: 1
     maxReplicas: 8
-    backlogSecondsPerReplica: 60
+    queuedJobsPerReplica: 10
     prometheusAddress: http://prometheus.benchmon.svc:9090
     pollingIntervalSeconds: 5
 
