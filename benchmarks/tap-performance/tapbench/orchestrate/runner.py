@@ -193,11 +193,23 @@ def measure(
     forward = cluster.port_forward_database()
     conn = pg_mod.connect(cluster.database_dsn())
     guard = guards_mod.Guards(min_free_disk_gb=cfg["hardware"]["enforcement"]["min_free_disk_gb"])
+    # Each phase is timed and logged. Without this a stall inside measure() is
+    # invisible: a warmup that overran by 26 minutes showed up only as a gap
+    # between two log lines, with nothing to say which step consumed it.
+    phase_started = time.monotonic()
+
+    def phase(name: str) -> None:
+        nonlocal phase_started
+        log.info("%s: %s took %.1fs", key, name, time.monotonic() - phase_started)
+        phase_started = time.monotonic()
+
     try:
         pg_mod.reset_statements(conn)
         before = pg_mod.snapshot(conn)
         activity_samples = [pg_mod.activity(conn)]
+        phase("statistics snapshot")
 
+        measured_elapsed = float(measure_s)
         watcher_path = run.kube_dir / f"{key}-state.jsonl"
         started = time.time()
         with kube.StateWatcher(watcher_path):
@@ -210,8 +222,9 @@ def measure(
                         mode=request_mode,
                     )
                 )
+                measured_elapsed = time.time() - started
             else:
-                recorder = asyncio.run(
+                recorder, measured_elapsed = asyncio.run(
                     load_mod.closed_loop(
                         BASE_URL,
                         workload,
@@ -223,6 +236,7 @@ def measure(
                 )
                 timeline = []
             window_end = time.time()
+        phase("load")
         activity_samples.append(pg_mod.activity(conn))
         after = pg_mod.snapshot(conn)
         statements = pg_mod.statements(conn)
@@ -230,12 +244,15 @@ def measure(
         conn.close()
         forward.terminate()
 
-    # The measured window only: for a closed-loop run that is the part after
-    # the warmup, and Prometheus is queried for exactly that span so a cold
-    # cache cannot leak into the resource figures.
-    measured_from = window_end - (measure_s if steps is None else (window_end - started))
+    # The measured phase as it actually ran, not as it was requested: a worker
+    # only checks the clock between requests, so a phase can overrun, and
+    # dividing by the requested duration would overstate throughput by exactly
+    # the overrun. Prometheus is queried for that same span, so a cold cache
+    # during warmup cannot leak into the resource figures.
+    measured_from = window_end - measured_elapsed
     metrics_rows, coverage = prometheus.collect(measured_from - 2, window_end + 2)
     prometheus.close()
+    phase("prometheus collection")
 
     prometheus_parquet = run.metrics_dir / f"{key}.parquet"
     prom_mod.Prometheus(PROMETHEUS_URL).write(metrics_rows, prometheus_parquet)
@@ -288,6 +305,7 @@ def measure(
         "repetition": repetition,
         "request_mode": request_mode,
         "window_seconds": window,
+        "measured_phase_overrun_s": measured_elapsed - float(measure_s),
         "started_at": started,
         "ended_at": window_end,
         "http": http,
