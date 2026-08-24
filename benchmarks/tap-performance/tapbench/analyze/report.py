@@ -675,7 +675,11 @@ class Plotter:
         for series in metrics.values():
             series.sort()
 
-        samples_file = self.run_dir / "samples" / f"{scenario['id']}.parquet"
+        # Keyed the same way as the series, and for the same reason: named by
+        # the scenario id, this found nothing, and the three panels that draw
+        # request data — offered against served, latency, error rate — came out
+        # blank on every dashboard in the family while still being captioned.
+        samples_file = self.run_dir / "samples" / f"{key}.parquet"
         samples = None
         if samples_file.exists():
             samples = pq.read_table(samples_file).to_pydict()
@@ -686,6 +690,31 @@ class Plotter:
 
         def rel(series):
             return [t - t0 for t, _ in series], [v for _, v in series]
+
+        def legend_or_say_why(ax, missing: str) -> None:
+            """Label a panel that has data; label the absence when it has none.
+
+            An empty axis under a heading reads as "measured, and flat", and a
+            path mistake has produced exactly that twice in this file. The
+            missing data is drawn on the panel instead — and matplotlib's
+            "no artists with labels" warning stops being the only place it was
+            reported.
+            """
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend(fontsize="x-small", ncols=3)
+            else:
+                ax.text(
+                    0.5,
+                    0.5,
+                    missing,
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                    fontsize="small",
+                    color=PALETTE["warn"],
+                )
+
+        no_samples = f"no request samples at samples/{key}.parquet"
 
         panels = 6
         fig, axes = plt.subplots(panels, 1, figsize=(11, 2.1 * panels), sharex=True)
@@ -713,7 +742,7 @@ class Plotter:
                     color=PALETTE["primary"],
                 )
         ax.set_ylabel("requests/s")
-        ax.legend(fontsize="x-small", ncols=3)
+        legend_or_say_why(ax, no_samples)
         ax.grid(alpha=0.3, linestyle=":")
 
         # 2: latency
@@ -747,7 +776,7 @@ class Plotter:
                 )
         ax.set_ylabel("latency (s)")
         ax.set_yscale("log")
-        ax.legend(fontsize="x-small", ncols=3)
+        legend_or_say_why(ax, no_samples)
         ax.grid(alpha=0.3, linestyle=":")
 
         # 3: error rate
@@ -761,6 +790,8 @@ class Plotter:
             with np.errstate(divide="ignore", invalid="ignore"):
                 fraction = np.where(total > 0, 100 * failed / total, 0.0)
             ax.plot((edges[:-1] + edges[1:]) / 2 - t0, fraction, color=PALETTE["warn"])
+        else:
+            legend_or_say_why(ax, no_samples)
         ax.set_ylabel("errors (%)")
         ax.grid(alpha=0.3, linestyle=":")
 

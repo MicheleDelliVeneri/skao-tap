@@ -63,8 +63,8 @@ timings describe conditions other than the ones intended.
 | --- | --- | --- |
 | `DATABASE_IO_BOUND` | 6 | The working set does not fit in shared_buffers plus page cache: the database is fetching from disk. This is the class that appears as the dataset grows and is the reason the size sweep exists. |
 | `KEDA_SCALE_LAG` | 5 | Capacity existed but arrived late: the errors and latency in this window are the cost of the scaling delay rather than of a resource ceiling. The stage breakdown says which part to attack. |
+| `EXECUTOR_CPU_BOUND` | 4 | The executors are at their ceiling. One executor runs one query at a time, so a pod cannot exceed one core whatever its cgroup allows, and the only relief is more pods. Alongside KEDA_SCALE_LAG this is the whole story of an autoscaling shortfall: the pods that existed were full and more were never asked for. |
 | `TAP_CPU_BOUND` | 1 | The API's own CPU is the constraint: it sat at its ceiling, or was CFS-throttled, for a material part of the window. The ceiling compared against is min(pod CPU limit, workers), not the pod limit: ADQL translation is pure-Python and holds the GIL, so one worker cannot exceed one core whatever the cgroup allows. Relieved by more processes (tapApi.workers) or more pods, never by a bigger limit on one worker. |
-| `UNKNOWN` | 1 | 17% of requests failed, so no resource was saturated by these rules — nothing was doing enough work to saturate anything. Explain the failures before reading any throughput or latency figure from this run. |
 
 ## Graphs
 

@@ -44,6 +44,7 @@ PROMETHEUS_URL = "http://127.0.0.1:30090"
 # Read from the values file so the two cannot disagree.
 LIMITS_FROM_VALUES = {
     "tap_api_cpu_limit_cores": ("tapApi", "resources", "limits", "cpu"),
+    "tap_executor_cpu_limit_cores": ("tapExecutor", "resources", "limits", "cpu"),
     "postgres_cpu_limit_cores": ("postgresql", "resources", "limits", "cpu"),
 }
 
@@ -76,6 +77,7 @@ def limits(cfg: dict) -> dict:
         return node
 
     api_cpu = _quantity(dig(LIMITS_FROM_VALUES["tap_api_cpu_limit_cores"]), 2.0)
+    exec_cpu = _quantity(dig(LIMITS_FROM_VALUES["tap_executor_cpu_limit_cores"]), 2.0)
     pg_cpu = _quantity(dig(LIMITS_FROM_VALUES["postgres_cpu_limit_cores"]), 4.0)
     pool = int((values.get("config") or {}).get("dbPoolMax") or 8)
     workers = int((values.get("tapApi") or {}).get("workers") or 1)
@@ -88,6 +90,12 @@ def limits(cfg: dict) -> dict:
         "tap_api_cpu_limit_cores": min(api_cpu, float(workers)),
         "tap_api_pod_cpu_limit_cores": api_cpu,
         "tap_api_workers": workers,
+        # The chart says it plainly: "one executor runs one query at a time".
+        # So a pod's ceiling is one core however many the cgroup allows — the
+        # same GIL argument as the API's, and the reason the executors read as
+        # pinned at 0.96 while their two-core limit looked like headroom.
+        "tap_executor_cpu_limit_cores": min(exec_cpu, 1.0),
+        "tap_executor_pod_cpu_limit_cores": exec_cpu,
         "postgres_cpu_limit_cores": pg_cpu,
         "db_pool_max_total": pool,
         "tap_api_memory_limit_bytes": 1 << 30,

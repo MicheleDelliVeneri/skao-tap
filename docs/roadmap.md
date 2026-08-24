@@ -50,6 +50,37 @@ A running log of what the benchmark suite
 established, newest first. Each entry is a measurement rather than an opinion,
 so it can be checked and it can go stale — the run that produced it is named.
 
+### 2026-08-24 — a pinned executor had no rule looking at it (fixed)
+
+Two defects found by finally *looking* at an autoscaling dashboard, after fixing
+the path that had left half of every one of them blank.
+
+**The three request panels of every dashboard were empty.** The series path was
+corrected earlier to `metrics/keda-K3.parquet`; the samples path three lines
+below it still said `samples/K3.parquet`. So offered-against-served, latency and
+error rate drew nothing on all seven dashboards in every KEDA run — captioned,
+axed, titled and empty. An empty panel under a heading reads as "measured, and
+flat". A panel with no data now says so on its face, rather than leaving
+matplotlib's "no artists with labels" warning as the only report of it.
+
+**And the resource that was actually at its ceiling had no rule.** The dashboard
+showed executor CPU at 2.9 cores across 3 pods. Per pod that is **0.95 to 0.97
+of a core against a two-core cgroup, with zero CFS throttling** — the chart's
+own GIL argument, stated in its values file: "one executor runs one query at a
+time". The classifier compared API CPU against the API's ceiling and PostgreSQL
+against PostgreSQL's, and never looked at the executor at all. So this family's
+real resource ceiling was invisible, `UNKNOWN` was the verdict on the sustained
+overload, and I described these runs as having "nothing busy".
+
+`EXECUTOR_CPU_BOUND` is now a class, with the ceiling at one core a pod times
+the pods that were ready. It fires on four of the seven scenarios, and where it
+appears alongside `KEDA_SCALE_LAG` the pair is the entire story of an autoscaling
+shortfall: **the pods that existed were full, and more were never asked for.**
+`UNKNOWN` has gone from the family's tally.
+
+Both defects are the species this day kept turning up: a thing that was written,
+looked present, and silently reported nothing. That is now six of them.
+
 ### 2026-08-24 — the autoscaler's answer to every load is three pods, and the delay is never the pod
 
 Run `20260824T102832Z-29507cbb-keda`: all seven scenarios again, with the
@@ -148,7 +179,8 @@ the queue rather than the routing.
 
 API CPU peaked at 0.69 cores and PostgreSQL at 0.32 while all of this happened,
 so raising the cap did not turn the generator's own phase polling into a load on
-the service — the other thing this probe was for.
+the service — the other thing this probe was for. The *executors*, which no rule
+was looking at yet, were pinned at 0.96 of a core each throughout.
 
 ### 2026-08-24 — the executor autoscaler asks for three pods against a three-thousand-job queue
 
@@ -173,8 +205,17 @@ against the repository's own ScaledObject, unmodified: trigger
 K1 is the one scenario that behaved: the metric never crossed 60, nothing
 scaled, and p95 stayed at 1.3 s inside the 2 s SLO. Every other scenario missed
 the SLO for its entire window while **five of the eight executors it was
-allowed were never asked for**. Nothing was busy while this happened: API CPU
-p95 was 0.25 to 0.35 cores, PostgreSQL 0.08 to 0.22.
+allowed were never asked for**. The API and the database were idle throughout —
+API CPU p95 0.25 to 0.35 cores, PostgreSQL 0.08 to 0.22.
+
+**Corrected on 2026-08-24.** This entry originally said "nothing was busy",
+which was wrong and made the finding weaker than it is. Nothing *instrumented
+by a rule* was busy: no rule looked at the executors, and the executors were
+pinned. Each pod sat at 0.95 to 0.97 of a core with a two-core cgroup and no
+CFS throttling — the chart's own GIL ceiling, since "one executor runs one query
+at a time". So the three pods the autoscaler did provide were **full**, the
+queue was growing, five more pods were permitted, and none was requested. See
+[a pinned executor had no rule looking at it](#2026-08-24-a-pinned-executor-had-no-rule-looking-at-it-fixed).
 
 The cause is the signal, not the autoscaler. `desired = ceil(oldest_queued_age /
 60)`, and the age of the *head* of the queue is not proportional to the depth

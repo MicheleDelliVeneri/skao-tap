@@ -327,3 +327,40 @@ def test_a_scale_out_delay_is_named_rather_than_left_unknown():
     assert bottleneck.primary(lagging) == "KEDA_SCALE_LAG"
     evidence = next(v for v in lagging if v.classification == "KEDA_SCALE_LAG").evidence
     assert evidence["total_scale_out_s"] == 352.0
+
+
+def test_a_pinned_executor_is_reported_rather_than_read_as_headroom():
+    """The gap this closes: each executor pod sat at 0.96 of a core against a
+    two-core cgroup with no throttling, and no rule looked at it — so an
+    autoscaling run whose executors were saturated was described as having
+    nothing busy."""
+    rows = _rows(
+        ("tap_executor_cpu_cores", [2.89] * 50),
+        ("executor_replicas_ready", [3.0] * 50),
+    )
+    classes = {v.classification for v in _classify(rows)}
+    assert "EXECUTOR_CPU_BOUND" in classes
+
+    # Three pods at a third of a core each is not the same measurement.
+    idle = _rows(
+        ("tap_executor_cpu_cores", [1.0] * 50),
+        ("executor_replicas_ready", [3.0] * 50),
+    )
+    assert "EXECUTOR_CPU_BOUND" not in {v.classification for v in _classify(idle)}
+
+
+def test_the_executor_ceiling_is_one_core_a_pod_not_its_cgroup():
+    """One executor runs one query at a time, so the cgroup's two cores are not
+    the ceiling — comparing against them reports a pinned pod as half idle."""
+    from tapbench.orchestrate import runner as runner_mod
+
+    resolved = runner_mod.limits(
+        {
+            "chart_values": {
+                "tapExecutor": {"resources": {"limits": {"cpu": 2}}},
+                "tapApi": {"workers": 1, "resources": {"limits": {"cpu": 2}}},
+            }
+        }
+    )
+    assert resolved["tap_executor_cpu_limit_cores"] == 1.0
+    assert resolved["tap_executor_pod_cpu_limit_cores"] == 2.0
