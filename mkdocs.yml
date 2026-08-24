@@ -3,6 +3,10 @@ site_description: IVOA TAP 1.1 server in Python — microservices on PostgreSQL
 repo_url: https://github.com/MicheleDelliVeneri/skao-tap
 theme:
   name: material
+  # The mark is the single source in assets/; Material resolves theme paths
+  # against docs_dir, so the docs copy is the one it can actually serve.
+  logo: assets/egernia-mark.svg
+  favicon: assets/egernia-mark.svg
   palette:
     - scheme: default
       primary: indigo
@@ -41,6 +45,7 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
 nav:
   - Overview: index.md
+  - Quickstart: quickstart.md
   - Architecture: architecture.md
   - API reference: api.md
   - JSON API: json-api.md
