@@ -227,7 +227,7 @@ jobs:
           helm template skao-tap deploy/helm/skao-tap \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set prometheus.enabled=true \
-            | grep -q 'query: "max(tap_oldest_queued_job_seconds{namespace=\\"default\\"})"'
+            | grep -q 'query: "max(tap_jobs{phase=\\"QUEUED\\",namespace=\\"default\\"})"'
           helm template skao-tap deploy/helm/skao-tap \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set prometheus.enabled=true | grep -q "kind: ScaledObject"
@@ -258,7 +258,7 @@ jobs:
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --set-json 'horizontalAutoscaling.tapExecutor.externalMetricSelector={}' \
             --show-only templates/hpa.yaml \
-            | grep -q 'expected-query: "max(tap_oldest_queued_job_seconds)"'
+            | grep -q 'expected-query: "max(tap_jobs_queued)"'
           helm template skao-tap deploy/helm/skao-tap \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.scaler=external \
@@ -315,7 +315,13 @@ jobs:
                   --set 'horizontalAutoscaling.tapExecutor.query=max(from_the_database)'
           refuses "${executor[@]}" --set horizontalAutoscaling.tapExecutor.scaler=cron
           refuses "${executor[@]}" \
-                  --set horizontalAutoscaling.tapExecutor.backlogSecondsPerReplica=0
+                  --set horizontalAutoscaling.tapExecutor.queuedJobsPerReplica=0
+          # the renamed seconds-denominated knobs are refused by name, so a
+          # value silently read in the wrong unit cannot scale wrongly
+          refuses "${executor[@]}" \
+                  --set horizontalAutoscaling.tapExecutor.backlogSecondsPerReplica=60
+          refuses "${executor[@]}" \
+                  --set horizontalAutoscaling.tapExecutor.activationBacklogSeconds=5
           # KEDA has to be told which Prometheus has the metric
           refuses --set horizontalAutoscaling.tapExecutor.enabled=true
           # scaled out, the pools would exceed the server's max_connections
