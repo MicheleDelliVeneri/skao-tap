@@ -304,6 +304,27 @@ def cmd_result_formats(args) -> int:
     return 0
 
 
+def cmd_stress(args) -> int:
+    """The stress classes (Q09, Q11, Q13, Q14) on their own, nothing else.
+
+    The full families measure these too, buried after a concurrency sweep;
+    this runs just them, so a change aimed at one expensive class (package
+    11's full-table aggregate, say) can be measured in minutes instead of
+    re-running a whole family for four numbers.
+    """
+    cfg = runner.load_config()
+    run = runs_mod.new_run("stress", args.resume)
+    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    dataset = args.dataset or "D1"
+    datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
+    entries = build_corpus(cfg, datasets)
+    run.write_json("corpus.json", [e.as_dict() for e in entries])
+    results = runner.stress_classes(run, cfg, dataset, entries)
+    plan_flags = runner.capture_plans(run, cfg, entries)
+    finalise(run, cfg, results, datasets, digests, plan_flags=plan_flags, corpus_entries=entries)
+    return 0
+
+
 def cmd_serialize(args) -> int:
     """The writers on their own: no cluster, no database, no HTTP."""
     payload = serialize_mod.report(
@@ -432,6 +453,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_argument("--c1", type=float)
     sub.add_argument("--quick", action="store_true")
     sub = add("result-formats", cmd_result_formats, help="every result writer over the same rows")
+    sub.add_argument("--dataset")
+    sub = add("stress", cmd_stress, help="just the stress classes (Q09, Q11, Q13, Q14)")
     sub.add_argument("--dataset")
     sub = add("keda", cmd_keda, help="autoscaling scenarios K1-K7")
     sub.add_argument("--dataset")

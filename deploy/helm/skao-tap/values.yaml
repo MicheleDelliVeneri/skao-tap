@@ -481,6 +481,11 @@ postgresql:
   #   effective_cache_size: 1536MB
   #   work_mem: 32MB              # per sort/hash node — large ADQL joins
   #   maintenance_work_mem: 128MB
+  # Result queries run as plain statements, so scan-heavy ADQL (full-table
+  # aggregates) can use parallel workers. With a multi-CPU pod the knob that
+  # decides how many one query may take is max_parallel_workers_per_gather
+  # (PostgreSQL defaults to 2); max_parallel_workers caps the total across
+  # concurrent queries and should track the pod's CPU limit.
   tuning: {}
   resources:
     requests:

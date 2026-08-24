@@ -105,7 +105,8 @@ class StreamedRows:
             # empty VOTable carries its FIELDs. Recover them with a LIMIT 0
             # probe, which parses and plans but never pulls a row from its
             # child plan, so the query's work is not paid twice.
-            cur.execute(f"SELECT * FROM ({sql}) AS empty_result LIMIT 0")
+            probe = sql.rstrip().rstrip(";")
+            cur.execute(f"SELECT * FROM ({probe}) AS empty_result LIMIT 0")
 
     def __iter__(self):
         if self._first is not _NO_ROW:
