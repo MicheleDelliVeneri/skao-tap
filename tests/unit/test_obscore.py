@@ -134,3 +134,41 @@ def test_registry_record_inherits_the_data_model(auth_settings):
         registry_created="2026-08-23",
     )
     assert "ObsCore-1.1</dataModel>" in vosi.voresource_xml()
+
+
+class _RecordingConn:
+    """Just enough connection for ensure_obscore: records statements and
+    answers the relkind probe."""
+
+    def __init__(self, relkind: str | None):
+        self._relkind = relkind
+        self.statements: list[str] = []
+
+    def execute(self, sql, params=None):
+        self.statements.append(sql)
+        relkind = self._relkind
+
+        class Result:
+            def fetchone(self):
+                if "pg_class" in sql:
+                    return (relkind,) if relkind else None
+                return None
+
+        return Result()
+
+
+def test_a_preexisting_obscore_table_is_left_alone():
+    """The benchmark suite's synthetic ivoa.obscore is a real table, and so
+    is any archive's own: the bootstrap must neither destroy it nor crash on
+    it — it is that deployment's ObsCore."""
+    conn = _RecordingConn("r")
+    obscore.ensure_obscore(conn)
+    assert not any("DROP VIEW" in s or "CREATE VIEW" in s for s in conn.statements)
+    assert not any("tap_schema" in s for s in conn.statements)
+
+
+def test_a_preexisting_view_is_replaced_forward():
+    conn = _RecordingConn("v")
+    obscore.ensure_obscore(conn)
+    assert any("DROP VIEW IF EXISTS ivoa.obscore" in s for s in conn.statements)
+    assert any(s.startswith("CREATE VIEW ivoa.obscore") for s in conn.statements)

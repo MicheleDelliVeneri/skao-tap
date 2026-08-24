@@ -32,9 +32,12 @@ Mapping decisions (each visible in the SQL below):
   them, and NULL is permitted.
 """
 
+import logging
 import re
 
 from tapcore.config import settings
+
+log = logging.getLogger("tap-api")
 
 # (name, datatype, arraysize, xtype, unit, ucd, utype, principal, std, select expression)
 # in REC Table 6 order; datatypes are the VOTable names TAP_SCHEMA uses.
@@ -506,6 +509,20 @@ def ensure_obscore(conn) -> None:
     the bootstrap's advisory transaction lock, so concurrent pods serialise
     here like they do on the rest of the schema.
     """
+    existing = conn.execute(
+        "SELECT c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+        " WHERE n.nspname = 'ivoa' AND c.relname = 'obscore'"
+    ).fetchone()
+    if existing and existing[0] != "v":
+        # A deployment that already has an ivoa.obscore *table* (its own
+        # archive, or the benchmark suite's synthetic one) is publishing its
+        # own ObsCore: replacing it would destroy data the service does not
+        # own, and crashing on it would take the whole bootstrap down.
+        log.warning(
+            "ivoa.obscore already exists and is not a view; leaving it in"
+            " place and skipping the ODP-derived view"
+        )
+        return
     conn.execute("CREATE SCHEMA IF NOT EXISTS ivoa")
     conn.execute("DROP VIEW IF EXISTS ivoa.obscore")
     conn.execute(view_sql())
