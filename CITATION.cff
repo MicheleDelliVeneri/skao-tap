@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+title: "skao-tap: an IVOA TAP 1.1 server for the SKA Regional Centre Network"
+message: "If you use this software in published work, please cite it."
+type: software
+authors:
+  - family-names: "Delli Veneri"
+    given-names: "Michele"
+    affiliation: "SKA Observatory"
+repository-code: "https://github.com/MicheleDelliVeneri/skao-tap"
+url: "https://micheledelliveneri.github.io/skao-tap/"
+license: MIT
+abstract: >-
+  An IVOA Table Access Protocol (TAP) 1.1 server implemented in Python as two
+  stateless microservices over a single PostgreSQL database. ADQL queries are
+  translated to PostgreSQL with pg_sphere geometry, executed under a read-only
+  role with a statement timeout, and streamed as VOTable, CSV, TSV, JSON,
+  Parquet or Arrow. Asynchronous queries follow UWS 1.1, using the database
+  itself as the job queue. Metadata domains bind pydantic model packages to
+  generated SQL schemas registered in TAP_SCHEMA, so ingested metadata is
+  queryable through ordinary ADQL.
+keywords:
+  - astronomy
+  - virtual observatory
+  - IVOA
+  - TAP
+  - ADQL
+  - SKA
+  - PostgreSQL
+# version and date-released are added at the first tagged release; an ORCID
+# and a Zenodo DOI belong here once the record exists.

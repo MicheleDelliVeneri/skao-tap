@@ -39,3 +39,6 @@ import pyvo
 svc = pyvo.dal.TAPService("http://localhost:8080/tap")
 print(svc.search("SELECT TOP 5 * FROM ska.continuum_sources").to_table())
 ```
+
+The [Quickstart](quickstart.md) takes this further — cone search, UWS jobs,
+Parquet and Arrow output, TOPCAT, and ingesting metadata.

@@ -121,7 +121,7 @@ sequenceDiagram
     A->>A: refuse tables absent from TAP_SCHEMA
     A->>P: acquire pooled connection
     Note over A,P: pool wait is measured separately from query time
-    A->>P: BEGIN; SET LOCAL ROLE tap_reader; SET LOCAL statement_timeout
+    A->>P: BEGIN, SET LOCAL ROLE tap_reader, SET LOCAL statement_timeout
     A->>P: DECLARE server-side cursor
     P-->>A: first rows
     A-->>C: 200, streaming body (first chunk produced eagerly)

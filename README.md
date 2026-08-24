@@ -1,86 +1,53 @@
 <p align="center">
-  <img src="assets/egernia-logo.svg" alt="egernia — IVOA TAP 1.1 for the SKA" width="640">
+  <img src="assets/egernia-logo.svg" alt="skao-tap — IVOA TAP 1.1 for the SKA" width="640">
 </p>
 
-[![CI](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml)
-[![Security](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/security.yml)
-[![Docs](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/docs.yml)
-[![Documentation](https://img.shields.io/badge/docs-github.io-blue)](https://micheledelliveneri.github.io/skao-tap/)
-[![codecov](https://codecov.io/gh/MicheleDelliVeneri/skao-tap/branch/main/graph/badge.svg)](https://codecov.io/gh/MicheleDelliVeneri/skao-tap)
-[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![Python](https://img.shields.io/badge/python-3.14%2B-blue)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+<p align="center">
+  An <b>IVOA TAP 1.1</b> server in Python — ADQL over PostgreSQL, scaling on nothing but the database.
+</p>
 
-An **IVOA TAP 1.1** (Table Access Protocol) server in Python, built as
-microservices on a PostgreSQL backend, reusing existing libraries for the
-hard parts:
+<p align="center">
+  <a href="https://micheledelliveneri.github.io/skao-tap/"><b>Documentation</b></a> ·
+  <a href="https://micheledelliveneri.github.io/skao-tap/quickstart/">Quickstart</a> ·
+  <a href="https://micheledelliveneri.github.io/skao-tap/architecture/">Architecture</a> ·
+  <a href="https://micheledelliveneri.github.io/skao-tap/roadmap/">Roadmap</a>
+</p>
 
-- **ADQL parsing/translation** — [`queryparser-python3`](https://github.com/aipescience/queryparser)
-  (the ANTLR-based ADQL → PostgreSQL translator used by AIP's Daiquiri
-  framework); geometry (`POINT`/`CIRCLE`/`CONTAINS`…) is translated to
-  [pg_sphere](https://pgsphere.github.io/) expressions.
-- **VOTable output** — `astropy.io.votable`.
-- **Web framework** — FastAPI/uvicorn.
-- **Job persistence & queue** — PostgreSQL (`FOR UPDATE SKIP LOCKED`), no
-  extra broker needed.
+<p align="center">
+  <a href="https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml"><img src="https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/security.yml"><img src="https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/security.yml/badge.svg?branch=main" alt="Security"></a>
+  <a href="https://codecov.io/gh/MicheleDelliVeneri/skao-tap"><img src="https://codecov.io/gh/MicheleDelliVeneri/skao-tap/branch/main/graph/badge.svg" alt="Coverage"></a>
+  <a href="https://micheledelliveneri.github.io/skao-tap/"><img src="https://img.shields.io/badge/docs-github.io-blue" alt="Docs"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.14%2B-blue" alt="Python 3.14+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
+</p>
 
-## Architecture
+---
 
-```
-                 ┌──────────────────────────┐
-   TOPCAT/PyVO ─▶│  tap-api  (FastAPI)      │  /sync, /async (UWS REST),
-   curl          │  validates params,       │  /capabilities, /availability,
-                 │  translates ADQL,        │  /tables, /examples
-                 │  runs sync queries,      │
-                 │  serves job results      │
-                 └─────┬──────────────┬─────┘
-                       │ uws.jobs     │ results files
-                       ▼              ▼
-                 ┌────────────┐  ┌───────────────┐
-                 │ PostgreSQL │  │ shared volume │
-                 │ + pg_sphere│  │   /results    │
-                 │ TAP_SCHEMA │  └───────▲───────┘
-                 │ science    │          │ writes result.{vot,csv,...}
-                 │ uws.jobs   │          │
-                 └─────▲──────┘  ┌───────┴─────────┐
-                       └─────────│ tap-executor    │ claims QUEUED jobs
-                                 │ (worker, scales │ (SKIP LOCKED), runs
-                                 │  horizontally)  │ query, finalizes job
-                                 └─────────────────┘
-```
+The [Table Access Protocol][tap-std] is the IVOA standard for querying tabular
+data — astronomical catalogues as well as ordinary database tables — over a
+uniform web service. This is a complete TAP 1.1 implementation for the SKA
+Regional Centre Network, built as two stateless services over one PostgreSQL
+database.
 
-Three services (see `docker-compose.yml`):
+## Why this exists
 
-| Service | Code | Role |
-| --- | --- | --- |
-| `db` | `db/` | PostgreSQL 18 + pg_sphere; init scripts create `TAP_SCHEMA`, a sample `ska.continuum_sources` catalogue, the `uws.jobs` table and a read-only `tap_reader` role used for all user queries |
-| `tap-api` | `services/tap-api` | All TAP/UWS/VOSI HTTP endpoints |
-| `tap-executor` | `services/tap-executor` | Asynchronous (UWS) query execution; multiple replicas can run concurrently |
-
-Shared code lives in the `tapcore` package (`libs/tapcore`): configuration,
-DB pool, ADQL translation, VOTable/CSV/TSV/JSON serialization, UWS job model
-and XML rendering.
-
-## Endpoints (TAP 1.1 / UWS 1.1 / VOSI / DALI)
-
-| Endpoint | Standard | Notes |
-| --- | --- | --- |
-| `GET/POST /tap/sync` | TAP | `LANG=ADQL`, `QUERY=...`, optional `RESPONSEFORMAT`, `MAXREC`; DALI error VOTables; `OVERFLOW` flagged |
-| `GET/POST /tap/async` | TAP/UWS | job list (with `PHASE` filter) / job creation (303 → job URI); `PHASE=RUN` at creation queues immediately |
-| `GET/POST/DELETE /tap/async/{id}` | UWS | job summary XML / `ACTION=DELETE` / delete |
-| `GET/POST .../phase` | UWS | `PHASE=RUN` or `PHASE=ABORT` |
-| `GET/POST .../executionduration` | UWS | per-job statement timeout (seconds) |
-| `GET/POST .../destruction` | UWS | expired jobs are garbage-collected by the executor |
-| `GET .../quote`, `.../owner` | UWS | |
-| `GET/POST .../parameters` | UWS | updatable while `PENDING` |
-| `GET .../results`, `.../results/result` | UWS | result document / result file |
-| `GET .../error` | UWS/DALI | VOTable error document |
-| `GET /tap/capabilities` | VOSI/TAPRegExt | languages, output formats, limits |
-| `GET /tap/availability` | VOSI | checks database connectivity |
-| `GET /tap/tables` | VOSI/VODataService | generated from `TAP_SCHEMA` |
-| `GET /tap/examples` | DALI | RDFa examples (picked up by TOPCAT) |
-| `GET /tap/registry` | VOResource | registration record; `404` until `voRegistry.enabled` |
-| `TAP_SCHEMA.schemas/tables/columns/keys/key_columns` | TAP | self-describing, queryable via ADQL |
+- **PostgreSQL is the only coordination point.** The job queue is
+  `FOR UPDATE SKIP LOCKED` on a table, so there is no broker, no cache tier and
+  no service registry to operate — and executors scale out with no leases and
+  no split-brain.
+- **User ADQL never runs with service privileges.** Queries are parsed as ADQL,
+  checked against `TAP_SCHEMA`, then executed under `SET LOCAL ROLE tap_reader`
+  with a statement timeout. An ADQL query cannot write, whatever it manages to
+  express.
+- **Everything streams.** Rows leave a server-side cursor and become HTTP
+  chunks, so a ten-million-row result never exists in memory. **Parquet** and
+  **Arrow** are first-class formats carrying units, UCDs and descriptions as
+  field metadata — not exports bolted on afterwards.
+- **Metadata domains are plugins.** A pydantic model package binds to a SQL
+  schema and a JSON mount point; the shared machinery generates the tables,
+  migrates them as the model grows, and registers them in `TAP_SCHEMA` so
+  ingested metadata is queryable by ordinary ADQL.
 
 ## Quickstart
 
@@ -89,7 +56,7 @@ docker compose up --build -d
 ./scripts/smoke_test.sh          # availability, tables, sync + async round trip
 ```
 
-Synchronous query:
+Query it with `curl`:
 
 ```bash
 curl "http://localhost:8080/tap/sync" \
@@ -98,27 +65,7 @@ curl "http://localhost:8080/tap/sync" \
   --data-urlencode "RESPONSEFORMAT=csv"
 ```
 
-Cone search (ADQL geometry → pg_sphere):
-
-```bash
-curl "http://localhost:8080/tap/sync" \
-  --data-urlencode "LANG=ADQL" \
-  --data-urlencode "QUERY=SELECT source_name, ra, dec FROM ska.continuum_sources
-      WHERE 1=CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', 62.3, -65.5, 1.0))"
-```
-
-Asynchronous (UWS) query:
-
-```bash
-JOB=$(curl -s -o /dev/null -w '%{redirect_url}' http://localhost:8080/tap/async \
-  --data-urlencode "LANG=ADQL" \
-  --data-urlencode "QUERY=SELECT * FROM ska.continuum_sources" \
-  --data-urlencode "PHASE=RUN")
-curl "$JOB/phase"                 # PENDING → QUEUED → EXECUTING → COMPLETED
-curl "$JOB/results/result"        # VOTable result
-```
-
-From PyVO:
+…or with any IVOA client, which needs no configuration beyond the URL:
 
 ```python
 import pyvo
@@ -127,81 +74,27 @@ svc = pyvo.dal.TAPService("http://localhost:8080/tap")
 print(svc.search("SELECT TOP 5 * FROM ska.continuum_sources").to_table())
 ```
 
-## Security model for user queries
+Cone search, UWS jobs, Parquet output, TOPCAT and metadata ingest are in the
+[Quickstart guide][quickstart].
 
-User ADQL is never executed with service privileges:
+## Standards implemented
 
-1. `queryparser` accepts only the ADQL grammar (single `SELECT` statements).
-2. Translated SQL is checked against the tables published in `TAP_SCHEMA`.
-3. Execution happens inside a transaction with `SET LOCAL ROLE tap_reader`
-   (SELECT-only role) and `SET LOCAL statement_timeout` (sync limit or the
-   job's `executionDuration`).
-4. `MAXREC` is enforced with a wrapping `LIMIT` (default 10 000, hard limit
-   1 000 000; overflow is reported per DALI).
+| Standard | Surface |
+| --- | --- |
+| **TAP 1.1** | `/sync`, `/async`, `TAP_SCHEMA`, `UPLOAD` (inline multipart and `http(s)`) |
+| **ADQL 2.0** | Parsed and translated by [`queryparser-python3`][queryparser]; geometry becomes [pg_sphere][pgsphere] expressions |
+| **UWS 1.1** | Complete job lifecycle, including `WAIT` blocking, `AFTER` filtering, and `ABORT` that cancels the running statement |
+| **VOSI** | `/capabilities` (TAPRegExt), `/availability`, `/tables` (VODataService) |
+| **DALI** | Parameter conventions, error VOTables, `/examples` |
+| **VOTable 1.4** | via `astropy.io.votable`; plus CSV, TSV, JSON, Parquet, Arrow |
+| **VOResource** | `/tap/registry` record for registry harvesting |
+| **AuthVO** | Challenges naming the IAM, so a client can go and get a token |
 
-## Configuration
+Endpoint-by-endpoint detail with every parameter is in the [API reference][api].
+A JSON interface for machine-to-machine use lives alongside the
+standards-mandated XML at `/api/v1` — see the [JSON API][json-api].
 
-All via environment variables (see `tapcore/config.py`): `TAP_DATABASE_URL`,
-`TAP_BASE_URL`, `TAP_RESULTS_DIR`, `TAP_QUERY_ROLE`, `TAP_DEFAULT_MAXREC`,
-`TAP_HARD_MAXREC`, `TAP_SYNC_TIMEOUT`, `TAP_ASYNC_EXEC_DURATION`,
-`TAP_JOB_RETENTION`.
-
-## JSON API for machine-to-machine use
-
-Alongside the standards-mandated XML of TAP, a JSON interface lives at
-`/api/v1` (OpenAPI at `/openapi.json`): synchronous queries
-(`POST /api/v1/query`), a JSON job facade over the same UWS store
-(`/api/v1/jobs`), TAP_SCHEMA as JSON (`/api/v1/tables`), and the metadata
-domains described below. See `docs/json-api.md`.
-
-## Metadata plugins
-
-Metadata domains are **plugins**: each binds a pydantic data model package
-to a SQL schema and a JSON mount point, and the shared machinery generates
-the tables, registers them in TAP_SCHEMA (so the metadata is queryable
-through ordinary ADQL), migrates them when the model gains fields, and
-serves ingest/fetch/amend endpoints. Two ship built in — **observatory
-data products** ([ska-src-mm-notification](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-notification),
-`srcnet.projects` … `srcnet.artifacts`, `POST /api/v1/notifications`) and **software discovery**
-([ska-src-sdm](https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model),
-`srcnet.software`, `POST /api/v1/software`).
-
-Third-party model packages register through the `skao_tap.models`
-entry-point group — installed alongside the services, no changes here —
-and `TAP_MODEL_PLUGINS` selects which plugins a deployment activates
-(`all`, or a subset for dedicated per-model systems). See
-[`docs/plugins.md`](docs/plugins.md); the
-[generated model-schema reference](docs/model-schemas.md) lists every
-column directly from the installed data models.
-
-A runnable [PyVO notebook](demo/srcnet_metadata_tap.ipynb) populates
-`srcnet.data_products` and `srcnet.software` against the Docker Compose
-service and queries both through TAP.
-
-## Development
-
-The repo is a [uv](https://docs.astral.sh/uv/) workspace
-(`libs/tapcore`, `services/tap-api`, `services/tap-executor`):
-
-```bash
-uv sync --all-groups                 # environment with dev + docs groups
-uv run ruff check . && uv run ruff format --check .
-uv run pytest tests/unit             # tapcore/tap-api unit tests
-uv run pytest tests/component       # boots the stack, exercised with PyVO
-uv run --group docs mkdocs serve     # documentation (mkdocs-material)
-```
-
-The component tests use **PyVO** — a standard IVOA client — to verify the
-service behaves as the TAP/UWS/VOSI/DALI specs require: capabilities and
-table metadata, sync queries (formats, `MAXREC`/overflow, geometry,
-`TAP_SCHEMA`), DALI error documents, and the full UWS job lifecycle. They
-need a reachable PostgreSQL (see `docs/development.md`) and skip otherwise.
-
-CI (`.github/workflows/ci.yml`) runs lint, unit, component, docs, and helm
-checks on every push/PR, and builds/pushes the three container images to
-GHCR on `main`. Docs deploy to GitHub Pages via `docs.yml`.
-
-## Kubernetes deployment (Helm)
+## Deploy
 
 ```bash
 helm upgrade --install skao-tap deploy/helm/skao-tap \
@@ -210,53 +103,61 @@ helm upgrade --install skao-tap deploy/helm/skao-tap \
 helm test skao-tap -n skao-tap       # in-cluster VOSI + sync smoke test
 ```
 
-The chart deploys `tap-api` (+ Service/optional Ingress), `tap-executor`
-(scale-out safe), an optional in-chart PostgreSQL 18 + pg_sphere
-StatefulSet initialized from the same `db/init` SQL, and a shared results
-PVC (use a ReadWriteMany storage class for multi-node clusters). Resilience
-and operations are chart values: default anti-affinity/zone spread and
-PodDisruptionBudgets for multi-replica services, opt-in horizontal
-autoscaling (tap-api on CPU, tap-executor on queue backlog — see
-[docs/autoscaling.md](docs/autoscaling.md)) and VerticalPodAutoscalers,
-`postgresql.tuning` server arguments, and a
-scheduled `pg_dump` backup CronJob — with HA-PostgreSQL, PITR and restore
-procedures documented in `docs/deployment.md`.
+The chart covers both services, an optional in-chart PostgreSQL, anti-affinity
+and PodDisruptionBudgets, opt-in autoscaling and scheduled backups. External HA
+PostgreSQL, PITR, restore and hardening are in the [deployment guide][deploy].
 
-## Known limitations of this draft
+> [!IMPORTANT]
+> **Authentication is off by default.** A deployment that configures no IAM is
+> fully anonymous, including the mutating metadata endpoints, so it must not be
+> exposed to untrusted networks. See [Authentication][auth].
 
-Follow-up work is tracked as numbered packages in `docs/roadmap.md`.
+## Documentation
 
-- UWS `WAIT` (blocking requests, 1.1) and job list `AFTER` filtering are
-  not implemented; `ABORT` marks the job but does not cancel the running
-  backend statement — package 3.
-- **Authentication is off by default** — a deployment that configures no IAM
-  is fully anonymous, including the mutating metadata endpoints, so it must
-  not be exposed to untrusted networks. Setting `auth.enabled=true` with an
-  IAM issuer gates `POST`/`PATCH`/`DELETE` on `/api/v1/<mount>` behind
-  verified bearer tokens, either from IAM group membership or via the
-  [SKA SRC Permissions API](https://gitlab.com/ska-telescope/src/src-service-apis/ska-src-permissions-api)
-  — see [docs/auth.md](docs/auth.md). Job creation, mutation, deletion and
-  synchronous querying can be gated too. Every request needs a verified token
-  by default, service discovery and the health check aside;
-  `auth.anonymousQueries=true` reopens reading metadata through `/tap/sync`
-  and the `/tap/async` job, which is what standard VO clients like PyVO and
-  TOPCAT need since they send no token. A request refused for want of one
-  answers an IVOA AuthVO challenge naming the IAM, so a client can go and get
-  a token.
-- **Service-local logging** — logs are plain `logging` records, outside the
-  shared SRCNet observability stack; package 8 adopts
-  [`ska-src-logging`](https://gitlab.com/ska-telescope/src/src-api/ska-src-api-logging)
-  for structured logs, `X-Request-ID` correlation, traces and metrics.
+| | |
+| --- | --- |
+| [Quickstart][quickstart] | Run it locally, query it from `curl`, PyVO and TOPCAT |
+| [Architecture][arch] | The two-service shape, request paths, failure behaviour |
+| [API reference][api] · [JSON API][json-api] | Every endpoint and parameter |
+| [Deployment][deploy] · [Autoscaling][autoscaling] | Helm values, scaling, backup, restore |
+| [Authentication][auth] · [VO Registry][registry] | Tokens, gated operations, registration |
+| [Metadata plugins][plugins] · [Model schemas][schemas] | Binding a pydantic model to a queryable schema |
+| [Observability][obs] · [Benchmarking][bench] | Metrics, tracing, how the numbers were measured |
+| [Development][dev] · [Roadmap][roadmap] | The `uv` workspace, tests, and what is planned |
 
-Resolved by package 1: results now stream from server-side cursors (never
-fully materialized), columns are typed from the cursor and carry
-units/UCDs/descriptions from `TAP_SCHEMA.columns`, and **Parquet** and
-**Arrow IPC** are available via `RESPONSEFORMAT=parquet|arrow` alongside
-VOTable/CSV/TSV/JSON.
+## Contributing
 
-Resolved by package 2: **table upload** (`UPLOAD`) is supported on /sync
-and /async — inline multipart VOTables (`param:`) and `http(s)` URIs,
-queried as `TAP_UPLOAD.<name>` via per-query temporary tables, with
-`uploadMethods` and the row limit declared in capabilities
-(TABLEDATA serialization only; limits via `TAP_UPLOAD_MAX_ROWS` /
-`TAP_UPLOAD_MAX_BYTES`).
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
+development loop and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the standards
+we hold each other to. Questions and bug reports belong in
+[GitHub issues](https://github.com/MicheleDelliVeneri/skao-tap/issues).
+
+To report a security vulnerability, follow [SECURITY.md](SECURITY.md) rather
+than opening a public issue.
+
+## Citing
+
+If this software supports published work, please cite it — GitHub builds the
+citation from [CITATION.cff](CITATION.cff) via *Cite this repository*.
+
+## License
+
+[MIT](LICENSE) © Michele Delli Veneri and contributors.
+
+[tap-std]: https://www.ivoa.net/documents/TAP/
+[queryparser]: https://github.com/aipescience/queryparser
+[pgsphere]: https://pgsphere.github.io/
+[quickstart]: https://micheledelliveneri.github.io/skao-tap/quickstart/
+[arch]: https://micheledelliveneri.github.io/skao-tap/architecture/
+[api]: https://micheledelliveneri.github.io/skao-tap/api/
+[json-api]: https://micheledelliveneri.github.io/skao-tap/json-api/
+[deploy]: https://micheledelliveneri.github.io/skao-tap/deployment/
+[autoscaling]: https://micheledelliveneri.github.io/skao-tap/autoscaling/
+[auth]: https://micheledelliveneri.github.io/skao-tap/auth/
+[registry]: https://micheledelliveneri.github.io/skao-tap/registry/
+[plugins]: https://micheledelliveneri.github.io/skao-tap/plugins/
+[schemas]: https://micheledelliveneri.github.io/skao-tap/model-schemas/
+[obs]: https://micheledelliveneri.github.io/skao-tap/observability/
+[bench]: https://micheledelliveneri.github.io/skao-tap/benchmarking/
+[dev]: https://micheledelliveneri.github.io/skao-tap/development/
+[roadmap]: https://micheledelliveneri.github.io/skao-tap/roadmap/
