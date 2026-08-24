@@ -104,35 +104,50 @@ def _concurrency_table(summary: dict) -> str:
 
 
 def _replica_table(summary: dict) -> str:
-    runs = [r for r in summary.get("runs", []) if r.get("kind") == "fixed_replicas"]
-    if not runs:
+    """One row per replica count, from the capacities the analysis settled on.
+
+    The efficiency column is the headline's claim repeated per row, so it is
+    filled in only where the headline would state one: both that replica count
+    and the single-replica baseline pushed past what they could serve. Where
+    the ladder never bracketed a ceiling the column reads "—" and the "ceiling"
+    column says why, rather than dividing two rates nobody's limit produced.
+    """
+    capacities = summary.get("replica_capacity") or []
+    by_key = {r["key"]: r for r in summary.get("runs", []) if r.get("kind") == "fixed_replicas"}
+    if not capacities or not by_key:
         return ""
-    best: dict[int, dict] = {}
-    for run in runs:
-        replicas = run["replicas"]
-        current = best.get(replicas)
-        if current is None or (run["http"]["successful_rps"] or 0) > (
-            current["http"]["successful_rps"] or 0
-        ):
-            best[replicas] = run
-    one = (best.get(1) or {}).get("http", {}).get("successful_rps")
+    baseline = next((c for c in capacities if c["replicas"] == 1), None)
     rows = []
-    for replicas in sorted(best):
-        run = best[replicas]
-        rps = run["http"]["successful_rps"]
-        efficiency = rps / (replicas * one) if one else None
+    for capacity in sorted(capacities, key=lambda c: c["replicas"]):
+        run = by_key.get(capacity["key"])
+        if run is None:
+            continue
+        replicas = capacity["replicas"]
+        comparable = (
+            baseline and baseline["bracketed"] and capacity["bracketed"] and baseline["rps"]
+        )
+        efficiency = capacity["rps"] / (replicas * baseline["rps"]) if comparable else None
         rows.append(
             [
                 replicas,
-                _fmt(rps),
-                _fmt(run["offered_rps"]),
+                _fmt(capacity["rps"]),
+                _fmt(capacity["offered_rps"]),
                 _fmt(run["http"]["latency"]["p95_s"] * 1000, 0),
+                "reached" if capacity["bracketed"] else "not reached",
                 _fmt(efficiency, 3) if efficiency is not None else "—",
                 f"`{run['bottleneck'][0]['classification']}`",
             ]
         )
     return _table(
-        ["replicas", "successful rps", "offered rps", "p95 (ms)", "efficiency", "bottleneck"],
+        [
+            "replicas",
+            "successful rps",
+            "offered rps",
+            "p95 (ms)",
+            "ceiling",
+            "efficiency",
+            "bottleneck",
+        ],
         rows,
     )
 
@@ -321,9 +336,14 @@ def _render(summary: dict, run_id: str, published: list[tuple[str, str]]) -> str
             "## Scaling out",
             "",
             replicas,
-            "Efficiency is `throughput(N) / (N x throughput(1))`. The",
-            "shortfall is what the replicas contend over — here, one",
-            "PostgreSQL.",
+            "Each row is the highest rate that replica count served inside the",
+            "SLO. **ceiling** is whether the ladder went past it: `reached` means",
+            "a valid higher rate failed, so the rps beside it is a limit.",
+            "Efficiency is `throughput(N) / (N x throughput(1))` and is filled in",
+            "only where both that row and the single-replica row reached a",
+            "ceiling — otherwise the ratio would describe the rates offered, not",
+            "the ones the service could not exceed. Where it is filled in, the",
+            "shortfall is what the replicas contend over: one PostgreSQL.",
             "",
         ]
 

@@ -49,6 +49,18 @@ def _fraction_above(values: np.ndarray, threshold: float) -> float:
     return float((values > threshold).mean()) if values.size else 0.0
 
 
+def fleet_replicas(metrics_rows: list[dict]) -> float:
+    """Peak API replicas ready during the window, never below one.
+
+    The multiplier for every per-pod ceiling, taken from the run rather than
+    from the configuration: under an autoscaler the configured count is not
+    what served, and the measured one is right in both cases.
+    """
+    ready = _series(metrics_rows, "api_replicas_ready")
+    finite = ready[np.isfinite(ready)] if ready.size else ready
+    return max(float(finite.max()), 1.0) if finite.size else 1.0
+
+
 def classify(
     *,
     metrics_rows: list[dict],
@@ -70,9 +82,21 @@ def classify(
     api_mem = _series(metrics_rows, "tap_api_memory_bytes")
     pg_mem = _series(metrics_rows, "postgres_memory_bytes")
 
-    api_limit = limits.get("tap_api_cpu_limit_cores", 2.0)
+    # Every API series above is summed over the pods, so each ceiling compared
+    # against one has to be the fleet's rather than a single pod's or a single
+    # process's. Getting this wrong does not produce a missing verdict, it
+    # produces a confident wrong one: an eight-replica run was called
+    # CONNECTION_POOL_BOUND with seven eighths of its pool idle, and
+    # MEMORY_BOUND at 220 MiB a pod against a 1 GiB-a-pod limit.
+    #
+    # The multiplier is the peak ready count from the run itself, not the
+    # configured replicas, so an autoscaled window — where the ceiling moves
+    # while the measurement runs, and the configured count is meaningless — is
+    # judged against the fleet that actually served.
+    serving = fleet_replicas(metrics_rows)
+    api_limit = limits.get("tap_api_cpu_limit_cores", 2.0) * serving
     pg_limit = limits.get("postgres_cpu_limit_cores", 4.0)
-    pool_limit = limits.get("db_pool_max_total", 8)
+    pool_limit = limits.get("db_pool_max_total", 8) * limits.get("tap_api_workers", 1) * serving
 
     # -- the client first ---------------------------------------------------
     if recorder_cpu_peak > 0.80:
@@ -176,6 +200,7 @@ def classify(
                         "peak_pool_wait_p95_s": waiting,
                         "requests_refused_503": refused,
                         "pool_max_total": pool_limit,
+                        "api_replicas_serving": serving,
                     },
                     "Requests are queueing for a database connection rather than for "
                     "the database. Raising config.dbPoolMax helps only while the "
@@ -185,7 +210,7 @@ def classify(
             )
 
     # -- memory -------------------------------------------------------------
-    api_mem_limit = limits.get("tap_api_memory_limit_bytes", 1 << 30)
+    api_mem_limit = limits.get("tap_api_memory_limit_bytes", 1 << 30) * serving
     pg_mem_limit = limits.get("postgres_memory_limit_bytes", 6 << 30)
     oom = _series(metrics_rows, "oom_events")
     if (
@@ -199,8 +224,10 @@ def classify(
                 1.0 if (oom.size and oom.max() > 0) else 0.5,
                 {
                     "api_peak_bytes": float(api_mem.max()) if api_mem.size else None,
+                    "api_limit_bytes": api_mem_limit,
                     "postgres_peak_bytes": float(pg_mem.max()) if pg_mem.size else None,
                     "oom_events": float(oom.max()) if oom.size else 0.0,
+                    "api_replicas_serving": serving,
                 },
                 "A container approached or exceeded its memory limit. An OOM kill "
                 "invalidates the run outright; sustained pressure below it still "

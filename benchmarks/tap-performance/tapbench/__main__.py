@@ -106,26 +106,9 @@ def finalise(
             "evidence": f"{best['key']} at {best['concurrency']} clients, "
             f"p95 {1000 * best['http']['latency']['p95_s']:.0f} ms",
         }
-    c1 = runner.sustainable_capacity(results, cfg["scenarios"]["slo"]["p95_seconds"])
-    if c1:
-        headline["sustainable single-replica capacity (C1)"] = {
-            "value": round(c1, 1),
-            "evidence": f"highest successful rps with p95 within the "
-            f"{cfg['scenarios']['slo']['p95_seconds']}s SLO and "
-            "errors under 1%",
-        }
-    for kind, label in (("fixed_replicas", "replica scaling efficiency at 8"),):
-        scaled = [r for r in results if r.get("kind") == kind]
-        base = [r for r in scaled if r.get("replicas") == 1]
-        top = [r for r in scaled if r.get("replicas") == 8]
-        if base and top:
-            one = max((r["http"]["successful_rps"] or 0.0) for r in base)
-            eight = max((r["http"]["successful_rps"] or 0.0) for r in top)
-            if one:
-                headline[label] = {
-                    "value": round(eight / (8 * one), 3),
-                    "evidence": f"{eight:.1f} rps on 8 replicas against {one:.1f} on one",
-                }
+    slo_p95_s = cfg["scenarios"]["slo"]["p95_seconds"]
+    c1 = runner.sustainable_capacity(results, slo_p95_s)
+    headline.update(runner.capacity_headline(results, slo_p95_s))
 
     invalid_path = run.path / "invalid.json"
     summary = {
@@ -145,6 +128,7 @@ def finalise(
         "bottleneck_tally": tally,
         "by_query_class": pooled,
         "headline": headline,
+        "replica_capacity": runner.replica_capacities(results, slo_p95_s),
         "plan_flags": {
             name: {"count": count, "explanation": _plan_explanation(name)}
             for name, count in (plan_flags or {}).items()

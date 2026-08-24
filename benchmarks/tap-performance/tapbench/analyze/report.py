@@ -255,31 +255,45 @@ class Plotter:
                 label="linear from 1 replica",
             )
         ax.legend()
-        return self._save(
-            fig,
-            "rps_vs_replicas",
-            "Throughput vs replicas",
+        # The gap is only contention where each point is a ceiling. Where a
+        # replica count served everything it was offered, the gap is the
+        # ladder's, and saying otherwise attributes the shortfall to PostgreSQL
+        # on the strength of a rate nobody raised.
+        ceilings = {
+            c["replicas"] for c in self.summary.get("replica_capacity") or [] if c["bracketed"]
+        }
+        open_ended = sorted(set(xs) - ceilings)
+        note = (
             "The dashed line is what perfect scaling would look like. The gap "
-            "between them is the shared resource — here, one PostgreSQL.",
+            "between them is the shared resource — here, one PostgreSQL."
+            if not open_ended
+            else "The dashed line is what perfect scaling would look like. At "
+            + ", ".join(str(x) for x in open_ended)
+            + " replicas the service met every request it was offered, so the "
+            "point is the rate offered rather than a ceiling and the gap to the "
+            "line is the ladder's, not the service's."
         )
+        return self._save(fig, "rps_vs_replicas", "Throughput vs replicas", note)
 
     def scaling_efficiency(self) -> Figure:
-        runs = [r for r in self._select(kind="fixed_replicas") if r.get("http")]
-        if not runs:
+        # Only ceilings, because efficiency is a ratio of ceilings. A curve
+        # drawn through rates the service met in full measures the ladder that
+        # was offered: this run would have drawn 1.0, 1.0, 0.5, 0.25 from four
+        # replica counts that all served every request they were given.
+        capacities = [c for c in (self.summary.get("replica_capacity") or []) if c["bracketed"]]
+        buckets = {c["replicas"]: c["rps"] for c in capacities}
+        if not buckets:
             return self._skip(
                 "scaling_efficiency",
                 "Scaling efficiency",
-                "no fixed-replica measurements in this run",
+                "no replica count was pushed past what it could serve, so no "
+                "throughput here is a ceiling to take a ratio of",
             )
-        buckets: dict[int, float] = {}
-        for run in runs:
-            value = run["http"].get("successful_rps") or 0.0
-            buckets[run["replicas"]] = max(buckets.get(run["replicas"], 0.0), value)
         if 1 not in buckets:
             return self._skip(
                 "scaling_efficiency",
                 "Scaling efficiency",
-                "no single-replica measurement to normalise against",
+                "no single-replica ceiling to normalise against",
             )
         base = buckets[1]
         xs = sorted(buckets)

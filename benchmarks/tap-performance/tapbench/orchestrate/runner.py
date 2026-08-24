@@ -272,25 +272,30 @@ def measure(
     resources = aggregate_resources(metrics_rows)
     pg_summary = pg_mod.summarise(delta)
 
+    dropped_arrivals = sum(e.get("dropped_arrivals", 0) for e in timeline)
     guard_results = guard.evaluate(
         recorder=recorder,
         prometheus_report=coverage,
         pod_timings=pod_timings,
         metrics_rows=metrics_rows,
+        dropped_arrivals=dropped_arrivals,
     )
     failed = [r for r in guard_results if not r.ok]
     for failure in failed:
         run.invalidate(f"{key}: {failure.name}", {"detail": failure.detail, **failure.measured})
 
     limits_map = limits(cfg)
-    # Per-replica GIL ceiling times the replicas actually serving.
-    api_limit = limits_map["tap_api_cpu_limit_cores"] * max(replicas or 1, 1)
+    # The per-pod ceilings go in as they are: classify() multiplies each of
+    # them by the replicas the run actually had ready, which is the only count
+    # that is also right when an autoscaler moved it mid-window. The same
+    # count is what the reported CPU fraction has to be against.
+    api_limit = limits_map["tap_api_cpu_limit_cores"] * bottleneck.fleet_replicas(metrics_rows)
     verdicts = bottleneck.classify(
         metrics_rows=metrics_rows,
         summary=http,
         pg_summary=pg_summary,
         recorder_cpu_peak=recorder.generator_cpu_peak,
-        limits={**limits_map, "tap_api_cpu_limit_cores": api_limit},
+        limits=limits_map,
     )
 
     result = {
@@ -319,6 +324,11 @@ def measure(
         "postgres": pg_summary,
         "postgres_activity": activity_samples,
         "coordinated_omission": stats_mod.coordinated_omission(recorder.samples),
+        # Alongside the lateness above, because the two are the same question
+        # asked of the arrivals that went out late and the arrivals that never
+        # went out at all. Only the first is visible in the latencies.
+        "arrivals_dropped": dropped_arrivals,
+        "unoffered_fraction": dropped_arrivals / max(len(recorder.samples) + dropped_arrivals, 1),
         "prometheus_coverage": coverage,
         "guards": [{"name": r.name, "ok": r.ok, "detail": r.detail} for r in guard_results],
         "bottleneck": [
@@ -457,16 +467,142 @@ def sustainable_capacity(results: list[dict], slo_p95_s: float) -> float | None:
     as multiples of an unusable number would make every one of them a test of
     overload rather than of scaling.
     """
-    usable = [
-        r
-        for r in results
-        if r.get("replicas") in (1, None)
-        and (r.get("http") or {}).get("error_fraction", 1.0) <= 0.01
-        and ((r.get("http") or {}).get("latency") or {}).get("p95_s", 1e9) <= slo_p95_s
-    ]
+    usable = [r for r in results if r.get("replicas") in (1, None) and _within_slo(r, slo_p95_s)]
     if not usable:
         return None
     return max(r["http"]["successful_rps"] for r in usable)
+
+
+def _within_slo(result: dict, slo_p95_s: float) -> bool:
+    """A measurement the service passed, and that is a measurement at all."""
+    if result.get("invalid"):
+        return False
+    http = result.get("http") or {}
+    return (
+        http.get("error_fraction", 1.0) <= 0.01
+        and (http.get("latency") or {}).get("p95_s", 1e9) <= slo_p95_s
+    )
+
+
+def bracketed_capacity(
+    results: list[dict], *, kind: str, replicas: int, slo_p95_s: float
+) -> dict | None:
+    """The most a replica count sustains, and whether that is its ceiling.
+
+    A capacity is only a capacity if the ladder went past it: the highest rate
+    the service met says nothing about where it stops unless some *valid*
+    higher rung is known to have failed. Without that, the number is the
+    largest rate anybody happened to offer.
+
+    This matters because the ratio of two such numbers looks exactly like a
+    scaling efficiency. This run offered one replica 115 rps and eight
+    replicas 231 rps, both met in full with a p95 under 60 ms, and the ratio
+    would have been published as 25% scaling efficiency at eight replicas —
+    a claim about a ceiling neither point came near.
+    """
+    at = [r for r in results if r.get("kind") == kind and r.get("replicas") == replicas]
+    met = [r for r in at if _within_slo(r, slo_p95_s)]
+    if not met:
+        return None
+    best = max(met, key=lambda r: r["http"]["successful_rps"])
+    offered = best.get("offered_rps") or 0.0
+    # A higher rung that the service failed, rather than one the generator
+    # failed to offer: an invalid point brackets nothing.
+    above = [
+        r
+        for r in at
+        if (r.get("offered_rps") or 0.0) > offered
+        and not r.get("invalid")
+        and not _within_slo(r, slo_p95_s)
+    ]
+    return {
+        "rps": best["http"]["successful_rps"],
+        "offered_rps": offered,
+        "key": best["key"],
+        "bracketed": bool(above),
+        "next_rung_measured": bool(
+            [r for r in at if (r.get("offered_rps") or 0.0) > offered and not r.get("invalid")]
+        ),
+    }
+
+
+def _pods(n: int) -> str:
+    return "one replica" if n == 1 else f"{n} replicas"
+
+
+def replica_capacities(results: list[dict], slo_p95_s: float) -> list[dict]:
+    """Per replica count: the highest rate met, and whether it is a ceiling.
+
+    Written into the summary so the report renders what the analysis decided
+    rather than deciding it again from the rows — the per-replica efficiency
+    column is the same claim as the headline and must not be able to disagree
+    with it.
+    """
+    counts = sorted(
+        {
+            r["replicas"]
+            for r in results
+            if r.get("kind") == "fixed_replicas" and r.get("replicas") is not None
+        }
+    )
+    out = []
+    for n in counts:
+        found = bracketed_capacity(results, kind="fixed_replicas", replicas=n, slo_p95_s=slo_p95_s)
+        if found:
+            out.append({"replicas": n, **found})
+    return out
+
+
+def capacity_headline(results: list[dict], slo_p95_s: float) -> dict:
+    """C1 and replica scaling efficiency, each qualified by what bracketed it.
+
+    Only a ratio of two ceilings is an efficiency, and only a rate the service
+    was pushed past is a capacity. Where the ladder bracketed neither, the
+    entry says so — no number for the efficiency, an explicit "lower bound" on
+    C1 — because a headline carrying a null gets read and a missing headline
+    does not.
+    """
+    out: dict = {}
+    c1 = sustainable_capacity(results, slo_p95_s)
+    if c1:
+        at_one = bracketed_capacity(results, kind="fixed_replicas", replicas=1, slo_p95_s=slo_p95_s)
+        qualifier = (
+            ""
+            if at_one and at_one["bracketed"]
+            else " — a lower bound, since no valid higher rate failed"
+        )
+        out["sustainable single-replica capacity (C1)"] = {
+            "value": round(c1, 1),
+            "evidence": "highest successful rps over valid measurements with p95 within "
+            f"the {slo_p95_s}s SLO and errors under 1%{qualifier}",
+        }
+    for kind, label, top_n in (("fixed_replicas", "replica scaling efficiency at 8", 8),):
+        one = bracketed_capacity(results, kind=kind, replicas=1, slo_p95_s=slo_p95_s)
+        top = bracketed_capacity(results, kind=kind, replicas=top_n, slo_p95_s=slo_p95_s)
+        if not (one and top):
+            continue
+        if one["bracketed"] and top["bracketed"] and one["rps"]:
+            out[label] = {
+                "value": round(top["rps"] / (top_n * one["rps"]), 3),
+                "evidence": f"{top['rps']:.1f} rps on {_pods(top_n)} against "
+                f"{one['rps']:.1f} on one, each the last rate met before a "
+                "measured failure",
+            }
+            continue
+        open_ended = [
+            f"{_pods(n)} served every one of the {c['offered_rps']:.0f} rps offered ({c['key']})"
+            for n, c in ((1, one), (top_n, top))
+            if not c["bracketed"]
+        ]
+        out[label] = {
+            "value": None,
+            "evidence": "not determined: "
+            + "; ".join(open_ended)
+            + ". An efficiency needs a ceiling at each replica count, and no valid "
+            "higher rung failed — every rung above is either unmeasured or was "
+            "marked invalid.",
+        }
+    return out
 
 
 def fixed_replica_scaling(run, cfg: dict, dataset: str, entries: list, c1: float) -> list[dict]:
@@ -728,16 +864,45 @@ def reclassify(run_dir, cfg: dict) -> dict:
                     strict=True,
                 )
             ]
-        api_limit = limits_map["tap_api_cpu_limit_cores"] * max(entry.get("replicas") or 1, 1)
         verdicts = bottleneck.classify(
             metrics_rows=metrics_rows,
             summary=entry.get("http") or {},
             pg_summary=pg_summary,
             recorder_cpu_peak=entry.get("generator_cpu_peak") or 0.0,
-            limits={**limits_map, "tap_api_cpu_limit_cores": api_limit},
+            limits=limits_map,
         )
+        # The two client-fidelity rules are re-judged here as well. Both of
+        # their inputs are stored with every measurement, so a rule written
+        # after a run can still be applied to it — and a run measured before
+        # either rule existed is exactly the run that needs them.
+        dropped = entry.get("arrivals_dropped")
+        if dropped is None:
+            dropped = sum(e.get("dropped_arrivals", 0) for e in entry.get("load_timeline") or [])
+        omission = entry.get("coordinated_omission") or {}
+        issued = int(omission.get("samples") or (entry.get("http") or {}).get("requests") or 0)
+        entry["arrivals_dropped"] = dropped
+        entry["unoffered_fraction"] = dropped / max(issued + dropped, 1)
+        schedule = guards_mod.schedule_verdicts(
+            lateness_p95_s=omission.get("p95_lateness_s"),
+            lateness_max_s=omission.get("max_lateness_s"),
+            arrivals_dropped=dropped,
+            arrivals_issued=issued,
+        )
+        kept = [g for g in entry.get("guards") or [] if g["name"] not in {v.name for v in schedule}]
+        entry["guards"] = kept + [
+            {"name": v.name, "ok": v.ok, "detail": v.detail} for v in schedule
+        ]
+        entry["invalid"] = any(not g["ok"] for g in entry["guards"])
+
         was = (entry.get("bottleneck") or [{}])[0].get("classification")
         entry["postgres"] = pg_summary
+        # Re-derived with the verdicts, because it shares their denominator.
+        resources = entry.get("resources") or {}
+        if resources:
+            fleet = limits_map["tap_api_cpu_limit_cores"] * bottleneck.fleet_replicas(metrics_rows)
+            resources["tap_api_cpu_fraction_of_limit"] = (
+                resources.get("tap_api_cpu_cores_p95", 0.0) / fleet
+            )
         entry["bottleneck"] = [
             {
                 "classification": v.classification,
@@ -760,6 +925,16 @@ def reclassify(run_dir, cfg: dict) -> dict:
             )
             slot["count"] += 1
     summary["bottleneck_tally"] = tally
+    # The headline is derived from validity, so re-judging validity has to
+    # re-derive it. Leaving it would keep publishing a scaling efficiency that
+    # the reclassified measurements no longer support.
+    entries = summary.get("runs") or []
+    slo_p95_s = cfg["scenarios"]["slo"]["p95_seconds"]
+    headline = summary.get("headline") or {}
+    headline.update(capacity_headline(entries, slo_p95_s))
+    summary["headline"] = headline
+    summary["replica_capacity"] = replica_capacities(entries, slo_p95_s)
+    summary["sustainable_capacity_c1"] = sustainable_capacity(entries, slo_p95_s)
     summary["reanalysed_at"] = _time.time()
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True, default=str, allow_nan=False)

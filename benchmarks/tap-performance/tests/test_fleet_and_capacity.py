@@ -1,0 +1,193 @@
+"""Tests for what a multi-replica number means.
+
+Every API series the classifier reads is summed over the pods, and every rate
+the report divides is a rate somebody chose to offer. Both invite the same
+mistake — comparing a fleet's total against one pod's ceiling, dividing two
+rates neither of which is a limit — and both produce a confident wrong answer
+rather than a missing one. These pin the corrections.
+"""
+
+import pathlib
+import sys
+
+SUITE = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SUITE))
+
+from tapbench.analyze import bottleneck  # noqa: E402
+from tapbench.collect import guards  # noqa: E402
+from tapbench.orchestrate import runner  # noqa: E402
+
+LIMITS = {
+    "tap_api_cpu_limit_cores": 1.0,
+    "postgres_cpu_limit_cores": 4.0,
+    "db_pool_max_total": 8,
+    "tap_api_workers": 1,
+    "tap_api_memory_limit_bytes": 1 << 30,
+}
+
+
+def _rows(*series):
+    rows = []
+    for metric, values in series:
+        rows += [
+            {"metric": metric, "labels": "", "t": float(i), "value": v}
+            for i, v in enumerate(values)
+        ]
+    return rows
+
+
+def _classify(rows, **kwargs):
+    return bottleneck.classify(
+        metrics_rows=rows,
+        summary={"window_seconds": 60.0, "requests": 1000, "error_fraction": 0.0},
+        pg_summary=kwargs.pop("pg_summary", {"cache_hit_ratio": 1.0}),
+        recorder_cpu_peak=0.05,
+        limits=LIMITS,
+        **kwargs,
+    )
+
+
+# -- fleet ceilings ---------------------------------------------------------
+
+
+def test_a_fleets_pool_ceiling_is_per_process_times_the_pods_serving():
+    """The bug this pins: eight pods holding eight connections each were
+    called pool-bound at 12 in use, because 12 exceeds one process's eight."""
+    rows = _rows(
+        ("tap_db_connections_in_use", [12.0] * 50),
+        ("api_replicas_ready", [8.0] * 50),
+    )
+    verdicts = {v.classification: v for v in _classify(rows)}
+    assert "CONNECTION_POOL_BOUND" not in verdicts
+
+    # The same 12 connections against a single pod is genuinely full.
+    alone = _rows(
+        ("tap_db_connections_in_use", [12.0] * 50),
+        ("api_replicas_ready", [1.0] * 50),
+    )
+    assert "CONNECTION_POOL_BOUND" in {v.classification for v in _classify(alone)}
+
+
+def test_a_fleets_memory_ceiling_is_per_pod_times_the_pods_serving():
+    """1.77 GB across eight pods is 220 MiB each, not a pod over its 1 GiB."""
+    rows = _rows(
+        ("tap_api_memory_bytes", [1.77e9] * 50),
+        ("api_replicas_ready", [8.0] * 50),
+    )
+    assert "MEMORY_BOUND" not in {v.classification for v in _classify(rows)}
+
+    crowded = _rows(
+        ("tap_api_memory_bytes", [1.77e9] * 50),
+        ("api_replicas_ready", [1.0] * 50),
+    )
+    assert "MEMORY_BOUND" in {v.classification for v in _classify(crowded)}
+
+
+def test_the_multiplier_comes_from_the_run_not_the_configuration():
+    """Under an autoscaler the configured count is not what served, so the
+    ceilings follow the replicas that were actually ready."""
+    assert bottleneck.fleet_replicas(_rows(("api_replicas_ready", [1, 3, 6, 6]))) == 6.0
+    # No series, or an empty one, must not multiply a ceiling by zero.
+    assert bottleneck.fleet_replicas([]) == 1.0
+    assert bottleneck.fleet_replicas(_rows(("api_replicas_ready", [0.0]))) == 1.0
+
+
+# -- the generator's own schedule -------------------------------------------
+
+
+def test_arrivals_abandoned_at_the_cap_fail_a_guard_that_lateness_cannot_see():
+    """The blind spot this pins: at the in-flight cap the generator drops the
+    arrival instead of issuing it late, so lateness reads clean while nine
+    tenths of the offered rate was never offered."""
+    verdicts = {
+        v.name: v
+        for v in guards.schedule_verdicts(
+            lateness_p95_s=0.2,
+            lateness_max_s=1.0,
+            arrivals_dropped=189581,
+            arrivals_issued=31914,
+        )
+    }
+    assert verdicts["load_generator_kept_schedule"].ok
+    assert not verdicts["load_generator_offered_the_rate"].ok
+    assert verdicts["load_generator_offered_the_rate"].measured["arrivals_dropped"] == 189581
+
+
+def test_a_run_that_kept_its_schedule_passes_both():
+    verdicts = guards.schedule_verdicts(
+        lateness_p95_s=0.0, lateness_max_s=0.05, arrivals_dropped=0, arrivals_issued=27538
+    )
+    assert all(v.ok for v in verdicts)
+    # Nothing dropped, so there is nothing to report about drops.
+    assert [v.name for v in verdicts] == ["load_generator_kept_schedule"]
+
+
+# -- capacities and the ratio of two of them --------------------------------
+
+
+def _point(replicas, offered, rps, *, p95=0.02, errors=0.0, invalid=False):
+    return {
+        "key": f"repl-n{replicas}-{offered:g}",
+        "kind": "fixed_replicas",
+        "replicas": replicas,
+        "offered_rps": offered,
+        "invalid": invalid,
+        "http": {
+            "successful_rps": rps,
+            "error_fraction": errors,
+            "latency": {"p95_s": p95},
+        },
+    }
+
+
+def test_a_rate_the_service_met_in_full_is_not_reported_as_a_ceiling():
+    """The bug this pins: one replica was offered 115 rps and eight replicas
+    231 rps, both served in full, and the ratio was published as 25% scaling
+    efficiency at eight replicas."""
+    results = [
+        _point(1, 115.3, 114.7),
+        _point(8, 115.3, 114.7),
+        _point(8, 230.7, 229.3),
+    ]
+    at_one = runner.bracketed_capacity(results, kind="fixed_replicas", replicas=1, slo_p95_s=2.0)
+    assert at_one["rps"] == 114.7
+    assert not at_one["bracketed"]
+
+    headline = runner.capacity_headline(results, 2.0)
+    assert headline["replica scaling efficiency at 8"]["value"] is None
+    assert "not determined" in headline["replica scaling efficiency at 8"]["evidence"]
+    assert "lower bound" in headline["sustainable single-replica capacity (C1)"]["evidence"]
+
+
+def test_an_efficiency_is_reported_once_both_counts_have_a_measured_ceiling():
+    results = [
+        _point(1, 115.3, 114.7),
+        _point(1, 230.7, 3.0, p95=600.0, errors=0.98),
+        _point(8, 922.8, 800.0),
+        _point(8, 1845.6, 200.0, p95=90.0, errors=0.4),
+    ]
+    headline = runner.capacity_headline(results, 2.0)
+    entry = headline["replica scaling efficiency at 8"]
+    assert entry["value"] == round(800.0 / (8 * 114.7), 3)
+    assert "lower bound" not in headline["sustainable single-replica capacity (C1)"]["evidence"]
+
+
+def test_an_invalid_higher_rung_brackets_nothing():
+    """A measurement that described the client cannot establish where the
+    service stopped, so the rate below it stays a lower bound."""
+    results = [
+        _point(1, 115.3, 114.7),
+        _point(1, 230.7, 3.0, p95=600.0, errors=0.98, invalid=True),
+    ]
+    at_one = runner.bracketed_capacity(results, kind="fixed_replicas", replicas=1, slo_p95_s=2.0)
+    assert not at_one["bracketed"]
+    # And an invalid point is never itself the reported capacity.
+    assert at_one["rps"] == 114.7
+
+
+def test_an_invalid_measurement_cannot_be_the_capacity_it_reports():
+    results = [
+        _point(1, 115.3, 114.7),
+        _point(1, 230.7, 229.0, invalid=True),
+    ]
+    assert runner.sustainable_capacity(results, 2.0) == 114.7
