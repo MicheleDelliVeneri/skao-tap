@@ -719,3 +719,97 @@ ingested metadata.
 - **Amendments follow**: `PATCH` updates to `s_region` re-derive the
   geometry column.
 
+## Package 12 — ObsCore 1.1 compliance (`ivoa.obscore` view)
+
+The service is not ObsCore 1.1 compliant today, and the gap was measured
+against the REC (REC-ObsCore-v1.1-20170509) rather than assumed: there is no
+`ivoa.ObsCore` table or view in the deployed service (the only literal
+`ivoa.obscore` in the repo is the synthetic benchmark table in
+`benchmarks/tap-performance/tapbench/dataset/schema.sql`, which is not part of
+the service and misses the `*_xel` columns); `/tap/capabilities` and the
+VOResource record carry no
+`<dataModel ivo-id="ivo://ivoa.net/std/ObsCore#core-1.1">` element
+(`services/tap-api/tap_api/endpoints/vosi.py::_capability_elements()`); and
+utype/xtype metadata is absent end-to-end — never written by
+`tapcore/metadata/schema_gen.py::registration_statements()` (which also
+hard-codes `std = 0`), never emitted by `tables_xml()` or the JSON `/tables`
+mirror — even though the TAP_SCHEMA DDL already has the columns for it.
+
+The distance is short because the SRCNet ODP model is itself
+ObsCore-1.1-derived: `srcnet.data_products` already carries ~18 of the
+mandatory columns under their exact ObsCore names (including all five 1.1
+axis-length additions `s_xel1/s_xel2/t_xel/em_xel/pol_xel`),
+`srcnet.artifacts` has `access_url/access_format/access_estsize`, and
+`srcnet.observations` has `collection/facility_name/instrument_name`. The
+publication gate (`queries/query.py::_published_tables()`) is a name lookup
+in `tap_schema.tables`, so a view passes with no query-path change.
+
+The shape of the fix is a registered **view**, created by the odp plugin's
+bootstrap so it exists exactly when its source tables do:
+
+- **`services/tap-api/tap_api/plugins/obscore.py` (new)** — the 29 mandatory
+  columns as data (name, datatype, arraysize, xtype, unit, ucd, utype
+  transcribed from REC Table 6, `std = 1`, `principal = 1`), the view DDL,
+  and `ensure_obscore(conn)` which runs `CREATE SCHEMA IF NOT EXISTS ivoa`,
+  `DROP VIEW IF EXISTS` + `CREATE VIEW ivoa.obscore` (drop-and-create so a
+  mapping change migrates forward; atomic inside the bootstrap transaction),
+  upserts the TAP_SCHEMA registration (schema/table/columns, table utype
+  `ivo://ivoa.net/std/ObsCore#core-1.1`), and grants
+  `USAGE`/`SELECT` on schema `ivoa` to the query role at runtime — the same
+  pattern `srcnet` uses; `db/init/05_roles.sql` stays untouched.
+- **View mapping** — one row per data product (the product already aggregates
+  its artifacts' axes), joining `srcnet.data_products` to
+  `srcnet.observations` and picking one representative artifact for the
+  access columns via `LEFT JOIN LATERAL ... WHERE semantics = 'science'
+  ORDER BY artifact_id LIMIT 1` (NULL `access_url` is spec-legal — the
+  DataLink pattern). Decided mappings: `dataproduct_type = 'table'` (in the
+  srcnet CHECK but not the ObsCore vocabulary) maps to `'measurements'` via
+  `CASE`; `obs_collection = COALESCE(observations.collection,
+  'unclassified')` to honour NOT NULL; `obs_publisher_did` is a configurable
+  prefix plus the PK chain
+  `<prefix><project_id>/<obs_id>/<sbd_id>/<eb_id>/<product_id>` — new
+  setting `TAP_OBSCORE_DID_PREFIX` (Helm `obscore.didPrefix`, default
+  `ivo://skao.int/~?`, prefix validated before SQL-literal interpolation; the
+  authority must match the registry `authorityId` in a real deployment since
+  a PublisherDID is a permanent promise); `access_estsize =
+  round(bytes/1000.0)::bigint` (kbyte); `s_resolution` from `beam_size`;
+  `t_resolution` and `em_res_power` NULL (permitted); `s_region` is
+  registered with `xtype = 'adql:REGION'` now even though the stored value
+  is a plain STC-S string — region *functions* over it arrive with
+  Package 7, whose geometry column this view inherits.
+- **Bootstrap wiring** — an optional `post_ensure` hook on `MetadataPlugin`
+  (`libs/tapcore/tapcore/metadata/plugins.py`), invoked by
+  `ingest.ensure_schema()` after the plugin's tables and registration are
+  ensured, same connection and transaction, advisory xact lock still held
+  (concurrent pods safe); `odp.py` wires
+  `post_ensure=obscore.ensure_obscore`. `main.py::lifespan` already calls
+  `forget_published_tables()` after bootstrap, so the view is immediately
+  queryable. The `software` plugin is unaffected — the hook lives only on
+  odp.
+- **Capability declaration** — `_capability_elements()` gains an
+  `_obscore_active()` flag keyed off the active plugins and, when true,
+  emits `<dataModel ivo-id="ivo://ivoa.net/std/ObsCore#core-1.1">
+  ObsCore-1.1</dataModel>` after `</interface>` and before `<language>`
+  (TAPRegExt element order). `voresource_xml()` reuses the same block, so
+  the registry record inherits it — and the REC's rule that the identifier
+  may only be declared once the table with all mandatory columns exists
+  holds structurally, because the flag and the view key off the same plugin.
+- **utype/xtype plumbing** — `tables_xml()` additionally selects and emits
+  table `utype`, column `utype`, and column `xtype` as the `extendedType`
+  attribute on `<dataType>` (VODataService order); the JSON `/tables` in
+  `endpoints/json_api.py` adds the same fields. Optional follow-up:
+  `tapcore/query/results.py::tap_schema_metadata()` carrying utype/xtype
+  into result VOTable FIELDs.
+- **Tests** — unit: the column list is exactly the 29 mandatory names with
+  spot-checked units/ucds/utypes and the view SQL contains the CASE,
+  COALESCE and lateral-pick clauses; capabilities contain the `dataModel`
+  element with odp active and not otherwise. Component: `/tables` lists
+  `ivoa.obscore` and pyvo sees the metadata; ingest a notification through
+  `/api/v1/notifications`, then `SELECT * FROM ivoa.ObsCore` over TAP sync
+  returns one row per product with the constructed DID (ADQL case folding
+  makes the REC's case-insensitive `ivoa.ObsCore` work unquoted). Optional
+  external check: stilts `taplint` against the composed stack.
+- **Extras** — an ObsCore cone-search entry in `/tap/examples` gated on the
+  same flag, and a `docs/obscore.md` recording the column mapping and the
+  DID scheme.
+
