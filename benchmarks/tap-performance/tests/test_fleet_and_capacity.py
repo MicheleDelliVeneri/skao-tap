@@ -260,3 +260,49 @@ def test_the_resolution_is_measured_from_the_series_not_assumed():
     # A single point cannot establish a step; the fallback must not be zero,
     # which would make every tolerance vanish.
     assert keda._series_step(rows[:1]) == 1.0
+
+
+def test_a_scale_out_whose_pods_are_gone_is_timed_from_the_watcher():
+    """The gap this closes: a scenario that scaled up and back down had the
+    pods that served the scale-out deleted before the run ended, so the
+    end-of-run Pod query returned none and T3 to T6 were simply absent."""
+    metrics, watcher, _ = _keda_inputs(pod_created=1012.0)
+    for sample in watcher:
+        sample["pods"] = [
+            {"name": "skao-tap-tap-executor-abc", "created": 1012.0, "ready": sample["t"] >= 1010.0}
+        ]
+    result = keda.timings(
+        t0=1000.0,
+        metrics_rows=metrics,
+        watcher_samples=watcher,
+        pod_timings=[],  # the deployment scaled back down; nothing survives
+        samples=[],
+        deployment="skao-tap-tap-executor",
+        threshold=60.0,
+        slo_p95_s=2.0,
+    )
+    assert result["stamps"]["T3"] == 1012.0
+    assert result["stamps"]["T6"] == 1010.0
+    assert any("gone by the end of the run" in n for n in result["notes"])
+    # Stages the watcher does not record stay absent rather than being filled.
+    assert result["latencies_s"]["scheduling"] is None
+    assert result["latencies_s"]["container_start"] is None
+
+
+def test_a_flapping_scenario_says_its_stages_may_straddle_cycles():
+    metrics, watcher, pods = _keda_inputs(pod_created=1012.0)
+    watcher += [
+        {"t": 1020.0, "deployments": {"skao-tap-tap-executor": {"spec_replicas": 1}}},
+        {"t": 1030.0, "deployments": {"skao-tap-tap-executor": {"spec_replicas": 3}}},
+    ]
+    result = keda.timings(
+        t0=1000.0,
+        metrics_rows=metrics,
+        watcher_samples=watcher,
+        pod_timings=pods,
+        samples=[],
+        deployment="skao-tap-tap-executor",
+        threshold=60.0,
+        slo_p95_s=2.0,
+    )
+    assert any("moved 3 times" in n for n in result["notes"])

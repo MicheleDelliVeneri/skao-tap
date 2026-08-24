@@ -52,6 +52,34 @@ def _series_step(rows: list[dict]) -> float:
     return float(np.median(np.diff(stamps)))
 
 
+def _pod_stamps_from_watcher(
+    watcher_samples: list[dict], t0: float, deployment: str
+) -> tuple[float | None, float | None]:
+    """Creation and first-Ready of the earliest pod created after `t0`.
+
+    From the watcher's own polling, which is all that survives a pod deleted
+    before the run ended. Ready is the first sample that reports it, so it is
+    late by up to one polling interval — recorded as such by the caller rather
+    than presented as the Pod's own stamp.
+    """
+    component = deployment.split("skao-tap-")[-1]
+    created: dict[str, float] = {}
+    ready_at: dict[str, float] = {}
+    for sample in watcher_samples:
+        for pod in sample.get("pods") or []:
+            name = pod.get("name") or ""
+            if component not in name or not pod.get("created"):
+                continue
+            created.setdefault(name, pod["created"])
+            if pod.get("ready") and name not in ready_at:
+                ready_at[name] = sample["t"]
+    candidates = sorted((t, n) for n, t in created.items() if t >= t0)
+    if not candidates:
+        return None, None
+    birth, name = candidates[0]
+    return birth, ready_at.get(name)
+
+
 def _first_after(
     points: typing.Sequence[tuple[float, float]], t0: float, predicate
 ) -> float | None:
@@ -162,6 +190,26 @@ def timings(
     if t2 is None:
         notes.append("no replica-count change was observed after the transition")
 
+    # The stages describe one scale-out. Where the autoscaler moved more than
+    # once, T1 is the first threshold crossing after the transition while the
+    # Pod stamps belong to whichever pod appeared first, and the two need not
+    # be from the same cycle — which is how a `hpa_decision` of -90s arises on
+    # a scenario that scaled up, down and up again. Said plainly here rather
+    # than left for a reader to infer from a stage that looks merely odd.
+    after = [
+        s
+        for s in watcher_samples
+        if s["t"] >= t0 and (s.get("deployments") or {}).get(deployment, {}).get("spec_replicas")
+    ]
+    counts = [s["deployments"][deployment]["spec_replicas"] for s in after]
+    moves = sum(1 for a, b in itertools.pairwise(counts) if a != b)
+    if moves > 1:
+        notes.append(
+            f"the autoscaler moved {moves} times after the transition; these stages "
+            "describe a single scale-out, so any stage pairing a series stamp with a "
+            "Pod stamp may be pairing different cycles"
+        )
+
     # T3-T6 — the new pod's own lifecycle. "New" means created after the load
     # changed; on a scale-down there is none, and these stay None.
     new_pods = [
@@ -175,6 +223,21 @@ def timings(
     t4 = first.get("scheduled") if first else None
     t5 = first.get("container_started") if first else None
     t6 = first.get("ready") if first else None
+
+    # The Pod lifecycle above is read at the end of the run, so a scenario that
+    # scaled up and back down again has had its evidence deleted: the pods that
+    # served the scale-out no longer exist to be asked. The watcher saw them
+    # while they lived, at its own 2 s cadence — coarser than the Pod's own
+    # stamps, and the only thing left for exactly the flapping scenarios whose
+    # scale-out timing is most worth having.
+    if first is None:
+        t3, t6 = _pod_stamps_from_watcher(watcher_samples, t0, deployment)
+        if t3 is not None:
+            notes.append(
+                "the pods that served this scale-out were gone by the end of the run; "
+                "T3 and T6 come from the state watcher at its 2s cadence, and the "
+                "scheduling and container-start stages it does not record stay absent"
+            )
 
     # T7 — traffic actually served by a new replica.
     #
