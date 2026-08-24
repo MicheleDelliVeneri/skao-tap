@@ -51,6 +51,7 @@ nav:
   - JSON API: json-api.md
   - Result formats: result-formats.md
   - Metadata plugins: plugins.md
+  - ObsCore: obscore.md
   - Generated model schemas: model-schemas.md
   - Deployment: deployment.md
   - Development: development.md

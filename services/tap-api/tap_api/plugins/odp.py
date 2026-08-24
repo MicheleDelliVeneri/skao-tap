@@ -12,6 +12,8 @@ from ska_src_mm_notification.models.schemas.srcnet_ingestion import SRCIngestion
 from tapcore.metadata import ingest
 from tapcore.metadata.plugins import MetadataPlugin
 
+from . import obscore
+
 PLUGIN = MetadataPlugin(
     name="odp",
     model=SRCIngestionNotification,
@@ -19,6 +21,9 @@ PLUGIN = MetadataPlugin(
     root_table="projects",
     description="SKA SRC metadata, generated from the SRC data models",
     mount="notifications",
+    # the ODP model is ObsCore-derived, so this domain also publishes the
+    # standard ivoa.obscore view over its tables
+    post_ensure=obscore.ensure_obscore,
 )
 
 # Backwards-compatible module-level API (pre-plugin callers and tests).

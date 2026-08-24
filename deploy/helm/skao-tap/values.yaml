@@ -467,6 +467,11 @@ config:
   asyncExecDurationSeconds: 600
   jobRetentionSeconds: 604800
   waitMaxSeconds: 60
+  # -- Prefix of every obs_publisher_did the ivoa.obscore view constructs
+  # (see docs/obscore.md). A PublisherDID is a permanent promise: set the
+  # authority to match the registry authorityId before publishing anything
+  # real, because a changed prefix re-identifies every dataset.
+  obscoreDidPrefix: "ivo://skao.int/~?"
   # -- Metadata-domain plugins to activate: "all" or a comma-separated
   # subset (e.g. "odp" or "software") for dedicated per-model deployments.
   modelPlugins: all

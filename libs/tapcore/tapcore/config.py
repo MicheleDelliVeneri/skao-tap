@@ -68,6 +68,13 @@ class Settings:
     )
     wait_max_s: int = field(default_factory=lambda: int(os.getenv("TAP_WAIT_MAX", "60")))
     model_plugins: str = field(default_factory=lambda: os.getenv("TAP_MODEL_PLUGINS", "all"))
+    # Prefix of every obs_publisher_did the ivoa.obscore view constructs. A
+    # PublisherDID is a permanent promise: in a real deployment the authority
+    # must match the registry's authorityId, so this is configuration, not a
+    # constant.
+    obscore_did_prefix: str = field(
+        default_factory=lambda: os.getenv("TAP_OBSCORE_DID_PREFIX", "ivo://skao.int/~?")
+    )
     log_level: str = field(default_factory=lambda: os.getenv("TAP_LOG_LEVEL", "INFO"))
     # Where to send OpenTelemetry traces. Empty means nowhere, and nothing is
     # instrumented — a deployment without a collector should not pay for one.

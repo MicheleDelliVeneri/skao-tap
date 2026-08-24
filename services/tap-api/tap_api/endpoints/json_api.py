@@ -307,20 +307,22 @@ async def tables():
     with db_connection() as conn:
         rows = conn.execute(
             """
-            SELECT t.schema_name, t.table_name, t.description,
+            SELECT t.schema_name, t.table_name, t.description, t.utype,
                    jsonb_agg(jsonb_build_object(
                        'name', c.column_name, 'datatype', c.datatype,
-                       'unit', c.unit, 'ucd', c.ucd, 'description', c.description)
+                       'unit', c.unit, 'ucd', c.ucd, 'utype', c.utype,
+                       'xtype', c.xtype, 'description', c.description)
                        ORDER BY c.column_index)
             FROM tap_schema.tables t
             JOIN tap_schema.columns c ON c.table_name = t.table_name
-            GROUP BY t.schema_name, t.table_name, t.description, t.table_index
+            GROUP BY t.schema_name, t.table_name, t.description, t.utype, t.table_index
             ORDER BY t.schema_name, t.table_index
             """
         ).fetchall()
     return {
         "tables": [
-            {"schema": r[0], "name": r[1], "description": r[2], "columns": r[3]} for r in rows
+            {"schema": r[0], "name": r[1], "description": r[2], "utype": r[3], "columns": r[4]}
+            for r in rows
         ]
     }
 
