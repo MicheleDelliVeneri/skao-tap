@@ -35,6 +35,14 @@ PALETTE = {
     "grey": "#757575",
     "warn": "#b71c1c",
 }
+# The palette in a fixed order, for plots whose series count is data-driven.
+SERIES = (
+    PALETTE["primary"],
+    PALETTE["secondary"],
+    PALETTE["third"],
+    PALETTE["fourth"],
+    PALETTE["grey"],
+)
 FIGSIZE = (8.0, 4.5)
 
 
@@ -601,6 +609,101 @@ class Plotter:
             "serialisation cost; vertical scatter at fixed size is queueing.",
         )
 
+    # -- result formats -----------------------------------------------------
+
+    def format_latency(self) -> Figure:
+        """p95 per writer, per query class: what the format costs a client."""
+        comparison = self.summary.get("format_comparison") or []
+        if not comparison:
+            return self._skip(
+                "format_latency",
+                "Latency by result format",
+                "no result-format measurements in this run",
+            )
+        classes = sorted({row["query_class"] for row in comparison})
+        formats = sorted({row["response_format"] for row in comparison})
+        fig, ax = self._axes("result format", "p95 latency (ms)", "Latency by result format")
+        width = 0.8 / max(len(classes), 1)
+        positions = np.arange(len(formats))
+        for index, query_class in enumerate(classes):
+            heights = [
+                1000
+                * next(
+                    (
+                        r["latency_p95_s"]
+                        for r in comparison
+                        if r["query_class"] == query_class and r["response_format"] == fmt
+                    ),
+                    float("nan"),
+                )
+                for fmt in formats
+            ]
+            ax.bar(
+                positions + index * width,
+                heights,
+                width=width,
+                label=query_class,
+                color=SERIES[index % len(SERIES)],
+            )
+        ax.set_xticks(positions + width * (len(classes) - 1) / 2)
+        ax.set_xticklabels(formats, rotation=20)
+        ax.legend(frameon=False)
+        return self._save(
+            fig,
+            "format_latency",
+            "Latency by result format",
+            "The same rows out through every writer, at fixed concurrency. The "
+            "difference between two bars is the writer and the bytes it made, "
+            "because nothing else about the request changed.",
+        )
+
+    def format_bytes(self) -> Figure:
+        """Bytes per response per writer — the other half of the cost."""
+        comparison = self.summary.get("format_comparison") or []
+        if not comparison:
+            return self._skip(
+                "format_bytes",
+                "Response size by result format",
+                "no result-format measurements in this run",
+            )
+        classes = sorted({row["query_class"] for row in comparison})
+        formats = sorted({row["response_format"] for row in comparison})
+        fig, ax = self._axes(
+            "result format", "mean response (MiB)", "Response size by result format"
+        )
+        width = 0.8 / max(len(classes), 1)
+        positions = np.arange(len(formats))
+        for index, query_class in enumerate(classes):
+            heights = [
+                next(
+                    (
+                        r["mean_response_bytes"] / 2**20
+                        for r in comparison
+                        if r["query_class"] == query_class and r["response_format"] == fmt
+                    ),
+                    float("nan"),
+                )
+                for fmt in formats
+            ]
+            ax.bar(
+                positions + index * width,
+                heights,
+                width=width,
+                label=query_class,
+                color=SERIES[index % len(SERIES)],
+            )
+        ax.set_xticks(positions + width * (len(classes) - 1) / 2)
+        ax.set_xticklabels(formats, rotation=20)
+        ax.legend(frameon=False)
+        return self._save(
+            fig,
+            "format_bytes",
+            "Response size by result format",
+            "A format can be cheap to produce and expensive to receive, or the "
+            "other way round. Parquet is the case that makes the distinction "
+            "worth drawing.",
+        )
+
     def run_to_run_variability(self) -> Figure:
         from . import stats as stats_mod
 
@@ -894,6 +997,8 @@ class Plotter:
             self.query_class_latency,
             self.class_size_heatmap,
             self.result_size_vs_latency,
+            self.format_latency,
+            self.format_bytes,
             self.run_to_run_variability,
         ):
             try:

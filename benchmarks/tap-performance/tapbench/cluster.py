@@ -207,11 +207,79 @@ def verify_running_images(expected_tag: str, timeout_s: float = 180.0) -> None:
     )
 
 
+#: KEDA's images, and the tag the chart asks for. Pre-loaded into the node the
+#: same way the service's are, because the node's containerd reaches the
+#: internet on its own and a host behind a proxy or an image mirror can pull
+#: what the node cannot. The chart defaults to `imagePullPolicy: Always`,
+#: which turns a loaded image back into a pull, so the policy is overridden to
+#: match — the version is pinned either way, so "Always" was buying nothing.
+KEDA_IMAGES = (
+    "ghcr.io/kedacore/keda",
+    "ghcr.io/kedacore/keda-metrics-apiserver",
+    "ghcr.io/kedacore/keda-admission-webhooks",
+)
+
+
+def load_public_images(references: list[str]) -> list[str]:
+    """Pull images on the host and import them into the node.
+
+    Returns the references that could not be made available, so a caller can
+    decide whether that is fatal. `docker save --platform` rather than
+    `kind load docker-image`: with Docker's containerd image store, a
+    multi-platform reference saves manifests whose blobs are not local, and
+    the node's importer rejects the archive for a digest it cannot find.
+    """
+    import tempfile
+
+    missing: list[str] = []
+    for reference in references:
+        if run("docker", "image", "inspect", reference, check=False).startswith("["):
+            pass  # already on the host
+        elif run("docker", "pull", "--platform", "linux/amd64", reference, check=False).find(
+            "Downloaded"
+        ) < 0 and not run("docker", "image", "inspect", reference, check=False).startswith("["):
+            log.warning("could not pull %s on the host", reference)
+            missing.append(reference)
+            continue
+        with tempfile.NamedTemporaryFile(suffix=".tar") as archive:
+            run(
+                "docker",
+                "save",
+                "--platform",
+                "linux/amd64",
+                reference,
+                "-o",
+                archive.name,
+                timeout=900,
+            )
+            output = run(
+                "kind",
+                "load",
+                "image-archive",
+                archive.name,
+                "--name",
+                CLUSTER,
+                check=False,
+                timeout=900,
+            )
+        if "error" in output.lower():
+            log.warning("could not import %s into the node: %s", reference, output.strip())
+            missing.append(reference)
+        else:
+            log.info("imported %s into the node", reference)
+    return missing
+
+
 def install_keda() -> str:
     """Install KEDA, pinned, and return the version actually running."""
     if "keda" not in kubectl("get", "ns", "-o", "name", check=False):
         run("helm", "repo", "add", "kedacore", "https://kedacore.github.io/charts", check=False)
         run("helm", "repo", "update", "kedacore", check=False)
+        # Best effort: if the node can pull ghcr.io itself, this is a warm
+        # cache; if it cannot, it is the only way the install completes. Either
+        # way a failure here is not fatal — the helm install below is what says
+        # whether KEDA came up.
+        preloaded = not load_public_images([f"{name}:{KEDA_VERSION}" for name in KEDA_IMAGES])
         run(
             "helm",
             "install",
@@ -228,6 +296,20 @@ def install_keda() -> str:
             "prometheus.metricServer.enabled=true",
             "--set",
             "prometheus.operator.enabled=true",
+            *(
+                (
+                    "--set",
+                    "image.pullPolicy=IfNotPresent",
+                    "--set",
+                    "image.keda.pullPolicy=IfNotPresent",
+                    "--set",
+                    "image.metricsApiServer.pullPolicy=IfNotPresent",
+                    "--set",
+                    "image.webhooks.pullPolicy=IfNotPresent",
+                )
+                if preloaded
+                else ()
+            ),
             "--wait",
             "--timeout",
             "5m",
@@ -245,7 +327,25 @@ def install_keda() -> str:
     ).strip()
 
 
+#: Read out of manifests/monitoring.yaml rather than restated, so the list
+#: cannot drift from what the manifest actually deploys.
+def monitoring_images() -> list[str]:
+    text = (SUITE / "manifests/monitoring.yaml").read_text()
+    return sorted(
+        {
+            line.split("image:", 1)[1].strip()
+            for line in text.splitlines()
+            if line.strip().startswith("image:")
+        }
+    )
+
+
 def install_monitoring() -> None:
+    # Same reason as KEDA's. No pull-policy override needed here: both images
+    # carry an explicit version tag, and Kubernetes defaults anything but
+    # `:latest` to IfNotPresent — so a pre-loaded image is used and a node with
+    # no registry access still gets a Prometheus.
+    load_public_images(monitoring_images())
     kubectl("apply", "-f", str(SUITE / "manifests/monitoring.yaml"))
     kubectl("rollout", "status", "-n", "benchmon", "deploy/prometheus", "--timeout=180s")
     kubectl("rollout", "status", "-n", "benchmon", "deploy/kube-state-metrics", "--timeout=180s")

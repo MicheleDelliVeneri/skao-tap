@@ -147,6 +147,11 @@ def summarise(samples, window_seconds: float, *, with_ci: bool = True) -> dict:
         "errors_by_type": errors_by_type,
         "errors_by_status": errors_by_status,
         "response_bytes_total": float(byte_counts.sum()),
+        # What one response weighed. The total divided by the window says how
+        # fast bytes left the service; this says how many of them a client had
+        # to receive to get its answer, which is the other half of what a
+        # result format costs.
+        "mean_response_bytes": float(byte_counts.mean()),
         "response_throughput_bytes_per_s": float(byte_counts.sum()) / window_seconds
         if window_seconds
         else None,

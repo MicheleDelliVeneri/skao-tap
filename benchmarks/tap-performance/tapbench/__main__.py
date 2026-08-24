@@ -4,8 +4,10 @@
     python -m tapbench db-scaling
     python -m tapbench fixed-scaling
     python -m tapbench keda
+    python -m tapbench result-formats
     python -m tapbench full
     python -m tapbench report [<run-dir>]
+    python -m tapbench serialize            # writers only, no cluster
 
 Every command that measures anything accepts --resume <run-dir> and continues
 where it stopped.
@@ -23,6 +25,7 @@ import time
 from . import cluster
 from . import corpus as corpus_mod
 from . import runs as runs_mod
+from . import serialize as serialize_mod
 from .analyze import html as html_mod
 from .analyze import report as report_mod
 from .orchestrate import runner
@@ -132,6 +135,7 @@ def finalise(
         "by_query_class": pooled,
         "headline": headline,
         "replica_capacity": runner.replica_capacities(results, slo_p95_s),
+        "format_comparison": runner.format_comparison(results),
         "plan_flags": {
             name: {"count": count, "explanation": _plan_explanation(name)}
             for name, count in (plan_flags or {}).items()
@@ -277,6 +281,40 @@ def cmd_keda(args) -> int:
     return 0
 
 
+def cmd_result_formats(args) -> int:
+    """Package 10: every writer, the same rows.
+
+    No concurrency sweep first. This family does not need C1 — it holds the
+    load fixed on purpose, because the question is what a large result costs
+    to produce and not where the service gives up producing them.
+    """
+    cfg = runner.load_config()
+    run = runs_mod.new_run("result-formats", args.resume)
+    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    dataset = args.dataset or cfg["scenarios"]["result_formats"]["dataset"]
+    datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
+    entries = build_corpus(cfg, datasets)
+    run.write_json("corpus.json", [e.as_dict() for e in entries])
+    results = runner.result_formats(run, cfg, dataset, entries)
+    # The writers on their own, beside the same writers behind an HTTP
+    # request: which of the two moved is the whole question when a change to
+    # the serialisation path does not show up end to end.
+    run.write_json("serialization.json", serialize_mod.report())
+    finalise(run, cfg, results, datasets, digests, corpus_entries=entries)
+    return 0
+
+
+def cmd_serialize(args) -> int:
+    """The writers on their own: no cluster, no database, no HTTP."""
+    payload = serialize_mod.report(
+        row_counts=args.rows, repetitions=args.repetitions, seed=args.seed
+    )
+    print(serialize_mod.table(payload["measurements"]))
+    if args.out:
+        print(f"\nwritten to {serialize_mod.write(payload, pathlib.Path(args.out))}")
+    return 0
+
+
 def cmd_full(args) -> int:
     cfg = runner.load_config()
     run = runs_mod.new_run("full", args.resume)
@@ -293,6 +331,10 @@ def cmd_full(args) -> int:
         results += runner.concurrency_sweep(run, cfg, name, entries)
         results += runner.stress_classes(run, cfg, name, entries)
         plan_flags = runner.capture_plans(run, cfg, entries)
+    results += runner.result_formats(
+        run, cfg, cfg["scenarios"]["result_formats"]["dataset"], entries
+    )
+    run.write_json("serialization.json", serialize_mod.report())
     c1 = runner.sustainable_capacity(results, cfg["scenarios"]["slo"]["p95_seconds"])
     keda: list[dict] = []
     if c1:
@@ -389,6 +431,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_argument("--dataset")
     sub.add_argument("--c1", type=float)
     sub.add_argument("--quick", action="store_true")
+    sub = add("result-formats", cmd_result_formats, help="every result writer over the same rows")
+    sub.add_argument("--dataset")
     sub = add("keda", cmd_keda, help="autoscaling scenarios K1-K7")
     sub.add_argument("--dataset")
     sub.add_argument("--c1", type=float)
@@ -410,6 +454,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub.set_defaults(handler=cmd_reclassify)
     sub.add_argument("run_dir", nargs="?")
+    sub = subparsers.add_parser(
+        "serialize", help="per-row cost of each result writer, in process, no cluster"
+    )
+    sub.set_defaults(handler=cmd_serialize)
+    sub.add_argument("--rows", nargs="+", type=int, default=[1000, 10000])
+    sub.add_argument("--repetitions", type=int, default=15)
+    sub.add_argument("--seed", type=int, default=20260823)
+    sub.add_argument("--out", help="also write the measurements as JSON to this path")
     sub = subparsers.add_parser("setup", help="cluster, KEDA, monitoring, chart")
     sub.set_defaults(handler=cmd_setup)
     sub.add_argument("--no-build", action="store_true")
