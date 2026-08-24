@@ -63,11 +63,27 @@ first, and when it fires the rest of that measurement describes the client.
   pure-Python and holds the GIL, so one worker cannot exceed one core whatever
   the cgroup allows.
 - **Autoscaling scenarios drive `/tap/async`.** The chart's ScaledObject scales
-  executors on queued-job age, so only work that creates jobs moves the scaler
+  executors on queue depth, so only work that creates jobs moves the scaler
   metric.
 - **Cone search needs an expression index.** The translator emits
   `spoint(RADIANS(s_ra), RADIANS(s_dec)) @ scircle(...)`, so the GiST index has
   to be on that expression — see [Autoscaling](autoscaling.md) and the suite's
   README for the full note.
+
+## Constraints on reading and comparing results
+
+- **Every run is pinned to a build.** The image tag is recorded with the run,
+  so numbers compare only against runs of the same build: a service change
+  means a new baseline, not a delta against yesterday's.
+- **A sustained-overload point is not measurable open-loop.** Past capacity
+  the queue grows without bound, so nothing in that region is a steady state
+  to report — the suite can show *that* overload sheds and how, not a
+  throughput "at" it.
+- **Guards mark runs invalid rather than deleting them.** Read the run's
+  `invalid.json` before concluding the harness broke: the run is there, with
+  the reason it cannot be trusted.
+- **`tapbench reclassify` fixes analysis mistakes without re-measuring.** The
+  raw measurements are kept, so a wrong bottleneck classification is corrected
+  by re-running the rules, not the load.
 
 Full method, layout and wall-clock estimates: `benchmarks/tap-performance/README.md`.

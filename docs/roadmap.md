@@ -50,6 +50,33 @@ A running log of what the benchmark suite
 established, newest first. Each entry is a measurement rather than an opinion,
 so it can be checked and it can go stale — the run that produced it is named.
 
+### 2026-08-24 — the four service-side answers shipped
+
+Not a measurement — the response to the four entries below, so the log says
+what changed as well as what was found:
+
+- **The saturating signal is replaced.** The chart's ScaledObject and the
+  external-metric path now scale on queue *depth*, `tap_jobs{phase="QUEUED"}`,
+  against `queuedJobsPerReplica` (default 10 ≈ 5 s of queue at ~2 jobs/s per
+  executor). The old seconds-denominated values are refused by the chart with
+  a message naming the replacements, and an empty queue reports depth 0
+  rather than letting the series vanish. The age gauge stays exported as a
+  latency figure. Answers
+  [three pods against a three-thousand-job queue](#2026-08-24-the-executor-autoscaler-asks-for-three-pods-against-a-three-thousand-job-queue).
+- **The executor's CPU limit stops lying.** The benchmark deployment's limit
+  drops from 2 to 1 — the single thread pins at ~0.96 cores, and the second
+  core was headroom that cannot exist. Companion to
+  [a pinned executor had no rule looking at it](#2026-08-24-a-pinned-executor-had-no-rule-looking-at-it-fixed).
+- **Routing becomes measurable.** Every API response carries `X-Served-By`
+  (the pod name), so the 83–243 s routing stage can be confirmed or dismissed
+  directly rather than inferred through a proxy that, on a deep queue,
+  reports the queue.
+- **Overload can refuse instead of resetting.** `tapApi.backlog` sizes the
+  accept queue and `tapApi.limitConcurrency` makes uvicorn answer 503 past a
+  per-worker connection ceiling — off by default until
+  [the reset onset](#2026-08-24-a-third-of-the-shed-load-is-a-reset-not-a-refusal-wherever-the-pool-tips)
+  is established.
+
 ### 2026-08-24 — a pinned executor had no rule looking at it (fixed)
 
 Two defects found by finally *looking* at an autoscaling dashboard, after fixing
