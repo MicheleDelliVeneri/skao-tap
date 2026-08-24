@@ -44,6 +44,12 @@ tapApi:
 tapExecutor:
   # -- Executors claim jobs with FOR UPDATE SKIP LOCKED; scaling out is safe
   # provided the results volume is ReadWriteMany (see `results`).
+  #
+  # One executor process is one thread running one job at a time, so it can
+  # never use more than one core: a CPU limit above 1 buys nothing, and a
+  # limit below 1 slows every job. Per-pod throughput is fixed by that single
+  # thread (~2 jobs/s measured on the benchmark hardware) — `replicas`, or
+  # the queue-depth autoscaler below, is the executor's scaling axis.
   replicas: 1
   # -- Override the chart's default spreading (see `scheduling`) wholesale.
   affinity: {}

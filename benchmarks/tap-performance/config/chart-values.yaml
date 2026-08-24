@@ -25,9 +25,14 @@ tapApi:
 
 tapExecutor:
   replicas: 1
+  # CPU limit 1, not 2: the executor is a single thread, and under sustained
+  # load it pins at ~0.96 cores with zero throttling — a 2-core limit is one
+  # core it can never use, and headroom in the numbers that does not exist.
+  # Per-pod throughput (~2 jobs/s) is set by the single thread, not by CPU;
+  # replicas are the executor's scaling axis.
   resources:
     requests: {cpu: 500m, memory: 512Mi}
-    limits: {cpu: 2, memory: 1Gi}
+    limits: {cpu: 1, memory: 1Gi}
 
 # Both autoscalers are configured here and switched on per scenario, so the
 # KEDA runs use the repository's real ScaledObject rather than one written for
