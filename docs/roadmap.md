@@ -4,45 +4,6 @@ Follow-up work is organized in numbered packages, referenced by number in
 issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
-Delivered and no longer tracked here: package 1 (typed, streaming result
-pipeline with Parquet/Arrow output), package 2 (TAP table upload:
-inline multipart and http(s) `UPLOAD` on /sync and /async, per-query
-`TAP_UPLOAD` temp tables, `uploadMethods`/`uploadLimit` in capabilities,
-configurable limits), and package 3 (UWS completeness: `WAIT` blocking
-requests on the job and phase resources, `AFTER` job-list filtering, and
-real `ABORT` that cancels the executing statement via the backend PID and
-`pg_cancel_backend()`), and package 6 (plugin-based metadata databases:
-domains bind a pydantic model package to a SQL schema and mount point via
-a small contract, the shared machinery in `tapcore.metadata`
-does the rest, third-party packages register through the
-`skao_tap.models` entry-point group, and `TAP_MODEL_PLUGINS` selects what
-a deployment activates; the ODP/srcnet and software-discovery domains
-ship built in — the user data product domain follows when its model
-package exists), and package 5 (scaling, resilience and backup: default
-soft anti-affinity/zone-spread and PodDisruptionBudgets for multi-replica
-services, opt-in VerticalPodAutoscalers per service, `postgresql.tuning`
-server arguments for right-sizing the in-chart database, a scheduled
-`pg_dump` backup CronJob with retention, and documented HA-PostgreSQL,
-PITR and restore procedures — see the deployment guide), and package 8
-(unified SRCNet logging and observability: `ska-src-logging` in every
-service, `X-Request-ID` correlation carried from the API through the job row
-and the SQL itself into the executor's records, seven Prometheus metrics
-chosen from what recent performance work needed and did not have, an opt-in
-in-chart Prometheus for trying them out, and OTLP tracing when a collector is
-configured — see the observability guide), and package 9
-(horizontal autoscaling: an opt-in CPU HorizontalPodAutoscaler for tap-api and
-queue-backlog scaling for tap-executor through a KEDA ScaledObject or a plain
-external-metric HPA, with the chart refusing scale-to-zero on a metric the
-executor itself exports, a CPU HPA beside a VPA that controls CPU, a CPU
-target with no CPU request, and a replica maximum whose pools would exceed
-max_connections — see the autoscaling guide), and package 4
-(identity and registry: INDIGO IAM bearer tokens verified against the
-issuer's JWKS, authorisation behind a plugin with the SRCNet Permissions API
-and local IAM groups shipped, seven gateable operations with the query surface
-enforced as a group, IVOA AuthVO challenges naming the IAM, job ownership and
-attributable deletion, and a VOResource record at /tap/registry — see the
-authentication and registry guides).
-
 ## Measured findings
 
 A running log of what the benchmark suite
@@ -386,4 +347,3 @@ bootstrap so it exists exactly when its source tables do:
 - **Extras** — an ObsCore cone-search entry in `/tap/examples` gated on the
   same flag, and a `docs/obscore.md` recording the column mapping and the
   DID scheme.
-
