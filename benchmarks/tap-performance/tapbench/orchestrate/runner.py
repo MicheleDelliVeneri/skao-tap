@@ -530,6 +530,89 @@ def _pods(n: int) -> str:
     return "one replica" if n == 1 else f"{n} replicas"
 
 
+def keda_timings_from_artefacts(run_dir, entry: dict, key: str, metrics_rows: list[dict]) -> dict:
+    """A KEDA scenario's stage timings, re-derived from what the run stored.
+
+    The stamps come from four sources — the scaler's series, the HPA's, the
+    Pods' lifecycle and the request samples — and all four are written to the
+    run directory. So a correction to how the stages are computed can reach the
+    scenarios that were already measured, which is the whole reason the
+    artefacts are kept.
+    """
+    import json
+    import pathlib
+    from types import SimpleNamespace
+
+    import pyarrow.parquet as pq
+
+    run_dir = pathlib.Path(run_dir)
+    state = run_dir / "kubernetes" / f"{key}-state.jsonl"
+    pods = run_dir / "kubernetes" / f"{key}-pods.json"
+    sample_path = run_dir / "samples" / f"{key}.parquet"
+    if not (state.exists() and pods.exists() and sample_path.exists()):
+        return {}
+    if entry.get("t_transition") is None or entry.get("threshold") is None:
+        return {}
+    watcher = [json.loads(line) for line in state.read_text().splitlines() if line.strip()]
+    # measure() records both deployments' Pods; the executors are the ones the
+    # ScaledObject moves.
+    pod_timings = [p for p in json.loads(pods.read_text()) if p.get("component") == "tap-executor"]
+    columns = pq.read_table(
+        sample_path, columns=["t_start", "latency_s", "status", "error"]
+    ).to_pydict()
+    samples = [
+        SimpleNamespace(t_start=t, latency_s=lat, status=st, error=err)
+        for t, lat, st, err in zip(
+            columns["t_start"],
+            columns["latency_s"],
+            columns["status"],
+            columns["error"],
+            strict=True,
+        )
+    ]
+    return keda_analysis.timings(
+        t0=entry["t_transition"],
+        metrics_rows=metrics_rows,
+        watcher_samples=watcher,
+        pod_timings=pod_timings,
+        samples=samples,
+        deployment="skao-tap-tap-executor",
+        threshold=float(entry["threshold"]),
+        slo_p95_s=float(entry.get("slo_p95_s") or 2.0),
+    )
+
+
+def _lateness_from_samples(run_dir, key: str) -> dict:
+    """Arrival lateness rebuilt from a measurement's stored samples.
+
+    For measurements saved without their `coordinated_omission` block — the
+    KEDA scenarios were trimmed to their scenario fields before being written —
+    the per-request offered and start times are still in the samples Parquet,
+    so the lateness the guard needs can be recovered rather than re-measured.
+    """
+    import pathlib
+
+    import pyarrow.parquet as pq
+
+    path = pathlib.Path(run_dir) / "samples" / f"{key}.parquet"
+    if not path.exists():
+        return {}
+    table = pq.read_table(path, columns=["t_start", "t_offered"]).to_pydict()
+    late = sorted(
+        start - offered
+        for start, offered in zip(table["t_start"], table["t_offered"], strict=True)
+        if offered and offered > 0
+    )
+    if not late:
+        return {}
+    return {
+        "p95_lateness_s": late[int(0.95 * (len(late) - 1))],
+        "max_lateness_s": late[-1],
+        "samples": len(late),
+        "recovered_from_samples": True,
+    }
+
+
 def replica_capacities(results: list[dict], slo_p95_s: float) -> list[dict]:
     """Per replica count: the highest rate met, and whether it is a ceiling.
 
@@ -750,7 +833,13 @@ def keda_scenarios(
             slo_p95_s=slo,
         )
         behaviour = keda_analysis.scale_behaviour(watcher_samples, "skao-tap-tap-executor")
+        # The scenario's own analysis *on top of* the measurement, not instead
+        # of it. Listing the fields to keep dropped the guards, the `invalid`
+        # flag and the coordinated-omission block, so a KEDA scenario could not
+        # be marked invalid however badly the run had gone: the guards were
+        # computed and then thrown away before anything read them.
         entry = {
+            **result,
             "id": scenario["id"],
             "description": scenario["description"],
             "steps": [
@@ -763,8 +852,6 @@ def keda_scenarios(
             "t_transition": t0,
             "timings": timings,
             "behaviour": behaviour,
-            "http": result["http"],
-            "bottleneck": result["bottleneck"],
         }
         out.append(entry)
         run.mark_done(key, {"result": entry})
@@ -848,8 +935,14 @@ def reclassify(run_dir, cfg: dict) -> dict:
 
     limits_map = limits(cfg)
     changed = []
-    for entry in summary.get("runs", []):
-        key = entry["key"]
+    # The autoscaling scenarios are analysis like any other and were being
+    # skipped: they live under "keda" rather than "runs", so a correction to the
+    # rules reached every family except the one the run was for. They key off
+    # `id` rather than `key`.
+    measurements = [(e, e["key"]) for e in summary.get("runs") or []] + [
+        (e, e.get("key") or f"keda-{e['id']}") for e in summary.get("keda") or []
+    ]
+    for entry, key in measurements:
         delta_path = run_dir / "postgres" / f"{key}-delta.json"
         metrics_path = run_dir / "metrics" / f"{key}.parquet"
         if not delta_path.exists():
@@ -875,28 +968,36 @@ def reclassify(run_dir, cfg: dict) -> dict:
             recorder_cpu_peak=entry.get("generator_cpu_peak") or 0.0,
             limits=limits_map,
         )
-        # The two client-fidelity rules are re-judged here as well. Both of
-        # their inputs are stored with every measurement, so a rule written
-        # after a run can still be applied to it — and a run measured before
-        # either rule existed is exactly the run that needs them.
+        # The two client-fidelity rules are re-judged here as well: a rule
+        # written after a run can still be applied to it, and a run measured
+        # before either rule existed is exactly the run that needs them.
+        omission = entry.get("coordinated_omission") or _lateness_from_samples(run_dir, key)
         dropped = entry.get("arrivals_dropped")
-        if dropped is None:
-            dropped = sum(e.get("dropped_arrivals", 0) for e in entry.get("load_timeline") or [])
-        omission = entry.get("coordinated_omission") or {}
+        if dropped is None and "load_timeline" in entry:
+            dropped = sum(e.get("dropped_arrivals", 0) for e in entry["load_timeline"] or [])
         issued = int(omission.get("samples") or (entry.get("http") or {}).get("requests") or 0)
-        entry["arrivals_dropped"] = dropped
-        entry["unoffered_fraction"] = dropped / max(issued + dropped, 1)
+        if dropped is not None:
+            entry["arrivals_dropped"] = dropped
+            entry["unoffered_fraction"] = dropped / max(issued + dropped, 1)
         schedule = guards_mod.schedule_verdicts(
             lateness_p95_s=omission.get("p95_lateness_s"),
             lateness_max_s=omission.get("max_lateness_s"),
-            arrivals_dropped=dropped,
+            arrivals_dropped=dropped or 0,
             arrivals_issued=issued,
         )
         kept = [g for g in entry.get("guards") or [] if g["name"] not in {v.name for v in schedule}]
-        entry["guards"] = kept + [
-            {"name": v.name, "ok": v.ok, "detail": v.detail} for v in schedule
-        ]
-        entry["invalid"] = any(not g["ok"] for g in entry["guards"])
+        guard_records = kept + [{"name": v.name, "ok": v.ok, "detail": v.detail} for v in schedule]
+        # Only claim validity where something judged it. An entry with no guards
+        # at all — the shape the KEDA scenarios were saved in — must not come
+        # out of here asserted valid on no evidence.
+        if guard_records:
+            entry["guards"] = guard_records
+            entry["invalid"] = any(not g["ok"] for g in guard_records)
+
+        if "timings" in entry:
+            redone = keda_timings_from_artefacts(run_dir, entry, key, metrics_rows)
+            if redone:
+                entry["timings"] = redone
 
         was = (entry.get("bottleneck") or [{}])[0].get("classification")
         entry["postgres"] = pg_summary
@@ -921,7 +1022,7 @@ def reclassify(run_dir, cfg: dict) -> dict:
             changed.append((key, was, now))
 
     tally: dict[str, dict] = {}
-    for entry in summary.get("runs", []):
+    for entry, _ in measurements:
         for verdict in entry.get("bottleneck") or []:
             slot = tally.setdefault(
                 verdict["classification"],

@@ -75,8 +75,11 @@ def finalise(
 ) -> pathlib.Path:
     """Write summary.json/csv, draw the plots, render the report."""
 
+    # The autoscaling scenarios count here too. They are measurements with a
+    # classification like any other, and leaving them out made the tally of a
+    # KEDA run a tally of its warm-up sweep.
     tally: dict[str, dict] = {}
-    for result in results:
+    for result in [*results, *(keda or [])]:
         for verdict in result.get("bottleneck") or []:
             entry = tally.setdefault(
                 verdict["classification"], {"count": 0, "explanation": verdict["explanation"]}

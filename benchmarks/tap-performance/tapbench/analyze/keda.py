@@ -39,6 +39,19 @@ def _series(rows: list[dict], metric: str) -> list[tuple[float, float]]:
     return sorted((r["t"], r["value"]) for r in rows if r["metric"] == metric)
 
 
+def _series_step(rows: list[dict]) -> float:
+    """The Prometheus range step these rows were read at.
+
+    Measured from the rows rather than assumed, because it is the resolution
+    every stamp taken from a series inherits — a stage cannot be timed finer
+    than the step it was sampled at.
+    """
+    stamps = sorted({r["t"] for r in rows})
+    if len(stamps) < 2:
+        return 1.0
+    return float(np.median(np.diff(stamps)))
+
+
 def _first_after(
     points: typing.Sequence[tuple[float, float]], t0: float, predicate
 ) -> float | None:
@@ -210,8 +223,32 @@ def timings(
     if t8 is None and p95_windows:
         notes.append(f"p95 never held under the {slo_p95_s}s SLO for 3 windows")
 
-    def gap(a: float | None, b: float | None) -> float | None:
-        return None if a is None or b is None else b - a
+    # The stamps come off clocks of different resolution: T1 and T2 are read
+    # from a Prometheus range query and so are quantised to its step, while a
+    # Pod's lifecycle is stamped to the whole second. A stage shorter than
+    # either can therefore come out ordered backwards — one scenario published
+    # a `pod_creation` of -1.5s — and a negative duration is not a fast stage,
+    # it is two clocks disagreeing. Published as a number it invites being
+    # averaged, so it is not published as one.
+    tolerance_s = _series_step(metrics_rows) + 1.0
+
+    def gap(a: float | None, b: float | None, name: str = "") -> float | None:
+        if a is None or b is None:
+            return None
+        delta = b - a
+        if delta >= 0:
+            return delta
+        if -delta <= tolerance_s:
+            notes.append(
+                f"{name} completed inside the {tolerance_s:.0f}s the two clocks can "
+                f"resolve (raw {delta:.1f}s), so it is reported as 0 rather than negative"
+            )
+            return 0.0
+        notes.append(
+            f"{name} not established: its stamps are {-delta:.1f}s out of order, more "
+            f"than the {tolerance_s:.0f}s the clocks' resolution explains"
+        )
+        return None
 
     return {
         "stamps": {
@@ -227,16 +264,16 @@ def timings(
         },
         "t7_method": t7_method,
         "latencies_s": {
-            "detection": gap(t0, t1),
-            "hpa_decision": gap(t1, t2),
-            "pod_creation": gap(t2, t3),
-            "scheduling": gap(t3, t4),
-            "container_start": gap(t4, t5),
-            "readiness": gap(t5, t6),
-            "pod_provisioning": gap(t3, t6),
-            "routing": gap(t6, t7),
-            "total_scale_out": gap(t0, t7),
-            "capacity_recovery": gap(t0, t8),
+            "detection": gap(t0, t1, "detection"),
+            "hpa_decision": gap(t1, t2, "hpa_decision"),
+            "pod_creation": gap(t2, t3, "pod_creation"),
+            "scheduling": gap(t3, t4, "scheduling"),
+            "container_start": gap(t4, t5, "container_start"),
+            "readiness": gap(t5, t6, "readiness"),
+            "pod_provisioning": gap(t3, t6, "pod_provisioning"),
+            "routing": gap(t6, t7, "routing"),
+            "total_scale_out": gap(t0, t7, "total_scale_out"),
+            "capacity_recovery": gap(t0, t8, "capacity_recovery"),
         },
         "new_pods": [p["pod"] for p in new_pods],
         "notes": notes,

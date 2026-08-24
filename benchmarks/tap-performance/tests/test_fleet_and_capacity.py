@@ -13,7 +13,7 @@ import sys
 SUITE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SUITE))
 
-from tapbench.analyze import bottleneck  # noqa: E402
+from tapbench.analyze import bottleneck, keda  # noqa: E402
 from tapbench.collect import guards  # noqa: E402
 from tapbench.orchestrate import runner  # noqa: E402
 
@@ -191,3 +191,72 @@ def test_an_invalid_measurement_cannot_be_the_capacity_it_reports():
         _point(1, 230.7, 229.0, invalid=True),
     ]
     assert runner.sustainable_capacity(results, 2.0) == 114.7
+
+
+# -- stage timings across clocks of different resolution ---------------------
+
+
+def _keda_inputs(*, pod_created, step=2.0):
+    """One scale-out, with the scaler series sampled at `step` seconds."""
+    metrics = [
+        {"metric": "keda_scaler_metrics_value", "labels": "", "t": 1000.0 + i * step, "value": v}
+        for i, v in enumerate([10.0, 90.0, 90.0, 90.0, 90.0, 90.0])
+    ]
+    watcher = [
+        {"t": 1000.0, "deployments": {"skao-tap-tap-executor": {"spec_replicas": 1}}},
+        {"t": 1010.0, "deployments": {"skao-tap-tap-executor": {"spec_replicas": 3}}},
+    ]
+    pods = [
+        {
+            "pod": "exec-new",
+            "component": "tap-executor",
+            "created": pod_created,
+            "scheduled": pod_created + 1,
+            "container_started": pod_created + 2,
+            "ready": pod_created + 4,
+        }
+    ]
+    return metrics, watcher, pods
+
+
+def test_a_stage_shorter_than_the_clocks_can_resolve_is_zero_not_negative():
+    """The bug this pins: a Pod created 1.5 s before the HPA change Prometheus
+    reported it from — the two are stamped at different resolutions — was
+    published as a pod_creation of -1.5 seconds."""
+    metrics, watcher, pods = _keda_inputs(pod_created=1008.5)
+    result = keda.timings(
+        t0=1000.0,
+        metrics_rows=metrics,
+        watcher_samples=watcher,
+        pod_timings=pods,
+        samples=[],
+        deployment="skao-tap-tap-executor",
+        threshold=60.0,
+        slo_p95_s=2.0,
+    )
+    assert result["latencies_s"]["pod_creation"] == 0.0
+    assert any("reported as 0 rather than negative" in n for n in result["notes"])
+
+
+def test_a_stage_ordered_backwards_beyond_that_is_not_reported_at_all():
+    metrics, watcher, pods = _keda_inputs(pod_created=1005.0)
+    result = keda.timings(
+        t0=1000.0,
+        metrics_rows=metrics,
+        watcher_samples=watcher,
+        pod_timings=pods,
+        samples=[],
+        deployment="skao-tap-tap-executor",
+        threshold=60.0,
+        slo_p95_s=2.0,
+    )
+    assert result["latencies_s"]["pod_creation"] is None
+    assert any("out of order" in n for n in result["notes"])
+
+
+def test_the_resolution_is_measured_from_the_series_not_assumed():
+    rows = [{"metric": "m", "labels": "", "t": t, "value": 0.0} for t in (0.0, 5.0, 10.0, 15.0)]
+    assert keda._series_step(rows) == 5.0
+    # A single point cannot establish a step; the fallback must not be zero,
+    # which would make every tolerance vanish.
+    assert keda._series_step(rows[:1]) == 1.0

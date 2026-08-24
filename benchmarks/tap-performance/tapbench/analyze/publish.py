@@ -160,9 +160,10 @@ def _keda_table(summary: dict) -> str:
     for scenario in scenarios:
         latencies = (scenario.get("timings") or {}).get("latencies_s") or {}
         behaviour = scenario.get("behaviour") or {}
+        failed = [g["name"] for g in scenario.get("guards") or [] if not g["ok"]]
         rows.append(
             [
-                f"**{scenario['id']}**",
+                f"**{scenario['id']}**" if not failed else f"**{scenario['id']}** ⚠",
                 scenario.get("description", ""),
                 _fmt(latencies.get("detection")),
                 _fmt(latencies.get("hpa_decision")),
@@ -358,6 +359,8 @@ def _render(summary: dict, run_id: str, published: list[tuple[str, str]]) -> str
             "Ready, **routing** Ready to serving traffic, **recovery** the load",
             "change to p95 back inside the SLO. A dash means the stage could not",
             "be established from the evidence — recorded rather than estimated.",
+            "A ⚠ on the scenario means one of its validity guards failed, so its",
+            "timings describe conditions other than the ones intended.",
             "",
         ]
 
