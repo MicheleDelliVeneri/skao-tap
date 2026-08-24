@@ -3,7 +3,7 @@
 Columns are typed from the PostgreSQL cursor description (type OIDs) and
 enriched with unit/UCD/description drawn from TAP_SCHEMA.columns for the
 tables the query touches. Serializers are generators of byte chunks fed
-from a server-side cursor, so result sets are never fully materialized:
+from a streamed statement, so result sets are never fully materialized:
 VOTable (TABLEDATA), CSV, TSV, JSON, Parquet, and an Arrow IPC stream.
 
 DALI overflow is detected by fetching one row past MAXREC and reported in

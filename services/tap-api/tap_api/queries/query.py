@@ -1,11 +1,13 @@
 """Shared query preparation and synchronous (streaming) execution."""
 
+import contextlib
 import itertools
 import threading
 import time
 from collections.abc import Iterator
 
 from tapcore.config import settings
+from tapcore.db import StreamedRows
 from tapcore.db import connection as db_connection
 from tapcore.errors import UsageError
 from tapcore.observability import QUERY_DURATION, tag_sql
@@ -21,7 +23,7 @@ from tapcore.query.votable import normalize_format
 
 from .params import require
 
-CURSOR_ITERSIZE = 2000
+STREAM_CHUNK_ROWS = 2000
 
 
 def prepare_query(params: dict[str, str]) -> dict:
@@ -153,7 +155,7 @@ def forget_published_tables() -> None:
 
 
 def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[bytes]:
-    """Execute the prepared query on a server-side cursor and yield the
+    """Execute the prepared query as a streamed statement and yield the
     serialized result chunk by chunk; the connection stays checked out
     until the stream is exhausted."""
     sql = apply_maxrec(prepared["sql"], prepared["maxrec"])
@@ -172,12 +174,17 @@ def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[byt
         )
         conn.execute("SET LOCAL jit = off")  # uninterruptible compile stalls
         conn.execute(f"SET LOCAL ROLE {settings.query_role}")
-        with conn.cursor(name="tap_sync") as cur:
-            cur.itersize = CURSOR_ITERSIZE
-            cur.execute(sql)
-            columns = columns_from_cursor(cur.description, tap_meta)
-            limiter = RowLimiter(cur, prepared["maxrec"])
-            yield from stream(columns, limiter, prepared["fmt_key"])
+        # A plain streamed statement, not a DECLARE'd cursor: the planner may
+        # use parallel workers and plans for the whole result, which a cursor
+        # forbids — on a full-table aggregate that is most of the query's
+        # cost. statement_timeout consequently bounds the whole statement,
+        # streaming included, which is what a sync timeout should mean.
+        with conn.cursor() as cur:
+            rows = StreamedRows(cur, sql, chunk_rows=STREAM_CHUNK_ROWS)
+            with contextlib.closing(rows):
+                columns = columns_from_cursor(cur.description, tap_meta)
+                limiter = RowLimiter(rows, prepared["maxrec"])
+                yield from stream(columns, limiter, prepared["fmt_key"])
 
 
 def run_sync(
