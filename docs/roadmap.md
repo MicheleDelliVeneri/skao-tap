@@ -15,6 +15,57 @@ Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/tap-performance/results/`.
 
+### 2026-08-24 — the depth signal verified: the fleet the queue implies, in seconds
+
+Run `20260824T140134Z-bf7e4b24-keda`: the same seven scenarios, first run on
+the depth-based trigger (`max(tap_jobs{phase="QUEUED"})`, threshold 10 jobs
+per replica, max 8) with the executor's CPU limit at 1. Same build across the
+run; the dataset store had grown to 25.45 GiB under the D1 label, so the
+regime is I/O-influenced and absolute numbers are directional against the
+old family, not build-to-build. The shape is not directional, and the shape
+is the verdict:
+
+| | peak pods | mean | max queued | detect | p95 | errors |
+| --- | --- | --- | --- | --- | --- | --- |
+| K1 idle to 0.5×C1 | 1 | 1.0 | 7 | — | 1.3 s | 0.00% |
+| K2 step to 3.5×C1 | **8** | 3.8 | 402 | 12 s | 36.9 s | 0.05% |
+| K3 spike to 6×C1 | **8** | 6.2 | 553 | 8 s | 128 s | 0.01% |
+| K4 ramp to 6×C1 ⚠ | **8** | 4.8 | 179 | 62 s | 141 s | 0.01% |
+| K5 alternating 0.5×/4×C1 | **8** | 6.1 | 297 | 12 s | 21.7 s | 0.02% |
+| K6 sustained 6×C1 ⚠ | **8** | 6.6 | 150 | 10 s | 220 s | 0.04% |
+| K7 4×C1 to 0.2×C1 | **8** | 4.1 | 320 | 0 s | 17.8 s | 0.05% |
+
+Against the age signal's family: every overload profile now reaches the full
+permitted fleet where before every one capped at three; **detection fell
+from 98–340 s to 8–12 s** (K4's 62 s is the ramp itself — on a gradual ramp
+the queue takes a minute to reach ten jobs, which is the signal being honest,
+not slow); queues that grew to 1,700–4,100 jobs are held at **150–553**,
+drained as they form; and the errors that reached 9.8–17.3% on the spike and
+the sustained overload are **at or under 0.05% in every scenario**. p95 on
+the worst profiles: 946 → 128 s (K3), 1,203 → 220 s (K6), 315 → 36.9 s (K2),
+327 → 17.8 s (K7). K1, the control, still refuses to scale.
+
+**The routing question is closed.** On pods whose full lifecycle was
+captured, Ready-to-serving measured **3.6 s (K4) and 10.5 s (K5)** — the old
+family's 83–243 s "routing" stage was the queue wearing the proxy's clothes,
+exactly as suspected. Kubernetes provisioning remains 0–1 s. There is
+nothing to attack.
+
+The residual p95 in K3/K4/K6 is capacity, not signal: eight pods serve
+~22 jobs/s against ~41 offered at 6×C1, so the wall is `maxReplicas` — an
+operator's explicit budget, which is where the wall belongs.
+
+Qualifications, in the log's own spirit: K4 abandoned 3.3% and K6 13.4% of
+their arrivals at the generator's in-flight cap, so both are qualified as
+measurements of their offered rate (a sustained overload is not measurable
+open-loop — a property of the scenario, recorded before). The per-scenario
+guards were initially dropped because the orchestrator ran a pre-fix
+analysis build; `tapbench reclassify` re-derived them from the stored
+artefacts, which is what it exists for. And the bottleneck verdicts read
+`UNKNOWN` on the maxed-out scenarios because the executor-CPU rule compares
+the fleet's usage against its *peak* ready count over the whole window — an
+autoscaled fleet ramps, so the ceiling is overstated mid-ramp; package 15.
+
 ### 2026-08-24 — the four service-side answers shipped
 
 Not a measurement — the response to what the autoscaling and fixed-scaling
@@ -42,73 +93,12 @@ so the log says what changed as well as what was found:
   autoscaler — are the executor's scaling axis.
 - **Routing becomes measurable.** Every API response carries `X-Served-By`
   (the pod name), so which replica served a request is stated rather than
-  inferred — see the scale-out entry below for why that matters.
+  inferred. The verification run above then closed the question: the old
+  83–243 s "routing" stage was the queue; Ready-to-serving is 3.6–10.5 s.
 - **Overload can refuse instead of resetting.** `tapApi.backlog` sizes the
   accept queue and `tapApi.limitConcurrency` makes uvicorn answer 503 past
-  a per-worker connection ceiling — off by default until the reset onset
-  (below) is established.
-
-### 2026-08-24 — scale-out cost is detection and routing, never the pod
-
-Run `20260824T102832Z-29507cbb-keda`, all seven autoscaling scenarios, six
-valid. Provisioning a Pod — created, scheduled, started, Ready — took **zero
-to one second in every scenario**, while total scale-out was 246 to 497 s:
-detection 98–340 s (the threshold, the polling interval, and the age signal's
-own reluctance — since replaced) and **routing 83–243 s** from Ready to
-demonstrably serving. Kubernetes is not the delay and there is no point
-tuning it.
-
-The routing number is the open question: it was measured by proxy (the first
-successful request completing after Ready), and on a deep queue that proxy
-may be reporting the queue rather than the routing. Confirm before
-attacking — responses now carry `X-Served-By`, so the next family can
-measure it directly.
-
-### 2026-08-24 — a third of the shed load is a reset, not a refusal, wherever the pool tips
-
-Run `20260824T014320Z-a5058118-fixed-scaling`. At every point where the
-connection pool tipped over, a large fraction of the load was dropped at the
-socket rather than refused with an answer:
-
-| measurement | requests | 503 | ReadError | ReadTimeout |
-| --- | --- | --- | --- | --- |
-| 1 replica, 1×C1 | 4,194 | 1,330 | 893 | 586 |
-| 2 replicas, 2×C1 | 15,211 | 2,594 | 11,968 | 540 |
-| 4 replicas, 6×C1 | 12,421 | 7,294 | 4,012 | 753 |
-
-The 503s are the pool-timeout path working as designed. The `ReadError`s are
-not: a reset connection is indistinguishable from a crash to the client that
-receives it, and a client cannot retry it safely. First hypothesis is the
-listen socket's accept queue overflowing before the application sees the
-connection. What cannot be said from this family is the offered rate at
-which resets start, because every measurement that shows them abandoned most
-of its arrivals at the generator's in-flight cap; pinning the onset needs a
-bounded-concurrency run held just past pool saturation. The service now
-exposes `tapApi.backlog` and `tapApi.limitConcurrency` so the shedding can
-be made honest once the onset is known.
-
-### 2026-08-24 — replica scaling remains unmeasured
-
-Run `20260824T014320Z-a5058118-fixed-scaling`: seventeen of 24 measurements
-were generator-capped, and the seven valid points do not bracket a ceiling
-at any replica count — one replica cannot serve C1 (it sheds 98.7% of it),
-and two, four and eight replicas all serve 1×C1 with headroom to spare. The
-suite nearly published "replica scaling efficiency at 8: 0.25" from two
-rates the service met in full; efficiency figures now require a bracketed
-capacity. To measure the real thing the ladder needs rungs between 1× and
-2×C1 — where the interesting region for two replicas and up turned out to
-be — or bounded-concurrency runs per replica count.
-
-### 2026-08-24 — two analysis artefacts are recorded, not yet fixed
-
-Both need a service-image change and were deferred to keep comparability
-with the runs already measured; the next image change can carry them.
-`peak_pool_wait_p95_s` reads ~9.7 s against a 5 s pool timeout because the
-pool-wait histogram's last finite bucket is 10 s, so every timed-out acquire
-interpolates to the middle of (5, 10]. And `CONNECTION_POOL_BOUND` takes
-confidence `min(1.0, pool_wait)`, so any wait over a second is full
-confidence and the class outranks everything else wherever the pool waited
-at all.
+  a per-worker connection ceiling — off by default until the reset onset is
+  established, which is package 13.
 
 ### 2026-08-24 — the aggregate query is the case for admission control
 
@@ -186,22 +176,6 @@ attributable rather than uniformly slow:
 
 Those two are the next optimisation targets, and they are unrelated to each
 other — see packages 10 and 11.
-
-### 2026-08-23 — cone search needs an index on the *expression*
-
-The translator emits `spoint(RADIANS(s_ra), RADIANS(s_dec)) @ scircle(...)`, a
-function applied to the columns, so a GiST index on a stored `spoint` column is
-never considered and every cone search becomes a sequential scan. The index has
-to be on that expression; `spoint`, `scircle` and `radians` are all
-`IMMUTABLE`, so it is legal, and the planner does use it once present. This is
-deployment guidance the project did not previously state.
-
-### 2026-08-23 — the planner misjudges join fan-out
-
-Ten plan nodes costing 5 ms or more carry cardinality estimates 50x to 477x
-out, all in the join-heavy classes (Q09, Q11, Q14) and none in the normal mix.
-Extended statistics on the CAOM parent/child key pairs is the obvious
-candidate; the impact is currently confined to the stress classes.
 
 ## Package 10 — Cheaper large results
 
@@ -347,3 +321,122 @@ bootstrap so it exists exactly when its source tables do:
 - **Extras** — an ObsCore cone-search entry in `/tap/examples` gated on the
   same flag, and a `docs/obscore.md` recording the column mapping and the
   DID scheme.
+## Package 13 — Honest overload shedding
+
+The fixed-scaling family (run `20260824T014320Z-a5058118-fixed-scaling`)
+found that wherever the connection pool tips over, a large fraction of the
+shed load is dropped at the socket rather than refused with an answer:
+
+| measurement | requests | 503 | ReadError | ReadTimeout |
+| --- | --- | --- | --- | --- |
+| 1 replica, 1×C1 | 4,194 | 1,330 | 893 | 586 |
+| 2 replicas, 2×C1 | 15,211 | 2,594 | 11,968 | 540 |
+| 4 replicas, 6×C1 | 12,421 | 7,294 | 4,012 | 753 |
+
+The 503s are the pool-timeout path working as designed; the `ReadError`s are
+not — a reset is indistinguishable from a crash to the client that receives
+it, and cannot be retried safely. First hypothesis is the listen socket's
+accept queue overflowing before the application sees the connection. The
+knobs exist (`tapApi.backlog`, `tapApi.limitConcurrency` — uvicorn answers
+503 past a per-worker connection ceiling); what is missing is the onset:
+every measurement showing resets abandoned most of its arrivals at the
+generator's in-flight cap, so the offered rate at which resets begin is
+unknown, and the ceiling cannot be placed.
+
+Work: a bounded-concurrency load shape in the harness (the open-loop
+generator cannot hold a sustained-overload point); a run held just past pool
+saturation to establish where resets start; then a default or documented
+`limitConcurrency` placed above a worker's normal concurrent load and below
+the reset onset.
+
+**Resolution is shown by** a bounded-concurrency fixed-scaling run held just
+past pool saturation, on one and on two replicas: the reset onset rate is
+recorded, and with `limitConcurrency` set the same held load sheds with
+`ReadError` at ~0 while 503s carry the refusals.
+
+## Package 14 — Measure replica scaling
+
+Run `20260824T014320Z-a5058118-fixed-scaling`: seventeen of 24 measurements
+were generator-capped, and the seven valid points do not bracket a ceiling
+at any replica count — one replica cannot serve C1 (it sheds 98.7% of it),
+and two, four and eight replicas all serve 1×C1 with headroom to spare. The
+suite nearly published "replica scaling efficiency at 8: 0.25" from two
+rates the service met in full; efficiency figures now require a bracketed
+capacity, so the column reads "—" until this package runs.
+
+Work, benchmark-side: rungs between 1× and 2×C1 — where the interesting
+region for two replicas and up turned out to be — or bounded-concurrency
+runs per replica count, the shape the size sweep already uses.
+
+**Resolution is shown by** a fixed-scaling run in which every replica count
+has a bracketed capacity (a valid rung the service was pushed past), the
+per-replica efficiency column populates from those brackets, and the p95 at
+each count's capacity is reported alongside it.
+
+## Package 15 — Analysis artefacts the classifier still carries
+
+Three recorded misreadings in the bottleneck analysis, none of which changes
+what was measured but all of which change what a reader concludes:
+
+- `peak_pool_wait_p95_s` reads ~9.7 s against a 5 s pool timeout, because
+  the pool-wait histogram's last finite bucket is 10 s and every timed-out
+  acquire interpolates to the middle of (5, 10]. Needs a bucket boundary at
+  the timeout — a service-image change, now unblocked since the image moved
+  anyway.
+- `CONNECTION_POOL_BOUND` takes confidence `min(1.0, pool_wait)`, so any
+  wait over a second is full confidence and the class outranks everything
+  else wherever the pool waited at all. Needs grading against the timeout.
+- The executor-CPU ceiling is the *peak* ready replica count times one core
+  across the whole window. An autoscaled fleet ramps, so mid-ramp the
+  ceiling is overstated and a pinned fleet classifies `UNKNOWN` — run
+  `20260824T140134Z-bf7e4b24-keda` shows exactly this on its maxed-out
+  scenarios. The ceiling has to be time-aligned to the ready count.
+
+**Resolution is shown by** `tapbench reclassify` over the depth-signal
+verification run: the maxed-out scenarios stop reading `UNKNOWN` where the
+per-timestamp fleet was pinned, pool-wait p95 never exceeds the configured
+timeout, and `CONNECTION_POOL_BOUND` confidence grades rather than
+saturates.
+
+## Package 16 — Ship the planner what it needs
+
+Two database-side findings, both currently documentation rather than
+deployment:
+
+- Cone search needs the index on the *expression* the translator emits —
+  `spoint(RADIANS(s_ra), RADIANS(s_dec)) @ scircle(...)` — or every cone
+  search is a sequential scan; a GiST index on a stored `spoint` column is
+  never considered. All three functions are `IMMUTABLE`, so the expression
+  index is legal, and the planner uses it once present.
+- Ten plan nodes costing 5 ms or more carry cardinality estimates 50x to
+  477x out, all in the join-heavy classes (Q09, Q11, Q14). Extended
+  statistics on the CAOM parent/child key pairs is the obvious candidate.
+
+Work: create the expression index and the extended statistics in the
+metadata domains' bootstrap (the same ensure-path the schema uses), so a
+deployment gets them without reading a guidance page.
+
+**Resolution is shown by** the stress-class family on D2 or larger: the
+cone-search classes plan through the expression index (no sequential scan
+of ObsCore in their `EXPLAIN`), Q09/Q11/Q14 cardinality estimates come
+within an order of magnitude, and their p95 does not regress.
+
+## Package 17 — Finish the size sweep
+
+D3 (25 GiB) is the first size that touches disk in earnest — buffer hit
+ratio 68–70% against 100% on D1/D2 — and D4 (45 GiB) is unmeasured, so the
+suite has said nothing yet about the I/O-bound regime under concurrency.
+Two harness gaps block reading it well: the 60-second warmup demonstrably
+does not warm a working set this size (the first repetition at each size is
+colder than the rest), and every cross-size throughput comparison taken
+before the per-tier corpus fix compares different workloads and was
+retracted as a size effect.
+
+Work, benchmark-side: widen the warmup for the larger tiers, run the
+concurrency sweep on D3 and D4, and re-publish throughput-versus-size from
+post-fix runs only.
+
+**Resolution is shown by** a db-scaling run covering D1–D4 with one corpus,
+in which the first repetition at each size is statistically indistinct from
+the rest, and a published throughput-versus-size curve whose every point
+comes from that run.
