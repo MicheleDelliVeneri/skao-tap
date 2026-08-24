@@ -32,7 +32,7 @@ JOIN_QUERY = (
 COLUMNS = [
     ColumnMeta("source_id", kind="int64", ucd="meta.id"),
     ColumnMeta("name", kind="str"),
-    ColumnMeta("flux", kind="float64", unit="mJy"),
+    ColumnMeta("flux", kind="decimal", unit="mJy"),
     ColumnMeta("observed_at", kind="timestamp"),
     ColumnMeta("validated", kind="bool"),
 ]
