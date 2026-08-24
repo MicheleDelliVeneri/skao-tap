@@ -22,6 +22,7 @@ import numpy as np
 
 CLASSES = (
     "TAP_CPU_BOUND",
+    "EXECUTOR_CPU_BOUND",
     "DATABASE_CPU_BOUND",
     "DATABASE_IO_BOUND",
     "CONNECTION_POOL_BOUND",
@@ -49,6 +50,18 @@ def _fraction_above(values: np.ndarray, threshold: float) -> float:
     return float((values > threshold).mean()) if values.size else 0.0
 
 
+def fleet_replicas(metrics_rows: list[dict], metric: str = "api_replicas_ready") -> float:
+    """Peak replicas ready during the window, never below one.
+
+    The multiplier for every per-pod ceiling, taken from the run rather than
+    from the configuration: under an autoscaler the configured count is not
+    what served, and the measured one is right in both cases.
+    """
+    ready = _series(metrics_rows, metric)
+    finite = ready[np.isfinite(ready)] if ready.size else ready
+    return max(float(finite.max()), 1.0) if finite.size else 1.0
+
+
 def classify(
     *,
     metrics_rows: list[dict],
@@ -64,15 +77,31 @@ def classify(
     api_cpu = _series(metrics_rows, "tap_api_cpu_cores")
     pg_cpu = _series(metrics_rows, "postgres_cpu_cores")
     api_throttle = _series(metrics_rows, "tap_api_throttled_seconds")
+    exec_cpu = _series(metrics_rows, "tap_executor_cpu_cores")
+    exec_throttle = _series(metrics_rows, "tap_executor_throttled_seconds")
     pg_throttle = _series(metrics_rows, "postgres_throttled_seconds")
     pool_in_use = _series(metrics_rows, "tap_db_connections_in_use")
     pool_wait = _series(metrics_rows, "tap_pool_wait_p95")
     api_mem = _series(metrics_rows, "tap_api_memory_bytes")
     pg_mem = _series(metrics_rows, "postgres_memory_bytes")
 
-    api_limit = limits.get("tap_api_cpu_limit_cores", 2.0)
+    # Every API series above is summed over the pods, so each ceiling compared
+    # against one has to be the fleet's rather than a single pod's or a single
+    # process's. Getting this wrong does not produce a missing verdict, it
+    # produces a confident wrong one: an eight-replica run was called
+    # CONNECTION_POOL_BOUND with seven eighths of its pool idle, and
+    # MEMORY_BOUND at 220 MiB a pod against a 1 GiB-a-pod limit.
+    #
+    # The multiplier is the peak ready count from the run itself, not the
+    # configured replicas, so an autoscaled window — where the ceiling moves
+    # while the measurement runs, and the configured count is meaningless — is
+    # judged against the fleet that actually served.
+    serving = fleet_replicas(metrics_rows)
+    api_limit = limits.get("tap_api_cpu_limit_cores", 2.0) * serving
+    executors = fleet_replicas(metrics_rows, "executor_replicas_ready")
+    exec_limit = limits.get("tap_executor_cpu_limit_cores", 1.0) * executors
     pg_limit = limits.get("postgres_cpu_limit_cores", 4.0)
-    pool_limit = limits.get("db_pool_max_total", 8)
+    pool_limit = limits.get("db_pool_max_total", 8) * limits.get("tap_api_workers", 1) * serving
 
     # -- the client first ---------------------------------------------------
     if recorder_cpu_peak > 0.80:
@@ -110,6 +139,36 @@ def classify(
                     "GIL, so one worker cannot exceed one core whatever the cgroup "
                     "allows. Relieved by more processes (tapApi.workers) or more "
                     "pods, never by a bigger limit on one worker.",
+                )
+            )
+
+    # -- executor CPU -------------------------------------------------------
+    # Missing until the autoscaling family was read, and it was the resource
+    # actually at its ceiling there: each executor pod sat at 0.96 of a core
+    # with a two-core cgroup and no throttling, while the run was described as
+    # having nothing busy. The API and the database were idle; the executors
+    # were pinned.
+    if exec_cpu.size:
+        hot = _fraction_above(exec_cpu, 0.90 * exec_limit)
+        throttled = float(exec_throttle.mean()) if exec_throttle.size else 0.0
+        if hot > 0.25 or throttled > 0.05:
+            verdicts.append(
+                Verdict(
+                    "EXECUTOR_CPU_BOUND",
+                    max(hot, min(1.0, throttled)),
+                    {
+                        "fraction_of_window_above_90pct_limit": hot,
+                        "mean_throttled_seconds_per_second": throttled,
+                        "peak_cores": float(exec_cpu.max()),
+                        "limit_cores": exec_limit,
+                        "executor_replicas_serving": executors,
+                    },
+                    "The executors are at their ceiling. One executor runs one query "
+                    "at a time, so a pod cannot exceed one core whatever its cgroup "
+                    "allows, and the only relief is more pods. Alongside "
+                    "KEDA_SCALE_LAG this is the whole story of an autoscaling "
+                    "shortfall: the pods that existed were full and more were never "
+                    "asked for.",
                 )
             )
 
@@ -176,6 +235,7 @@ def classify(
                         "peak_pool_wait_p95_s": waiting,
                         "requests_refused_503": refused,
                         "pool_max_total": pool_limit,
+                        "api_replicas_serving": serving,
                     },
                     "Requests are queueing for a database connection rather than for "
                     "the database. Raising config.dbPoolMax helps only while the "
@@ -185,7 +245,7 @@ def classify(
             )
 
     # -- memory -------------------------------------------------------------
-    api_mem_limit = limits.get("tap_api_memory_limit_bytes", 1 << 30)
+    api_mem_limit = limits.get("tap_api_memory_limit_bytes", 1 << 30) * serving
     pg_mem_limit = limits.get("postgres_memory_limit_bytes", 6 << 30)
     oom = _series(metrics_rows, "oom_events")
     if (
@@ -199,8 +259,10 @@ def classify(
                 1.0 if (oom.size and oom.max() > 0) else 0.5,
                 {
                     "api_peak_bytes": float(api_mem.max()) if api_mem.size else None,
+                    "api_limit_bytes": api_mem_limit,
                     "postgres_peak_bytes": float(pg_mem.max()) if pg_mem.size else None,
                     "oom_events": float(oom.max()) if oom.size else 0.0,
+                    "api_replicas_serving": serving,
                 },
                 "A container approached or exceeded its memory limit. An OOM kill "
                 "invalidates the run outright; sustained pressure below it still "

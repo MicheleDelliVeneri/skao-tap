@@ -8,10 +8,12 @@ is.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import pathlib
 import shutil
+import socket
 import subprocess
 import time
 
@@ -166,7 +168,7 @@ def deployed_image_tag() -> str | None:
         return None
 
 
-def verify_running_images(expected_tag: str) -> None:
+def verify_running_images(expected_tag: str, timeout_s: float = 180.0) -> None:
     """Refuse to measure pods that are not running the images just built.
 
     The check is on the pod spec rather than on an image id, because kind
@@ -174,24 +176,35 @@ def verify_running_images(expected_tag: str) -> None:
     one docker built, so comparing those would look like a check and verify
     nothing.
 
-    Parsed from JSON rather than assembled with a jsonpath expression: the
-    quoting needed to get a newline into a jsonpath template is exactly the
-    kind of detail that turns a guard into a crash.
+    Waits rather than sampling once. A rolling update leaves the previous pod
+    present and Terminating for a few seconds after the new one is Ready, and a
+    guard that fails on that is a guard that fails on every successful
+    deployment. Terminating pods are skipped and the rest are re-checked until
+    they agree or the deadline passes — so the guard is strict about the end
+    state and patient about how it is reached.
     """
-    payload = json.loads(
-        kubectl("get", "pods", "-l", f"app.kubernetes.io/instance={RELEASE}", "-o", "json")
-    )
-    wrong = []
-    for item in payload.get("items", []):
-        for container in item["spec"]["containers"]:
-            if expected_tag not in container["image"]:
-                wrong.append(f"{item['metadata']['name']}: {container['image']}")
-    if wrong:
-        raise RuntimeError(
-            "these pods are not running the images this run built "
-            f"(expected tag {expected_tag}):\n  " + "\n  ".join(wrong)
+    deadline = time.monotonic() + timeout_s
+    wrong: list[str] = []
+    while time.monotonic() < deadline:
+        payload = json.loads(
+            kubectl("get", "pods", "-l", f"app.kubernetes.io/instance={RELEASE}", "-o", "json")
         )
-    log.info("all pods confirmed running %s", expected_tag)
+        wrong = []
+        for item in payload.get("items", []):
+            if item["metadata"].get("deletionTimestamp"):
+                continue  # on its way out; not what will serve the measurement
+            for container in item["spec"]["containers"]:
+                if expected_tag not in container["image"]:
+                    wrong.append(f"{item['metadata']['name']}: {container['image']}")
+        if not wrong:
+            log.info("all pods confirmed running %s", expected_tag)
+            return
+        log.info("waiting for the rollout to %s (%d pod(s) behind)", expected_tag, len(wrong))
+        time.sleep(5)
+    raise RuntimeError(
+        "these pods are still not running the images this run built "
+        f"(expected tag {expected_tag}) after {timeout_s:.0f}s:\n  " + "\n  ".join(wrong)
+    )
 
 
 def install_keda() -> str:
@@ -261,6 +274,12 @@ def install_chart(overrides: dict[str, str] | None = None) -> None:
         "--wait",
         "--timeout",
         "10m",
+        # scale() sets replicas through the scale subresource, which leaves
+        # kubectl owning that field. Helm applies server-side, so the next
+        # upgrade — the one switching an autoscaler on for the KEDA family —
+        # aborts on the conflict instead. The chart is the authority on every
+        # field it renders, so take the field back rather than fail.
+        "--force-conflicts",
     ]
     for key, value in overrides.items():
         args += ["--set", f"{key}={value}"]
@@ -304,8 +323,43 @@ def database_dsn() -> str:
     return "postgresql://tap:tap@127.0.0.1:55433/tap"
 
 
-def port_forward_database() -> subprocess.Popen:
-    process = subprocess.Popen(
+#: One port-forward for the whole process, torn down at exit.
+_forward: subprocess.Popen | None = None
+
+
+def _port_accepts(host: str = "127.0.0.1", port: int = 55433) -> bool:
+    with socket.socket() as probe:
+        probe.settimeout(1.0)
+        return probe.connect_ex((host, port)) == 0
+
+
+def port_forward_database(timeout_s: float = 60.0) -> subprocess.Popen:
+    """Ensure the database is reachable on the host, once per process.
+
+    Started once and reused. One forward per measurement — started, slept on
+    for three seconds, terminated — cost eight and a half minutes between two
+    measurements: a terminated forward does not release the port immediately,
+    the replacement cannot bind, and the wait for it was neither bounded nor
+    logged. Thirty measurements paid that.
+
+    Readiness is established by connecting to the port rather than by sleeping.
+    A fixed sleep is either too short, which fails, or too long, which is the
+    thing being fixed.
+    """
+    global _forward
+    if _forward is not None and _forward.poll() is None and _port_accepts():
+        return _forward
+    if _forward is not None:
+        _forward.terminate()
+        _forward = None
+    if _port_accepts():
+        # Something already forwards this port — another benchmark process, or
+        # a forward this process started and lost track of. Spawning a second
+        # one would leave a doomed kubectl that cannot bind, so the open port
+        # is taken at face value.
+        log.debug("database port already forwarded by another process")
+        return subprocess.Popen(["true"])
+    _forward = subprocess.Popen(
         [
             "kubectl",
             "--context",
@@ -317,8 +371,24 @@ def port_forward_database() -> subprocess.Popen:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    time.sleep(3)
-    return process
+    atexit.register(close_database_forward)
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _port_accepts():
+            log.debug("database port-forward ready")
+            return _forward
+        if _forward.poll() is not None:
+            raise RuntimeError("kubectl port-forward exited before the port opened")
+        time.sleep(0.25)
+    raise RuntimeError(f"database port-forward did not open in {timeout_s:.0f}s")
+
+
+def close_database_forward() -> None:
+    """Tear the shared forward down. Idempotent; registered at exit."""
+    global _forward
+    if _forward is not None and _forward.poll() is None:
+        _forward.terminate()
+    _forward = None
 
 
 def scaled_object_yaml() -> str:

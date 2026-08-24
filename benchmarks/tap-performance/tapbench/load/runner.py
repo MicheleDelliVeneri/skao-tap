@@ -203,6 +203,8 @@ async def _issue_async(
     offered_at: float,
     recorder: Recorder,
     poll_interval: float = 0.25,
+    poll_interval_max: float = 2.0,
+    poll_fine_window_s: float = 5.0,
     timeout_s: float = 600.0,
 ) -> None:
     """One UWS job, timed from submission to a terminal phase.
@@ -233,12 +235,22 @@ async def _issue_async(
             ttfb = time.perf_counter() - t0  # the job exists from here
             deadline = t0 + timeout_s
             phase = "PENDING"
+            # Fine-grained while the job is young, then backing off. Every job
+            # in flight holds one of these loops, so at a few thousand
+            # outstanding jobs a flat quarter-second poll is thousands of
+            # requests a second at the service being measured — the harness
+            # bidding against the workload for the same API. The first seconds
+            # stay fine because that is where the SLO is decided; a job already
+            # three minutes into a queue does not need 4 Hz resolution.
+            interval = poll_interval
             while time.perf_counter() < deadline:
                 phase_response = await client.get(f"{location}/phase")
                 phase = phase_response.text.strip()
                 if phase in ("COMPLETED", "ERROR", "ABORTED"):
                     break
-                await asyncio.sleep(poll_interval)
+                await asyncio.sleep(interval)
+                if time.perf_counter() - t0 > poll_fine_window_s:
+                    interval = min(interval * 1.5, poll_interval_max)
             if phase == "COMPLETED":
                 result = await client.get(f"{location}/results/result")
                 size = len(result.content)
@@ -289,8 +301,16 @@ async def closed_loop(
     mode: str = "sync",
     response_format: str = "csv",
     timeout_s: float = 120.0,
-) -> Recorder:
-    """N clients, each issuing the next request as soon as the last finishes."""
+) -> tuple[Recorder, float]:
+    """N clients, each issuing the next request as soon as the last finishes.
+
+    Returns the recorder and how long the measured phase actually took. Those
+    are not the same as the requested duration: a worker only checks the clock
+    between requests, and on an I/O-bound dataset a streaming response can
+    drip for minutes, so a phase can overrun its window substantially. Dividing
+    the request count by the *requested* duration would then overstate
+    throughput by whatever the overrun was.
+    """
     recorder = Recorder()
     warm = Recorder()  # discarded: it exists to fill caches and pools
     stop = asyncio.Event()
@@ -308,20 +328,42 @@ async def closed_loop(
                     await _issue_async(client, base_url, entry, now, target)
 
         if warmup_s > 0:
+            # Cancelled at the deadline rather than waited out. The warmup's
+            # results are discarded anyway, and a single slow-streaming
+            # response would otherwise hold the whole run for as long as it
+            # keeps trickling — which is how a 60-second warmup became 26
+            # minutes of unexplained wall clock.
             until = time.perf_counter() + warmup_s
-            await asyncio.gather(*(worker(warm, until) for _ in range(concurrency)))
-        until = time.perf_counter() + measure_s
+            warmers = [asyncio.create_task(worker(warm, until)) for _ in range(concurrency)]
+            _, pending = await asyncio.wait(warmers, timeout=warmup_s + 30.0)
+            for task in pending:
+                task.cancel()
+            if pending:
+                log.info("cancelled %d warmup worker(s) still in a request", len(pending))
+            await asyncio.gather(*warmers, return_exceptions=True)
+        measured_start = time.perf_counter()
+        until = measured_start + measure_s
         await asyncio.gather(*(worker(recorder, until) for _ in range(concurrency)))
+        measured_elapsed = time.perf_counter() - measured_start
         stop.set()
         await asyncio.gather(watcher)
+    overrun = measured_elapsed - measure_s
     log.info(
-        "closed loop c=%d: %d requests, %.1f rps, generator CPU peak %.0f%%",
+        "closed loop c=%d: %d requests in %.1fs (%+.1fs), %.1f rps, generator CPU peak %.0f%%",
         concurrency,
         len(recorder.samples),
-        len(recorder.samples) / measure_s if measure_s else 0.0,
+        measured_elapsed,
+        overrun,
+        len(recorder.samples) / measured_elapsed if measured_elapsed else 0.0,
         100 * recorder.generator_cpu_peak,
     )
-    return recorder
+    if overrun > 0.1 * measure_s:
+        log.warning(
+            "measured phase overran its window by %.0fs: a worker was inside a "
+            "long streaming response when the clock ran out",
+            overrun,
+        )
+    return recorder, measured_elapsed
 
 
 @dataclasses.dataclass
@@ -368,8 +410,13 @@ async def open_loop(
     in_flight: set[asyncio.Task] = set()
     dropped = 0
 
-    peak_rate = max(max(s.rate, s.rate_end or s.rate) for s in steps) if steps else 1.0
-    async with _client(int(peak_rate * 4) + 16, timeout_s) as client:
+    # Sized by what can be outstanding, not by the rate. The rate heuristic
+    # gave an async scenario offering 24 jobs/s a 112-connection pool while it
+    # held thousands of jobs at once, so the generator queued on its own pool —
+    # and a socket waiting for a slot is not busy, so the CPU guard cannot see
+    # it. These are ceilings rather than allocations: httpx opens what it needs,
+    # so a generous one costs nothing and removes a silent limiter.
+    async with _client(min(max_in_flight, 8192), timeout_s) as client:
         watcher = asyncio.create_task(recorder.watch_self(stop))
         # A fixed seed, not hash("arrivals"): str hashing is randomised per
         # process, so that would have made the arrival pattern differ between

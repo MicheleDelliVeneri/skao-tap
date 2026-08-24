@@ -255,31 +255,51 @@ class Plotter:
                 label="linear from 1 replica",
             )
         ax.legend()
-        return self._save(
-            fig,
-            "rps_vs_replicas",
-            "Throughput vs replicas",
+        # The gap is only contention where each point is a ceiling. Where a
+        # replica count served everything it was offered, the gap is the
+        # ladder's, and saying otherwise attributes the shortfall to PostgreSQL
+        # on the strength of a rate nobody raised.
+        ceilings = {
+            c["replicas"] for c in self.summary.get("replica_capacity") or [] if c["bracketed"]
+        }
+        open_ended = sorted(set(xs) - ceilings)
+        note = (
             "The dashed line is what perfect scaling would look like. The gap "
-            "between them is the shared resource — here, one PostgreSQL.",
+            "between them is the shared resource — here, one PostgreSQL."
+            if not open_ended
+            else "The dashed line is what perfect scaling would look like. At "
+            + ", ".join(str(x) for x in open_ended)
+            + " replicas the service met every request it was offered, so the "
+            "point is the rate offered rather than a ceiling and the gap to the "
+            "line is the ladder's, not the service's."
         )
+        return self._save(fig, "rps_vs_replicas", "Throughput vs replicas", note)
 
     def scaling_efficiency(self) -> Figure:
-        runs = [r for r in self._select(kind="fixed_replicas") if r.get("http")]
-        if not runs:
+        # Only ceilings, because efficiency is a ratio of ceilings. A curve
+        # drawn through rates the service met in full measures the ladder that
+        # was offered: this run would have drawn 1.0, 1.0, 0.5, 0.25 from four
+        # replica counts that all served every request they were given.
+        if not self._select(kind="fixed_replicas"):
             return self._skip(
                 "scaling_efficiency",
                 "Scaling efficiency",
                 "no fixed-replica measurements in this run",
             )
-        buckets: dict[int, float] = {}
-        for run in runs:
-            value = run["http"].get("successful_rps") or 0.0
-            buckets[run["replicas"]] = max(buckets.get(run["replicas"], 0.0), value)
+        capacities = [c for c in (self.summary.get("replica_capacity") or []) if c["bracketed"]]
+        buckets = {c["replicas"]: c["rps"] for c in capacities}
+        if not buckets:
+            return self._skip(
+                "scaling_efficiency",
+                "Scaling efficiency",
+                "no replica count was pushed past what it could serve, so no "
+                "throughput here is a ceiling to take a ratio of",
+            )
         if 1 not in buckets:
             return self._skip(
                 "scaling_efficiency",
                 "Scaling efficiency",
-                "no single-replica measurement to normalise against",
+                "no single-replica ceiling to normalise against",
             )
         base = buckets[1]
         xs = sorted(buckets)
@@ -636,12 +656,17 @@ class Plotter:
         """One synchronised dashboard per autoscaling scenario."""
         import pyarrow.parquet as pq
 
-        parquet = self.run_dir / "metrics" / f"{scenario['id']}.parquet"
+        # The measurement key, not the scenario id: the series are written as
+        # `keda-K3.parquet`, and looking for `K3.parquet` skipped every
+        # autoscaling dashboard in the family — the run's whole point — with a
+        # reason that was not true.
+        key = scenario.get("key") or f"keda-{scenario['id']}"
+        parquet = self.run_dir / "metrics" / f"{key}.parquet"
         if not parquet.exists():
             return self._skip(
                 f"keda_{scenario['id']}",
                 f"{scenario['id']} — {scenario.get('description', '')}",
-                "no metrics parquet for this scenario",
+                f"no metrics parquet at metrics/{key}.parquet",
             )
         rows = pq.read_table(parquet).to_pydict()
         metrics: dict[str, list[tuple[float, float]]] = {}
@@ -650,7 +675,11 @@ class Plotter:
         for series in metrics.values():
             series.sort()
 
-        samples_file = self.run_dir / "samples" / f"{scenario['id']}.parquet"
+        # Keyed the same way as the series, and for the same reason: named by
+        # the scenario id, this found nothing, and the three panels that draw
+        # request data — offered against served, latency, error rate — came out
+        # blank on every dashboard in the family while still being captioned.
+        samples_file = self.run_dir / "samples" / f"{key}.parquet"
         samples = None
         if samples_file.exists():
             samples = pq.read_table(samples_file).to_pydict()
@@ -661,6 +690,31 @@ class Plotter:
 
         def rel(series):
             return [t - t0 for t, _ in series], [v for _, v in series]
+
+        def legend_or_say_why(ax, missing: str) -> None:
+            """Label a panel that has data; label the absence when it has none.
+
+            An empty axis under a heading reads as "measured, and flat", and a
+            path mistake has produced exactly that twice in this file. The
+            missing data is drawn on the panel instead — and matplotlib's
+            "no artists with labels" warning stops being the only place it was
+            reported.
+            """
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend(fontsize="x-small", ncols=3)
+            else:
+                ax.text(
+                    0.5,
+                    0.5,
+                    missing,
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                    fontsize="small",
+                    color=PALETTE["warn"],
+                )
+
+        no_samples = f"no request samples at samples/{key}.parquet"
 
         panels = 6
         fig, axes = plt.subplots(panels, 1, figsize=(11, 2.1 * panels), sharex=True)
@@ -688,7 +742,7 @@ class Plotter:
                     color=PALETTE["primary"],
                 )
         ax.set_ylabel("requests/s")
-        ax.legend(fontsize="x-small", ncols=3)
+        legend_or_say_why(ax, no_samples)
         ax.grid(alpha=0.3, linestyle=":")
 
         # 2: latency
@@ -722,7 +776,7 @@ class Plotter:
                 )
         ax.set_ylabel("latency (s)")
         ax.set_yscale("log")
-        ax.legend(fontsize="x-small", ncols=3)
+        legend_or_say_why(ax, no_samples)
         ax.grid(alpha=0.3, linestyle=":")
 
         # 3: error rate
@@ -736,6 +790,8 @@ class Plotter:
             with np.errstate(divide="ignore", invalid="ignore"):
                 fraction = np.where(total > 0, 100 * failed / total, 0.0)
             ax.plot((edges[:-1] + edges[1:]) / 2 - t0, fraction, color=PALETTE["warn"])
+        else:
+            legend_or_say_why(ax, no_samples)
         ax.set_ylabel("errors (%)")
         ax.grid(alpha=0.3, linestyle=":")
 

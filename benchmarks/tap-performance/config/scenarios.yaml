@@ -9,6 +9,17 @@ timing:
   # Between runs: let the pool drain, the queue empty and the page cache
   # settle, so a run does not inherit its predecessor's state.
   settle_seconds: 30
+  # Requests the open-loop generator will hold outstanding before it starts
+  # abandoning arrivals. Reaching it turns an open-loop measurement into a
+  # closed-loop one at this concurrency, which a guard now marks — so the value
+  # is a statement about what the harness can offer, not a tuning knob.
+  max_in_flight: 4096
+  # Async jobs wait in a queue rather than in the service, so they accumulate
+  # far more outstanding requests at the same offered rate: a KEDA scenario
+  # abandoned 38.6% of its arrivals at 4096, which shrinks the very backlog the
+  # autoscaler is being measured on. Affordable at this size because a queued
+  # job's phase poll backs off after its first seconds.
+  max_in_flight_async: 20000
 
 concurrency_sweep:
   levels: [1, 2, 4, 8, 16, 32, 64, 128]

@@ -39,17 +39,28 @@ def configure_logging(verbose: bool) -> None:
 
 
 def build_corpus(cfg: dict, datasets: dict) -> list:
-    """The corpus, sized to the largest dataset actually built.
+    """One corpus for the whole run, sized to the *smallest* dataset in it.
 
-    Parameters are drawn from the observation index space, so the corpus has to
-    know how far that space goes — a corpus built for 8 million observations
-    against a database holding 300,000 would spend most of its lookups missing.
+    Sized to the smallest, and built once, for the same reason: a size sweep
+    has to issue the identical workload at every size or it is not measuring
+    size. Rebuilding per dataset — which this did — gave each tier a different
+    set of queries, so "throughput versus database size" compared different
+    workloads and the recorded corpus hash described only the last one.
+
+    The smallest works for all of them because generation is a prefix: a
+    database grown to 25 GiB contains every row the 2 GiB one had, with the
+    same identifiers at the same coordinates. So every lookup and every cone
+    centre in the corpus exists at every size, and what changes between tiers
+    is how much *other* data surrounds it — which is the thing being measured.
+    Sizing to the largest instead would make most identifiers absent from the
+    smaller tiers and turn the sweep into a comparison of miss rates.
     """
-    observations = max(
-        (info.get("observations_generated") or 0 for info in datasets.values()),
-        default=1,
-    )
-    return corpus_mod.build(cfg["scenarios"], cfg["datasets"], observations)
+    counts = [
+        info.get("observations_generated") or 0
+        for info in datasets.values()
+        if info.get("observations_generated")
+    ]
+    return corpus_mod.build(cfg["scenarios"], cfg["datasets"], min(counts, default=1))
 
 
 def finalise(
@@ -64,8 +75,11 @@ def finalise(
 ) -> pathlib.Path:
     """Write summary.json/csv, draw the plots, render the report."""
 
+    # The autoscaling scenarios count here too. They are measurements with a
+    # classification like any other, and leaving them out made the tally of a
+    # KEDA run a tally of its warm-up sweep.
     tally: dict[str, dict] = {}
-    for result in results:
+    for result in [*results, *(keda or [])]:
         for verdict in result.get("bottleneck") or []:
             entry = tally.setdefault(
                 verdict["classification"], {"count": 0, "explanation": verdict["explanation"]}
@@ -95,26 +109,9 @@ def finalise(
             "evidence": f"{best['key']} at {best['concurrency']} clients, "
             f"p95 {1000 * best['http']['latency']['p95_s']:.0f} ms",
         }
-    c1 = runner.sustainable_capacity(results, cfg["scenarios"]["slo"]["p95_seconds"])
-    if c1:
-        headline["sustainable single-replica capacity (C1)"] = {
-            "value": round(c1, 1),
-            "evidence": f"highest successful rps with p95 within the "
-            f"{cfg['scenarios']['slo']['p95_seconds']}s SLO and "
-            "errors under 1%",
-        }
-    for kind, label in (("fixed_replicas", "replica scaling efficiency at 8"),):
-        scaled = [r for r in results if r.get("kind") == kind]
-        base = [r for r in scaled if r.get("replicas") == 1]
-        top = [r for r in scaled if r.get("replicas") == 8]
-        if base and top:
-            one = max((r["http"]["successful_rps"] or 0.0) for r in base)
-            eight = max((r["http"]["successful_rps"] or 0.0) for r in top)
-            if one:
-                headline[label] = {
-                    "value": round(eight / (8 * one), 3),
-                    "evidence": f"{eight:.1f} rps on 8 replicas against {one:.1f} on one",
-                }
+    slo_p95_s = cfg["scenarios"]["slo"]["p95_seconds"]
+    c1 = runner.sustainable_capacity(results, slo_p95_s)
+    headline.update(runner.capacity_headline(results, slo_p95_s))
 
     invalid_path = run.path / "invalid.json"
     summary = {
@@ -134,6 +131,7 @@ def finalise(
         "bottleneck_tally": tally,
         "by_query_class": pooled,
         "headline": headline,
+        "replica_capacity": runner.replica_capacities(results, slo_p95_s),
         "plan_flags": {
             name: {"count": count, "explanation": _plan_explanation(name)}
             for name, count in (plan_flags or {}).items()
@@ -215,7 +213,11 @@ def cmd_db_scaling(args) -> int:
         # Grown in order: the database is one database, and each tier is the
         # previous one with more rows in it.
         datasets |= runner.ensure_dataset(cfg, [name], run.path / "datasets")
-        entries = build_corpus(cfg, datasets)
+        if not entries:
+            # Built once, from the first and therefore smallest tier, so every
+            # dataset in this run is measured with the identical workload.
+            entries = build_corpus(cfg, datasets)
+            run.write_json("corpus.json", [e.as_dict() for e in entries])
         results += runner.concurrency_sweep(run, cfg, name, entries, quick=args.quick)
         results += runner.stress_classes(run, cfg, name, entries)
         plan_flags = runner.capture_plans(run, cfg, entries)
@@ -286,7 +288,8 @@ def cmd_full(args) -> int:
     plan_flags: dict = {}
     for name in names:
         datasets |= runner.ensure_dataset(cfg, [name], run.path / "datasets")
-        entries = build_corpus(cfg, datasets)
+        if not entries:
+            entries = build_corpus(cfg, datasets)
         results += runner.concurrency_sweep(run, cfg, name, entries)
         results += runner.stress_classes(run, cfg, name, entries)
         plan_flags = runner.capture_plans(run, cfg, entries)
@@ -338,6 +341,20 @@ def cmd_publish(args) -> int:
     return 0
 
 
+def cmd_reclassify(args) -> int:
+    """Re-derive a finished run's analysis from its stored artefacts."""
+    path = runs_mod.resolve(args.run_dir)
+    if not path:
+        print("no run directory found", file=sys.stderr)
+        return 2
+    summary = runner.reclassify(path, runner.load_config())
+    plotter = report_mod.Plotter(path, summary)
+    figures = plotter.draw_all()
+    html_mod.write_csv(summary, path / "summary.csv")
+    print(html_mod.render(path, summary, figures))
+    return 0
+
+
 def cmd_setup(args) -> int:
     runner.setup(runner.load_config(), rebuild_images=not args.no_build)
     return 0
@@ -386,6 +403,12 @@ def main(argv: list[str] | None = None) -> int:
         "publish", help="copy a run's graphs and numbers into the docs site"
     )
     sub.set_defaults(handler=cmd_publish)
+    sub.add_argument("run_dir", nargs="?")
+    sub = subparsers.add_parser(
+        "reclassify",
+        help="re-derive a finished run's database summary and bottleneck verdicts",
+    )
+    sub.set_defaults(handler=cmd_reclassify)
     sub.add_argument("run_dir", nargs="?")
     sub = subparsers.add_parser("setup", help="cluster, KEDA, monitoring, chart")
     sub.set_defaults(handler=cmd_setup)

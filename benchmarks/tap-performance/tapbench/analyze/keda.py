@@ -39,6 +39,64 @@ def _series(rows: list[dict], metric: str) -> list[tuple[float, float]]:
     return sorted((r["t"], r["value"]) for r in rows if r["metric"] == metric)
 
 
+def scaling_up(steps: list[dict]) -> bool:
+    """Whether the transition at the first step boundary raises the rate.
+
+    A recovery scenario is the mirror of a scale-out: its T1 is the scaler
+    metric falling back *through* the threshold, not crossing it. Read from the
+    profile rather than assumed, because assuming a scale-out gave the
+    4xC1-to-0.2xC1 scenario a two-second "detection" — the metric was already
+    above the threshold from the phase before the transition, so the first
+    crossing after it was found immediately and meant nothing.
+    """
+    if len(steps) < 2:
+        return True
+    before = steps[0].get("rate_end") or steps[0].get("rate") or 0.0
+    after = steps[1].get("rate") or 0.0
+    return after >= before
+
+
+def _series_step(rows: list[dict]) -> float:
+    """The Prometheus range step these rows were read at.
+
+    Measured from the rows rather than assumed, because it is the resolution
+    every stamp taken from a series inherits — a stage cannot be timed finer
+    than the step it was sampled at.
+    """
+    stamps = sorted({r["t"] for r in rows})
+    if len(stamps) < 2:
+        return 1.0
+    return float(np.median(np.diff(stamps)))
+
+
+def _pod_stamps_from_watcher(
+    watcher_samples: list[dict], t0: float, deployment: str
+) -> tuple[float | None, float | None]:
+    """Creation and first-Ready of the earliest pod created after `t0`.
+
+    From the watcher's own polling, which is all that survives a pod deleted
+    before the run ended. Ready is the first sample that reports it, so it is
+    late by up to one polling interval — recorded as such by the caller rather
+    than presented as the Pod's own stamp.
+    """
+    component = deployment.split("skao-tap-")[-1]
+    created: dict[str, float] = {}
+    ready_at: dict[str, float] = {}
+    for sample in watcher_samples:
+        for pod in sample.get("pods") or []:
+            name = pod.get("name") or ""
+            if component not in name or not pod.get("created"):
+                continue
+            created.setdefault(name, pod["created"])
+            if pod.get("ready") and name not in ready_at:
+                ready_at[name] = sample["t"]
+    candidates = sorted((t, n) for n, t in created.items() if t >= t0)
+    if not candidates:
+        return None, None
+    birth, name = candidates[0]
+    return birth, ready_at.get(name)
+
+
 def _first_after(
     points: typing.Sequence[tuple[float, float]], t0: float, predicate
 ) -> float | None:
@@ -149,6 +207,26 @@ def timings(
     if t2 is None:
         notes.append("no replica-count change was observed after the transition")
 
+    # The stages describe one scale-out. Where the autoscaler moved more than
+    # once, T1 is the first threshold crossing after the transition while the
+    # Pod stamps belong to whichever pod appeared first, and the two need not
+    # be from the same cycle — which is how a `hpa_decision` of -90s arises on
+    # a scenario that scaled up, down and up again. Said plainly here rather
+    # than left for a reader to infer from a stage that looks merely odd.
+    after = [
+        s
+        for s in watcher_samples
+        if s["t"] >= t0 and (s.get("deployments") or {}).get(deployment, {}).get("spec_replicas")
+    ]
+    counts = [s["deployments"][deployment]["spec_replicas"] for s in after]
+    moves = sum(1 for a, b in itertools.pairwise(counts) if a != b)
+    if moves > 1:
+        notes.append(
+            f"the autoscaler moved {moves} times after the transition; these stages "
+            "describe a single scaling transition, so any stage pairing a series "
+            "stamp with a Pod stamp may be pairing different cycles"
+        )
+
     # T3-T6 — the new pod's own lifecycle. "New" means created after the load
     # changed; on a scale-down there is none, and these stay None.
     new_pods = [
@@ -162,6 +240,21 @@ def timings(
     t4 = first.get("scheduled") if first else None
     t5 = first.get("container_started") if first else None
     t6 = first.get("ready") if first else None
+
+    # The Pod lifecycle above is read at the end of the run, so a scenario that
+    # scaled up and back down again has had its evidence deleted: the pods that
+    # served the scale-out no longer exist to be asked. The watcher saw them
+    # while they lived, at its own 2 s cadence — coarser than the Pod's own
+    # stamps, and the only thing left for exactly the flapping scenarios whose
+    # scale-out timing is most worth having.
+    if first is None:
+        t3, t6 = _pod_stamps_from_watcher(watcher_samples, t0, deployment)
+        if t3 is not None:
+            notes.append(
+                "the pods that served this scale-out were gone by the end of the run; "
+                "T3 and T6 come from the state watcher at its 2s cadence, and the "
+                "scheduling and container-start stages it does not record stay absent"
+            )
 
     # T7 — traffic actually served by a new replica.
     #
@@ -210,8 +303,32 @@ def timings(
     if t8 is None and p95_windows:
         notes.append(f"p95 never held under the {slo_p95_s}s SLO for 3 windows")
 
-    def gap(a: float | None, b: float | None) -> float | None:
-        return None if a is None or b is None else b - a
+    # The stamps come off clocks of different resolution: T1 and T2 are read
+    # from a Prometheus range query and so are quantised to its step, while a
+    # Pod's lifecycle is stamped to the whole second. A stage shorter than
+    # either can therefore come out ordered backwards — one scenario published
+    # a `pod_creation` of -1.5s — and a negative duration is not a fast stage,
+    # it is two clocks disagreeing. Published as a number it invites being
+    # averaged, so it is not published as one.
+    tolerance_s = _series_step(metrics_rows) + 1.0
+
+    def gap(a: float | None, b: float | None, name: str = "") -> float | None:
+        if a is None or b is None:
+            return None
+        delta = b - a
+        if delta >= 0:
+            return delta
+        if -delta <= tolerance_s:
+            notes.append(
+                f"{name} completed inside the {tolerance_s:.0f}s the two clocks can "
+                f"resolve (raw {delta:.1f}s), so it is reported as 0 rather than negative"
+            )
+            return 0.0
+        notes.append(
+            f"{name} not established: its stamps are {-delta:.1f}s out of order, more "
+            f"than the {tolerance_s:.0f}s the clocks' resolution explains"
+        )
+        return None
 
     return {
         "stamps": {
@@ -227,16 +344,16 @@ def timings(
         },
         "t7_method": t7_method,
         "latencies_s": {
-            "detection": gap(t0, t1),
-            "hpa_decision": gap(t1, t2),
-            "pod_creation": gap(t2, t3),
-            "scheduling": gap(t3, t4),
-            "container_start": gap(t4, t5),
-            "readiness": gap(t5, t6),
-            "pod_provisioning": gap(t3, t6),
-            "routing": gap(t6, t7),
-            "total_scale_out": gap(t0, t7),
-            "capacity_recovery": gap(t0, t8),
+            "detection": gap(t0, t1, "detection"),
+            "hpa_decision": gap(t1, t2, "hpa_decision"),
+            "pod_creation": gap(t2, t3, "pod_creation"),
+            "scheduling": gap(t3, t4, "scheduling"),
+            "container_start": gap(t4, t5, "container_start"),
+            "readiness": gap(t5, t6, "readiness"),
+            "pod_provisioning": gap(t3, t6, "pod_provisioning"),
+            "routing": gap(t6, t7, "routing"),
+            "total_scale_out": gap(t0, t7, "total_scale_out"),
+            "capacity_recovery": gap(t0, t8, "capacity_recovery"),
         },
         "new_pods": [p["pod"] for p in new_pods],
         "notes": notes,

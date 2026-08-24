@@ -44,6 +44,7 @@ PROMETHEUS_URL = "http://127.0.0.1:30090"
 # Read from the values file so the two cannot disagree.
 LIMITS_FROM_VALUES = {
     "tap_api_cpu_limit_cores": ("tapApi", "resources", "limits", "cpu"),
+    "tap_executor_cpu_limit_cores": ("tapExecutor", "resources", "limits", "cpu"),
     "postgres_cpu_limit_cores": ("postgresql", "resources", "limits", "cpu"),
 }
 
@@ -76,6 +77,7 @@ def limits(cfg: dict) -> dict:
         return node
 
     api_cpu = _quantity(dig(LIMITS_FROM_VALUES["tap_api_cpu_limit_cores"]), 2.0)
+    exec_cpu = _quantity(dig(LIMITS_FROM_VALUES["tap_executor_cpu_limit_cores"]), 2.0)
     pg_cpu = _quantity(dig(LIMITS_FROM_VALUES["postgres_cpu_limit_cores"]), 4.0)
     pool = int((values.get("config") or {}).get("dbPoolMax") or 8)
     workers = int((values.get("tapApi") or {}).get("workers") or 1)
@@ -88,6 +90,12 @@ def limits(cfg: dict) -> dict:
         "tap_api_cpu_limit_cores": min(api_cpu, float(workers)),
         "tap_api_pod_cpu_limit_cores": api_cpu,
         "tap_api_workers": workers,
+        # The chart says it plainly: "one executor runs one query at a time".
+        # So a pod's ceiling is one core however many the cgroup allows — the
+        # same GIL argument as the API's, and the reason the executors read as
+        # pinned at 0.96 while their two-core limit looked like headroom.
+        "tap_executor_cpu_limit_cores": min(exec_cpu, 1.0),
+        "tap_executor_pod_cpu_limit_cores": exec_cpu,
         "postgres_cpu_limit_cores": pg_cpu,
         "db_pool_max_total": pool,
         "tap_api_memory_limit_bytes": 1 << 30,
@@ -132,11 +140,8 @@ def setup(cfg: dict, *, rebuild_images: bool = True) -> dict:
 def ensure_dataset(cfg: dict, names: list[str], out_dir) -> dict:
     """Grow the in-cluster database to each named target."""
     targets = [d for d in cfg["datasets"]["datasets"] if d["name"] in names]
-    forward = cluster.port_forward_database()
-    try:
-        built = dataset_mod.build(cluster.database_dsn(), cfg["datasets"], targets, out_dir)
-    finally:
-        forward.terminate()
+    cluster.port_forward_database()
+    built = dataset_mod.build(cluster.database_dsn(), cfg["datasets"], targets, out_dir)
     return {stat.name: stat.to_json() for stat in built}
 
 
@@ -189,15 +194,30 @@ def measure(
     warmup_s = timing["warmup_seconds"] if warmup_s is None else warmup_s
     measure_s = timing["measure_seconds"] if measure_s is None else measure_s
 
+    # Every phase is timed, starting here. Set after the setup instead, this
+    # missed eight and a half minutes spent establishing a port-forward — the
+    # gap showed up only as silence between two log lines, which is the same
+    # failure the timing was added to prevent.
+    phase_started = time.monotonic()
+
+    def phase(name: str) -> None:
+        nonlocal phase_started
+        log.info("%s: %s took %.1fs", key, name, time.monotonic() - phase_started)
+        phase_started = time.monotonic()
+
     prometheus = prom_mod.Prometheus(PROMETHEUS_URL)
-    forward = cluster.port_forward_database()
+    cluster.port_forward_database()
     conn = pg_mod.connect(cluster.database_dsn())
     guard = guards_mod.Guards(min_free_disk_gb=cfg["hardware"]["enforcement"]["min_free_disk_gb"])
+    phase("setup")
+
     try:
         pg_mod.reset_statements(conn)
         before = pg_mod.snapshot(conn)
         activity_samples = [pg_mod.activity(conn)]
+        phase("statistics snapshot")
 
+        measured_elapsed = float(measure_s)
         watcher_path = run.kube_dir / f"{key}-state.jsonl"
         started = time.time()
         with kube.StateWatcher(watcher_path):
@@ -208,10 +228,19 @@ def measure(
                         workload,
                         steps,
                         mode=request_mode,
+                        max_in_flight=int(
+                            timing.get(
+                                "max_in_flight_async"
+                                if request_mode == "async"
+                                else "max_in_flight",
+                                4096,
+                            )
+                        ),
                     )
                 )
+                measured_elapsed = time.time() - started
             else:
-                recorder = asyncio.run(
+                recorder, measured_elapsed = asyncio.run(
                     load_mod.closed_loop(
                         BASE_URL,
                         workload,
@@ -223,19 +252,22 @@ def measure(
                 )
                 timeline = []
             window_end = time.time()
+        phase("load")
         activity_samples.append(pg_mod.activity(conn))
         after = pg_mod.snapshot(conn)
         statements = pg_mod.statements(conn)
     finally:
         conn.close()
-        forward.terminate()
 
-    # The measured window only: for a closed-loop run that is the part after
-    # the warmup, and Prometheus is queried for exactly that span so a cold
-    # cache cannot leak into the resource figures.
-    measured_from = window_end - (measure_s if steps is None else (window_end - started))
+    # The measured phase as it actually ran, not as it was requested: a worker
+    # only checks the clock between requests, so a phase can overrun, and
+    # dividing by the requested duration would overstate throughput by exactly
+    # the overrun. Prometheus is queried for that same span, so a cold cache
+    # during warmup cannot leak into the resource figures.
+    measured_from = window_end - measured_elapsed
     metrics_rows, coverage = prometheus.collect(measured_from - 2, window_end + 2)
     prometheus.close()
+    phase("prometheus collection")
 
     prometheus_parquet = run.metrics_dir / f"{key}.parquet"
     prom_mod.Prometheus(PROMETHEUS_URL).write(metrics_rows, prometheus_parquet)
@@ -256,25 +288,30 @@ def measure(
     resources = aggregate_resources(metrics_rows)
     pg_summary = pg_mod.summarise(delta)
 
+    dropped_arrivals = sum(e.get("dropped_arrivals", 0) for e in timeline)
     guard_results = guard.evaluate(
         recorder=recorder,
         prometheus_report=coverage,
         pod_timings=pod_timings,
         metrics_rows=metrics_rows,
+        dropped_arrivals=dropped_arrivals,
     )
     failed = [r for r in guard_results if not r.ok]
     for failure in failed:
         run.invalidate(f"{key}: {failure.name}", {"detail": failure.detail, **failure.measured})
 
     limits_map = limits(cfg)
-    # Per-replica GIL ceiling times the replicas actually serving.
-    api_limit = limits_map["tap_api_cpu_limit_cores"] * max(replicas or 1, 1)
+    # The per-pod ceilings go in as they are: classify() multiplies each of
+    # them by the replicas the run actually had ready, which is the only count
+    # that is also right when an autoscaler moved it mid-window. The same
+    # count is what the reported CPU fraction has to be against.
+    api_limit = limits_map["tap_api_cpu_limit_cores"] * bottleneck.fleet_replicas(metrics_rows)
     verdicts = bottleneck.classify(
         metrics_rows=metrics_rows,
         summary=http,
         pg_summary=pg_summary,
         recorder_cpu_peak=recorder.generator_cpu_peak,
-        limits={**limits_map, "tap_api_cpu_limit_cores": api_limit},
+        limits=limits_map,
     )
 
     result = {
@@ -288,6 +325,7 @@ def measure(
         "repetition": repetition,
         "request_mode": request_mode,
         "window_seconds": window,
+        "measured_phase_overrun_s": measured_elapsed - float(measure_s),
         "started_at": started,
         "ended_at": window_end,
         "http": http,
@@ -302,6 +340,11 @@ def measure(
         "postgres": pg_summary,
         "postgres_activity": activity_samples,
         "coordinated_omission": stats_mod.coordinated_omission(recorder.samples),
+        # Alongside the lateness above, because the two are the same question
+        # asked of the arrivals that went out late and the arrivals that never
+        # went out at all. Only the first is visible in the latencies.
+        "arrivals_dropped": dropped_arrivals,
+        "unoffered_fraction": dropped_arrivals / max(len(recorder.samples) + dropped_arrivals, 1),
         "prometheus_coverage": coverage,
         "guards": [{"name": r.name, "ok": r.ok, "detail": r.detail} for r in guard_results],
         "bottleneck": [
@@ -440,16 +483,230 @@ def sustainable_capacity(results: list[dict], slo_p95_s: float) -> float | None:
     as multiples of an unusable number would make every one of them a test of
     overload rather than of scaling.
     """
-    usable = [
-        r
-        for r in results
-        if r.get("replicas") in (1, None)
-        and (r.get("http") or {}).get("error_fraction", 1.0) <= 0.01
-        and ((r.get("http") or {}).get("latency") or {}).get("p95_s", 1e9) <= slo_p95_s
-    ]
+    usable = [r for r in results if r.get("replicas") in (1, None) and _within_slo(r, slo_p95_s)]
     if not usable:
         return None
     return max(r["http"]["successful_rps"] for r in usable)
+
+
+def _within_slo(result: dict, slo_p95_s: float) -> bool:
+    """A measurement the service passed, and that is a measurement at all."""
+    if result.get("invalid"):
+        return False
+    http = result.get("http") or {}
+    return (
+        http.get("error_fraction", 1.0) <= 0.01
+        and (http.get("latency") or {}).get("p95_s", 1e9) <= slo_p95_s
+    )
+
+
+def bracketed_capacity(
+    results: list[dict], *, kind: str, replicas: int, slo_p95_s: float
+) -> dict | None:
+    """The most a replica count sustains, and whether that is its ceiling.
+
+    A capacity is only a capacity if the ladder went past it: the highest rate
+    the service met says nothing about where it stops unless some *valid*
+    higher rung is known to have failed. Without that, the number is the
+    largest rate anybody happened to offer.
+
+    This matters because the ratio of two such numbers looks exactly like a
+    scaling efficiency. This run offered one replica 115 rps and eight
+    replicas 231 rps, both met in full with a p95 under 60 ms, and the ratio
+    would have been published as 25% scaling efficiency at eight replicas —
+    a claim about a ceiling neither point came near.
+    """
+    at = [r for r in results if r.get("kind") == kind and r.get("replicas") == replicas]
+    met = [r for r in at if _within_slo(r, slo_p95_s)]
+    if not met:
+        return None
+    best = max(met, key=lambda r: r["http"]["successful_rps"])
+    offered = best.get("offered_rps") or 0.0
+    # A higher rung that the service failed, rather than one the generator
+    # failed to offer: an invalid point brackets nothing.
+    above = [
+        r
+        for r in at
+        if (r.get("offered_rps") or 0.0) > offered
+        and not r.get("invalid")
+        and not _within_slo(r, slo_p95_s)
+    ]
+    return {
+        "rps": best["http"]["successful_rps"],
+        "offered_rps": offered,
+        "key": best["key"],
+        "bracketed": bool(above),
+        "next_rung_measured": bool(
+            [r for r in at if (r.get("offered_rps") or 0.0) > offered and not r.get("invalid")]
+        ),
+    }
+
+
+def _pods(n: int) -> str:
+    return "one replica" if n == 1 else f"{n} replicas"
+
+
+def keda_timings_from_artefacts(run_dir, entry: dict, key: str, metrics_rows: list[dict]) -> dict:
+    """A KEDA scenario's stage timings, re-derived from what the run stored.
+
+    The stamps come from four sources — the scaler's series, the HPA's, the
+    Pods' lifecycle and the request samples — and all four are written to the
+    run directory. So a correction to how the stages are computed can reach the
+    scenarios that were already measured, which is the whole reason the
+    artefacts are kept.
+    """
+    import json
+    import pathlib
+    from types import SimpleNamespace
+
+    import pyarrow.parquet as pq
+
+    run_dir = pathlib.Path(run_dir)
+    state = run_dir / "kubernetes" / f"{key}-state.jsonl"
+    pods = run_dir / "kubernetes" / f"{key}-pods.json"
+    sample_path = run_dir / "samples" / f"{key}.parquet"
+    if not (state.exists() and pods.exists() and sample_path.exists()):
+        return {}
+    if entry.get("t_transition") is None or entry.get("threshold") is None:
+        return {}
+    watcher = [json.loads(line) for line in state.read_text().splitlines() if line.strip()]
+    # measure() records both deployments' Pods; the executors are the ones the
+    # ScaledObject moves.
+    pod_timings = [p for p in json.loads(pods.read_text()) if p.get("component") == "tap-executor"]
+    columns = pq.read_table(
+        sample_path, columns=["t_start", "latency_s", "status", "error"]
+    ).to_pydict()
+    samples = [
+        SimpleNamespace(t_start=t, latency_s=lat, status=st, error=err)
+        for t, lat, st, err in zip(
+            columns["t_start"],
+            columns["latency_s"],
+            columns["status"],
+            columns["error"],
+            strict=True,
+        )
+    ]
+    return keda_analysis.timings(
+        t0=entry["t_transition"],
+        metrics_rows=metrics_rows,
+        watcher_samples=watcher,
+        pod_timings=pod_timings,
+        samples=samples,
+        deployment="skao-tap-tap-executor",
+        threshold=float(entry["threshold"]),
+        slo_p95_s=float(entry.get("slo_p95_s") or 2.0),
+        scale_up=keda_analysis.scaling_up(entry.get("steps") or []),
+    )
+
+
+def _lateness_from_samples(run_dir, key: str) -> dict:
+    """Arrival lateness rebuilt from a measurement's stored samples.
+
+    For measurements saved without their `coordinated_omission` block — the
+    KEDA scenarios were trimmed to their scenario fields before being written —
+    the per-request offered and start times are still in the samples Parquet,
+    so the lateness the guard needs can be recovered rather than re-measured.
+    """
+    import pathlib
+
+    import pyarrow.parquet as pq
+
+    path = pathlib.Path(run_dir) / "samples" / f"{key}.parquet"
+    if not path.exists():
+        return {}
+    table = pq.read_table(path, columns=["t_start", "t_offered"]).to_pydict()
+    late = sorted(
+        start - offered
+        for start, offered in zip(table["t_start"], table["t_offered"], strict=True)
+        if offered and offered > 0
+    )
+    if not late:
+        return {}
+    return {
+        "p95_lateness_s": late[int(0.95 * (len(late) - 1))],
+        "max_lateness_s": late[-1],
+        "samples": len(late),
+        "recovered_from_samples": True,
+    }
+
+
+def replica_capacities(results: list[dict], slo_p95_s: float) -> list[dict]:
+    """Per replica count: the highest rate met, and whether it is a ceiling.
+
+    Written into the summary so the report renders what the analysis decided
+    rather than deciding it again from the rows — the per-replica efficiency
+    column is the same claim as the headline and must not be able to disagree
+    with it.
+    """
+    counts = sorted(
+        {
+            r["replicas"]
+            for r in results
+            if r.get("kind") == "fixed_replicas" and r.get("replicas") is not None
+        }
+    )
+    out = []
+    for n in counts:
+        found = bracketed_capacity(results, kind="fixed_replicas", replicas=n, slo_p95_s=slo_p95_s)
+        if found:
+            out.append({"replicas": n, **found})
+    return out
+
+
+def capacity_headline(results: list[dict], slo_p95_s: float) -> dict:
+    """C1 and replica scaling efficiency, each qualified by what bracketed it.
+
+    Only a ratio of two ceilings is an efficiency, and only a rate the service
+    was pushed past is a capacity. Where the ladder bracketed neither, the
+    entry says so — no number for the efficiency, an explicit "lower bound" on
+    C1 — because a headline carrying a null gets read and a missing headline
+    does not.
+    """
+    out: dict = {}
+    c1 = sustainable_capacity(results, slo_p95_s)
+    if c1:
+        # Qualified only when the evidence for C1 is an offered-rate ladder that
+        # never failed. A concurrency sweep is bracketed by construction — it
+        # stops when two saturation signals agree — so its C1 needs no caveat,
+        # and attaching one would be its own false statement.
+        at_one = bracketed_capacity(results, kind="fixed_replicas", replicas=1, slo_p95_s=slo_p95_s)
+        qualifier = (
+            " — a lower bound, since no valid higher rate failed"
+            if at_one and not at_one["bracketed"]
+            else ""
+        )
+        out["sustainable single-replica capacity (C1)"] = {
+            "value": round(c1, 1),
+            "evidence": "highest successful rps over valid measurements with p95 within "
+            f"the {slo_p95_s}s SLO and errors under 1%{qualifier}",
+        }
+    for kind, label, top_n in (("fixed_replicas", "replica scaling efficiency at 8", 8),):
+        one = bracketed_capacity(results, kind=kind, replicas=1, slo_p95_s=slo_p95_s)
+        top = bracketed_capacity(results, kind=kind, replicas=top_n, slo_p95_s=slo_p95_s)
+        if not (one and top):
+            continue
+        if one["bracketed"] and top["bracketed"] and one["rps"]:
+            out[label] = {
+                "value": round(top["rps"] / (top_n * one["rps"]), 3),
+                "evidence": f"{top['rps']:.1f} rps on {_pods(top_n)} against "
+                f"{one['rps']:.1f} on one, each the last rate met before a "
+                "measured failure",
+            }
+            continue
+        open_ended = [
+            f"{_pods(n)} served every one of the {c['offered_rps']:.0f} rps offered ({c['key']})"
+            for n, c in ((1, one), (top_n, top))
+            if not c["bracketed"]
+        ]
+        out[label] = {
+            "value": None,
+            "evidence": "not determined: "
+            + "; ".join(open_ended)
+            + ". An efficiency needs a ceiling at each replica count, and no valid "
+            "higher rung failed — every rung above is either unmeasured or was "
+            "marked invalid.",
+        }
+    return out
 
 
 def fixed_replica_scaling(run, cfg: dict, dataset: str, entries: list, c1: float) -> list[dict]:
@@ -531,6 +788,9 @@ def keda_scenarios(
                 steps.append(
                     load_mod.Step(seconds=step["seconds"], rate=c1 * step["rate_multiple"])
                 )
+        step_records = [
+            {"seconds": s.seconds, "rate": s.rate, "rate_end": s.rate_end} for s in steps
+        ]
         workload = load_mod.Workload(entries, mix, seed=4000)
         result = measure(
             run,
@@ -591,9 +851,38 @@ def keda_scenarios(
             deployment="skao-tap-tap-executor",
             threshold=threshold,
             slo_p95_s=slo,
+            scale_up=keda_analysis.scaling_up(step_records),
         )
         behaviour = keda_analysis.scale_behaviour(watcher_samples, "skao-tap-tap-executor")
+        # Classified again with the stage breakdown, which does not exist until
+        # here. KEDA_SCALE_LAG is the one class this family is for and
+        # classify() cannot reach it without the timings, so a scenario whose
+        # latency was entirely the scaling delay came out UNKNOWN — 566-second
+        # p95 on a fleet where nothing was saturated, and no name for it.
+        verdicts = bottleneck.classify(
+            metrics_rows=metrics_rows,
+            summary=result.get("http") or {},
+            pg_summary=result.get("postgres") or {},
+            recorder_cpu_peak=result.get("generator_cpu_peak") or 0.0,
+            limits=limits(cfg),
+            keda=timings,
+        )
+        result["bottleneck"] = [
+            {
+                "classification": v.classification,
+                "confidence": v.confidence,
+                "evidence": v.evidence,
+                "explanation": v.explanation,
+            }
+            for v in verdicts
+        ]
+        # The scenario's own analysis *on top of* the measurement, not instead
+        # of it. Listing the fields to keep dropped the guards, the `invalid`
+        # flag and the coordinated-omission block, so a KEDA scenario could not
+        # be marked invalid however badly the run had gone: the guards were
+        # computed and then thrown away before anything read them.
         entry = {
+            **result,
             "id": scenario["id"],
             "description": scenario["description"],
             "steps": [
@@ -606,8 +895,6 @@ def keda_scenarios(
             "t_transition": t0,
             "timings": timings,
             "behaviour": behaviour,
-            "http": result["http"],
-            "bottleneck": result["bottleneck"],
         }
         out.append(entry)
         run.mark_done(key, {"result": entry})
@@ -653,13 +940,192 @@ def capture_plans(run, cfg: dict, entries: list) -> dict:
     # A second entry per parameterised class, so a flag that depends on the
     # parameters (an empty cone versus a full one) has a chance to show up.
     representative += [items[1] for items in by_class.values() if len(items) > 1]
-    forward = cluster.port_forward_database()
+    cluster.port_forward_database()
+    conn = pg_mod.connect(cluster.database_dsn())
     try:
-        conn = pg_mod.connect(cluster.database_dsn())
         sizes = pg_mod.table_sizes(conn)
         plans = pg_mod.explain(conn, representative, sizes, adql_to_postgresql)
-        conn.close()
     finally:
-        forward.terminate()
+        conn.close()
     tally = pg_mod.write_plans(plans, run.explain_dir)
     return tally
+
+
+def reclassify(run_dir, cfg: dict) -> dict:
+    """Recompute the derived analysis of a finished run from its artefacts.
+
+    Every measurement keeps its PostgreSQL snapshots, its deltas and its
+    Prometheus series, precisely so that a mistake in the analysis can be
+    corrected without re-measuring anything. This is that path: it re-derives
+    the database summary and the bottleneck classification and leaves the
+    measurements — samples, percentiles, timings — untouched.
+
+    The previous summary is kept beside the new one rather than replaced. A run
+    directory is append-only by design, and "the analysis changed" is exactly
+    the kind of thing a reader needs to be able to see.
+    """
+    import json
+    import pathlib
+    import shutil
+    import time as _time
+
+    import pyarrow.parquet as pq
+
+    run_dir = pathlib.Path(run_dir)
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    shutil.copy2(summary_path, run_dir / f"summary.superseded-{int(_time.time())}.json")
+
+    limits_map = limits(cfg)
+    # Guard failures the run itself recorded, keyed by measurement. These are
+    # the floor: re-judging may add a failure but must never clear one whose
+    # input the summary no longer carries, or a rerun of the analysis would
+    # quietly pronounce a rejected measurement sound. They also carry the
+    # numbers the verdict was reached on, which is how a scenario saved without
+    # its load timeline can still be re-judged on abandoned arrivals.
+    recorded: dict[str, dict[str, dict]] = {}
+    invalid_path = run_dir / "invalid.json"
+    if invalid_path.exists():
+        for reason in json.loads(invalid_path.read_text()).get("reasons") or []:
+            text = str(reason.get("reason") or "")
+            measurement, _, guard = text.partition(": ")
+            if measurement and guard:
+                recorded.setdefault(measurement, {})[guard.strip()] = reason
+
+    changed = []
+    # The autoscaling scenarios are analysis like any other and were being
+    # skipped: they live under "keda" rather than "runs", so a correction to the
+    # rules reached every family except the one the run was for. They key off
+    # `id` rather than `key`.
+    measurements = [(e, e["key"]) for e in summary.get("runs") or []] + [
+        (e, e.get("key") or f"keda-{e['id']}") for e in summary.get("keda") or []
+    ]
+    for entry, key in measurements:
+        delta_path = run_dir / "postgres" / f"{key}-delta.json"
+        metrics_path = run_dir / "metrics" / f"{key}.parquet"
+        if not delta_path.exists():
+            continue
+        pg_summary = pg_mod.summarise(json.loads(delta_path.read_text()))
+        metrics_rows = []
+        if metrics_path.exists():
+            table = pq.read_table(metrics_path).to_pydict()
+            metrics_rows = [
+                {"metric": m, "labels": lab, "t": t, "value": v}
+                for m, lab, t, v in zip(
+                    table["metric"],
+                    table["labels"],
+                    table["t"],
+                    table["value"],
+                    strict=True,
+                )
+            ]
+        # Timings before the classification, because the classification needs
+        # them: KEDA_SCALE_LAG is the one class this family exists to find and
+        # it cannot fire without the stage breakdown.
+        if "timings" in entry:
+            redone = keda_timings_from_artefacts(run_dir, entry, key, metrics_rows)
+            if redone:
+                entry["timings"] = redone
+        verdicts = bottleneck.classify(
+            metrics_rows=metrics_rows,
+            summary=entry.get("http") or {},
+            pg_summary=pg_summary,
+            recorder_cpu_peak=entry.get("generator_cpu_peak") or 0.0,
+            limits=limits_map,
+            keda=entry.get("timings"),
+        )
+        # The two client-fidelity rules are re-judged here as well: a rule
+        # written after a run can still be applied to it, and a run measured
+        # before either rule existed is exactly the run that needs them.
+        omission = entry.get("coordinated_omission") or _lateness_from_samples(run_dir, key)
+        was_recorded = recorded.get(key, {})
+        dropped = entry.get("arrivals_dropped")
+        if dropped is None and "load_timeline" in entry:
+            dropped = sum(e.get("dropped_arrivals", 0) for e in entry["load_timeline"] or [])
+        if dropped is None:
+            # Not in the summary, but the run wrote the count into the failure
+            # it recorded at the time.
+            dropped = was_recorded.get("load_generator_offered_the_rate", {}).get(
+                "arrivals_dropped"
+            )
+        issued = int(omission.get("samples") or (entry.get("http") or {}).get("requests") or 0)
+        if dropped is not None:
+            entry["arrivals_dropped"] = dropped
+            entry["unoffered_fraction"] = dropped / max(issued + dropped, 1)
+        schedule = guards_mod.schedule_verdicts(
+            lateness_p95_s=omission.get("p95_lateness_s"),
+            lateness_max_s=omission.get("max_lateness_s"),
+            arrivals_dropped=dropped or 0,
+            arrivals_issued=issued,
+        )
+        judged = {v.name for v in schedule}
+        kept = [g for g in entry.get("guards") or [] if g["name"] not in judged]
+        guard_records = kept + [{"name": v.name, "ok": v.ok, "detail": v.detail} for v in schedule]
+        # A failure the run recorded and this pass cannot re-derive is carried
+        # forward rather than dropped. Re-running the analysis must not be able
+        # to turn a rejected measurement into an accepted one by forgetting why
+        # it was rejected.
+        known = {g["name"] for g in guard_records}
+        guard_records += [
+            {"name": name, "ok": False, "detail": reason.get("detail", "recorded during the run")}
+            for name, reason in was_recorded.items()
+            if name not in known
+        ]
+        # Only claim validity where something judged it. An entry with no guards
+        # at all — the shape the KEDA scenarios were saved in — must not come
+        # out of here asserted valid on no evidence.
+        if guard_records:
+            entry["guards"] = guard_records
+            entry["invalid"] = any(not g["ok"] for g in guard_records)
+
+        was = (entry.get("bottleneck") or [{}])[0].get("classification")
+        entry["postgres"] = pg_summary
+        # Re-derived with the verdicts, because it shares their denominator.
+        resources = entry.get("resources") or {}
+        if resources:
+            fleet = limits_map["tap_api_cpu_limit_cores"] * bottleneck.fleet_replicas(metrics_rows)
+            resources["tap_api_cpu_fraction_of_limit"] = (
+                resources.get("tap_api_cpu_cores_p95", 0.0) / fleet
+            )
+        entry["bottleneck"] = [
+            {
+                "classification": v.classification,
+                "confidence": v.confidence,
+                "evidence": v.evidence,
+                "explanation": v.explanation,
+            }
+            for v in verdicts
+        ]
+        now = verdicts[0].classification if verdicts else None
+        if was != now:
+            changed.append((key, was, now))
+
+    tally: dict[str, dict] = {}
+    for entry, _ in measurements:
+        for verdict in entry.get("bottleneck") or []:
+            slot = tally.setdefault(
+                verdict["classification"],
+                {"count": 0, "explanation": verdict["explanation"]},
+            )
+            slot["count"] += 1
+    summary["bottleneck_tally"] = tally
+    # The headline is derived from validity, so re-judging validity has to
+    # re-derive it. Leaving it would keep publishing a scaling efficiency that
+    # the reclassified measurements no longer support.
+    entries = summary.get("runs") or []
+    slo_p95_s = cfg["scenarios"]["slo"]["p95_seconds"]
+    headline = summary.get("headline") or {}
+    headline.update(capacity_headline(entries, slo_p95_s))
+    summary["headline"] = headline
+    summary["replica_capacity"] = replica_capacities(entries, slo_p95_s)
+    summary["sustainable_capacity_c1"] = sustainable_capacity(entries, slo_p95_s)
+    summary["reanalysed_at"] = _time.time()
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True, default=str, allow_nan=False)
+    )
+    for key, was, now in changed:
+        log.info("reclassified %s: %s -> %s", key, was, now)
+    # Over everything re-judged, not just `runs` — counting the numerator over
+    # both lists and the denominator over one printed "4 of 3".
+    log.info("%d of %d measurements changed classification", len(changed), len(measurements))
+    return summary
