@@ -39,17 +39,28 @@ def configure_logging(verbose: bool) -> None:
 
 
 def build_corpus(cfg: dict, datasets: dict) -> list:
-    """The corpus, sized to the largest dataset actually built.
+    """One corpus for the whole run, sized to the *smallest* dataset in it.
 
-    Parameters are drawn from the observation index space, so the corpus has to
-    know how far that space goes — a corpus built for 8 million observations
-    against a database holding 300,000 would spend most of its lookups missing.
+    Sized to the smallest, and built once, for the same reason: a size sweep
+    has to issue the identical workload at every size or it is not measuring
+    size. Rebuilding per dataset — which this did — gave each tier a different
+    set of queries, so "throughput versus database size" compared different
+    workloads and the recorded corpus hash described only the last one.
+
+    The smallest works for all of them because generation is a prefix: a
+    database grown to 25 GiB contains every row the 2 GiB one had, with the
+    same identifiers at the same coordinates. So every lookup and every cone
+    centre in the corpus exists at every size, and what changes between tiers
+    is how much *other* data surrounds it — which is the thing being measured.
+    Sizing to the largest instead would make most identifiers absent from the
+    smaller tiers and turn the sweep into a comparison of miss rates.
     """
-    observations = max(
-        (info.get("observations_generated") or 0 for info in datasets.values()),
-        default=1,
-    )
-    return corpus_mod.build(cfg["scenarios"], cfg["datasets"], observations)
+    counts = [
+        info.get("observations_generated") or 0
+        for info in datasets.values()
+        if info.get("observations_generated")
+    ]
+    return corpus_mod.build(cfg["scenarios"], cfg["datasets"], min(counts, default=1))
 
 
 def finalise(
@@ -215,7 +226,11 @@ def cmd_db_scaling(args) -> int:
         # Grown in order: the database is one database, and each tier is the
         # previous one with more rows in it.
         datasets |= runner.ensure_dataset(cfg, [name], run.path / "datasets")
-        entries = build_corpus(cfg, datasets)
+        if not entries:
+            # Built once, from the first and therefore smallest tier, so every
+            # dataset in this run is measured with the identical workload.
+            entries = build_corpus(cfg, datasets)
+            run.write_json("corpus.json", [e.as_dict() for e in entries])
         results += runner.concurrency_sweep(run, cfg, name, entries, quick=args.quick)
         results += runner.stress_classes(run, cfg, name, entries)
         plan_flags = runner.capture_plans(run, cfg, entries)
@@ -286,7 +301,8 @@ def cmd_full(args) -> int:
     plan_flags: dict = {}
     for name in names:
         datasets |= runner.ensure_dataset(cfg, [name], run.path / "datasets")
-        entries = build_corpus(cfg, datasets)
+        if not entries:
+            entries = build_corpus(cfg, datasets)
         results += runner.concurrency_sweep(run, cfg, name, entries)
         results += runner.stress_classes(run, cfg, name, entries)
         plan_flags = runner.capture_plans(run, cfg, entries)

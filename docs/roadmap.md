@@ -69,6 +69,32 @@ because that is a healthy service under load — from an unreachable database.
 Both are exempt from authentication, because a kubelet has no token and gating
 them would have meant that enabling auth killed every pod.
 
+### 2026-08-24 — the size sweep was comparing different workloads (fixed)
+
+The corpus was rebuilt for each dataset inside the sweep, sized to the
+observation count of the tier being measured. So D1, D2 and D3 were each
+measured with a *different* set of queries, and the corpus hash recorded in the
+provenance described only the last one built — the field that exists to prove
+two results are comparable was quietly asserting something false.
+
+It shows up in the numbers: at four concurrent clients D3 (25 GiB) served ~209
+requests/s against D2's (10 GiB) 196, which is not a thing 2.5x the data does.
+
+Now built once per run and sized to the *smallest* tier. That works because
+generation is a prefix — a database grown to 25 GiB contains every row the
+2 GiB one had, at the same identifiers and coordinates — so every lookup and
+cone centre in the corpus exists at every size, and what changes between tiers
+is only how much other data surrounds it. Sizing to the largest instead would
+leave most identifiers absent from the smaller tiers and turn the sweep into a
+comparison of miss rates.
+
+**What this qualifies.** Cross-*size* throughput comparisons taken before this
+fix — including the published "throughput versus database size" — compare
+different workloads and should not be read as a size effect. Everything
+measured *within* one dataset stands: saturation points, bottleneck
+classifications, cache hit ratios, per-class latencies and the before/after of
+the translation fix, which was measured on D1 both times.
+
 ### 2026-08-24 — D3 is where the working set stops fitting
 
 D3 (25.28 GiB, 7.4M ObsCore rows) against a 6 GiB PostgreSQL is the first size
