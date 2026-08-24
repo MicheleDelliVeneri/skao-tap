@@ -40,11 +40,17 @@ class Guards:
         generator_cpu_ceiling: float = 0.80,
         swap_growth_bytes: int = 512 * 1024 * 1024,
         prometheus_coverage_floor: float = 0.5,
+        max_arrival_lateness_s: float = 5.0,
     ) -> None:
         self.min_free_disk_gb = min_free_disk_gb
         self.generator_cpu_ceiling = generator_cpu_ceiling
         self.swap_growth_bytes = swap_growth_bytes
         self.prometheus_coverage_floor = prometheus_coverage_floor
+        # Above this the open-loop generator was not offering the rate it
+        # claims, so the latencies belong to its queue rather than to the
+        # service. Five seconds is generous: it tolerates a slow start without
+        # tolerating a run that measured the client.
+        self.max_arrival_lateness_s = max_arrival_lateness_s
         self.before = self._machine()
 
     @staticmethod
@@ -109,6 +115,29 @@ class Guards:
                     {"generator_cpu_peak": peak},
                 )
             )
+
+        # -- the generator kept to its own schedule --------------------------
+        # Open loop only. If arrivals went out late, every latency after that
+        # is measured from a start time the service was not responsible for:
+        # one run reported an 84 requests/s throughput and a 100-second p95
+        # while the service answered all 29,407 requests successfully and the
+        # generator was 88 seconds behind. That is a measurement of the client.
+        if recorder is not None:
+            lateness = [s.t_start - s.t_offered for s in recorder.samples if s.t_offered > 0]
+            if lateness:
+                lateness.sort()
+                p95 = lateness[int(0.95 * (len(lateness) - 1))]
+                results.append(
+                    GuardResult(
+                        "load_generator_kept_schedule",
+                        p95 <= self.max_arrival_lateness_s,
+                        f"arrivals were {p95:.1f}s late at p95 (limit "
+                        f"{self.max_arrival_lateness_s:.1f}s); latencies measured "
+                        "from an issue time the generator missed describe the "
+                        "client, not the service",
+                        {"arrival_lateness_p95_s": p95, "arrival_lateness_max_s": lateness[-1]},
+                    )
+                )
 
         # -- monitoring completeness -----------------------------------------
         if prometheus_report is not None:

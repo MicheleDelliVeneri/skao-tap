@@ -69,6 +69,40 @@ because that is a healthy service under load — from an unreachable database.
 Both are exempt from authentication, because a kubelet has no token and gating
 them would have meant that enabling auth killed every pod.
 
+### 2026-08-24 — overload sheds mostly cleanly, but not entirely
+
+Fixed-replica scaling on D2, four replicas, six times C1 offered (about 1,380
+requests/s against a service that sustains ~230 per replica): of 12,421
+requests, **7,294 were refused with 503** — the pool-timeout path working as
+designed, a fast refusal rather than a held connection — but **4,005 failed
+with a transport-level `ReadError` and 753 with `ReadTimeout`**. A third of the
+load was dropped at the socket rather than refused with an answer.
+
+A 503 with `Retry-After` is a client's cue to back off; a reset connection is
+not, and it is indistinguishable from the service having crashed. Worth
+tracing: most likely the accept queue overflowing, since the pods neither
+restarted nor were OOM-killed. Graceful shedding is the difference between an
+overloaded service and an unavailable one.
+
+Note the non-monotonicity: eight times C1 on the same four replicas ran clean
+(32,391 of 32,590 successful, 197 refusals). So this is not a simple function
+of offered rate, and the 6x point needs repeating before its cause is asserted.
+
+### 2026-08-24 — a guard was missing for the generator's own schedule (fixed)
+
+One measurement reported 84 requests/s with a 100-second p95 and was published
+as a service result. It was not one: the service answered all 29,407 requests
+successfully, and the **generator was 88 seconds behind its own arrival
+schedule**, so every latency was measured from an issue time it had missed.
+Textbook coordinated omission, in the direction that makes the service look
+bad.
+
+The lateness was already computed and stored per measurement — nothing checked
+it. There is now a guard: if arrivals are more than five seconds late at p95,
+the run is marked, on the same principle as the load-generator CPU guard. A
+number that describes the client must not be presentable as a number about the
+service.
+
 ### 2026-08-24 — the aggregate query is the case for admission control
 
 Q13 (`GROUP BY` over the whole ObsCore table) across the three sizes, four
