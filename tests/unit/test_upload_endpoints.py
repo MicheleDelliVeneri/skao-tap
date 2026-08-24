@@ -125,7 +125,13 @@ def test_async_upload_persisted_and_executed(client, fake_db, results_dir):
     assert os.path.isfile(os.path.join(results_dir, job_id, "result.vot"))
     creates = [s for s in fake_db.statements if s.startswith("CREATE TEMP TABLE tap_upload_t1")]
     assert creates
-    executed = [s for s in fake_db.statements if s.startswith("SELECT * FROM (")]
+    # the executed statement leads with the job tag, which is what the abort
+    # path uses to recognise it in pg_stat_activity
+    executed = [
+        s
+        for s in fake_db.statements
+        if s.startswith(f"/* tap_job_{job_id} */") and "SELECT * FROM (" in s
+    ]
     assert "pg_temp.tap_upload_t1" in executed[-1]
 
 

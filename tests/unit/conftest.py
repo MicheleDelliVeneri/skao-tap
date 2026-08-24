@@ -38,14 +38,15 @@ class FakeResult:
         return self._rows[0] if self._rows else None
 
 
-class FakeServerCursor:
-    """Named (server-side) cursor streaming the configured result set."""
+class FakeStreamCursor:
+    """Cursor streaming the configured result set, psycopg-style: the query
+    is sent (and any error raised) on the generator's first iteration, and
+    ``description`` is populated with the first exchange."""
 
     def __init__(self, db):
         self._db = db
-        self.itersize = None
         self.description = None
-        self._rows = []
+        self.stream_chunk_rows = None
 
     def __enter__(self):
         return self
@@ -58,10 +59,11 @@ class FakeServerCursor:
         if self._db.result_error is not None:
             raise self._db.result_error
         self.description = self._db.result_description
-        self._rows = list(self._db.result_rows)
 
-    def __iter__(self):
-        return iter(self._rows)
+    def stream(self, sql, params=None, *, size=1):
+        self.stream_chunk_rows = size
+        self.execute(sql, params)
+        yield from list(self._db.result_rows)
 
 
 class FakeConnection:
@@ -73,7 +75,7 @@ class FakeConnection:
         yield self
 
     def cursor(self, name=None):
-        return FakeServerCursor(self._db)
+        return FakeStreamCursor(self._db)
 
     def commit(self):
         pass
@@ -120,7 +122,7 @@ class FakeDB:
             ("source_id", None, "meta.id", "source identifier"),
             ("ra", "deg", "pos.eq.ra", "right ascension"),
         ]
-        # result set produced by named-cursor queries
+        # result set produced by streamed result queries
         self.result_description = [FakeColumn("source_id", 20), FakeColumn("ra", 701)]
         self.result_rows = [(1, 62.1), (2, 62.2)]
         self.result_error: Exception | None = None

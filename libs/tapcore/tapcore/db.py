@@ -2,6 +2,7 @@
 
 import contextlib
 
+import psycopg
 from psycopg_pool import ConnectionPool
 
 from .config import settings
@@ -54,3 +55,64 @@ def close_pool() -> None:
     if _pool is not None:
         _pool.close()
         _pool = None
+
+
+_NO_ROW = object()
+
+
+class StreamedRows:
+    """Rows from a query executed as a plain streamed statement.
+
+    The result queries used to run on named (DECLARE'd) cursors. That kept
+    memory flat, but it also decided the plan: PostgreSQL never parallelises
+    a cursor's query, and ``cursor_tuple_fraction`` biases the planner toward
+    fast-start plans on the assumption that the client will stop reading
+    early — an assumption that is always false here, because the service
+    reads every result to MAXREC + 1. On a full-table aggregate the two
+    together cost several times the aggregate itself.
+
+    ``Cursor.stream()`` keeps the flat memory profile — rows arrive in
+    server-side chunks and are yielded one at a time, and psycopg reads the
+    socket only when the consumer asks for more, so a slow reader stalls the
+    server through TCP backpressure instead of buffering — while the
+    statement is planned as what it is: a plain query, read to the end, free
+    to use parallel workers.
+
+    Construction sends the query and waits for the first chunk, so the
+    cursor's ``description`` is populated before any row is consumed, for an
+    empty result too. The connection is busy until the rows are exhausted or
+    ``close()`` is called; close cancels the statement and drains what
+    already arrived, so an abandoned stream (MAXREC overflow, a client that
+    disconnected mid-download) hands back a reusable connection. Callers
+    wrap it in ``contextlib.closing``.
+
+    One semantic shift from the cursor days: ``statement_timeout`` now bounds
+    the whole statement, production and delivery both, where it used to bound
+    each FETCH. For a service timeout that is the honest meaning — "the sync
+    query may take this long" — rather than a bound no one chose on the
+    per-batch fetch.
+    """
+
+    def __init__(self, cur, sql: str, chunk_rows: int):
+        # chunked retrieval needs libpq 17+; older builds fall back to
+        # row-by-row, which is correct and merely chattier
+        size = chunk_rows if psycopg.capabilities.has_stream_chunked() else 1
+        self._gen = cur.stream(sql, size=size)
+        self._first = next(self._gen, _NO_ROW)
+        if self._first is _NO_ROW and cur.description is None:
+            # A zero-row stream finishes without ever exposing the row
+            # description, and an empty result still needs its columns — an
+            # empty VOTable carries its FIELDs. Recover them with a LIMIT 0
+            # probe, which parses and plans but never pulls a row from its
+            # child plan, so the query's work is not paid twice.
+            probe = sql.rstrip().rstrip(";")
+            cur.execute(f"SELECT * FROM ({probe}) AS empty_result LIMIT 0")
+
+    def __iter__(self):
+        if self._first is not _NO_ROW:
+            first, self._first = self._first, _NO_ROW
+            yield first
+        yield from self._gen
+
+    def close(self) -> None:
+        self._gen.close()

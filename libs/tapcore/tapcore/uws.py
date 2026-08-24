@@ -156,10 +156,22 @@ CANCEL_RETRIES = 5
 CANCEL_RETRY_DELAY_S = 0.2
 
 
+def job_query_tag(job_id: str) -> str:
+    """Comment prefix naming the job in ``pg_stat_activity.query``.
+
+    A prefix, not a suffix like ``tag_sql``'s request id, because the
+    activity view truncates long statements (track_activity_query_size)
+    and the abort path must find this marker on exactly the queries big
+    enough to be worth aborting. It used to be the DECLARE'd cursor's name
+    that carried the job id here; the tag replaces it now that result
+    queries run as plain streamed statements."""
+    return f"/* tap_job_{job_id} */ "
+
+
 def job_query_marker(job_id: str) -> str:
-    """SQL LIKE pattern identifying this job's executing statement (the
-    cursor is named after the job), used to validate a backend's identity
-    before signalling it — a stale or reused PID never gets cancelled."""
+    """SQL LIKE pattern identifying this job's executing statement (tagged
+    with ``job_query_tag``), used to validate a backend's identity before
+    signalling it — a stale or reused PID never gets cancelled."""
     return f"%tap_job_{job_id}%"
 
 

@@ -7,6 +7,7 @@ writes the serialized result to the shared results volume, and finalizes
 the job phase. Also garbage-collects jobs past their destruction time.
 """
 
+import contextlib
 import datetime
 import os
 import shutil
@@ -17,6 +18,7 @@ from prometheus_client import start_http_server
 from ska_src_logging import LogContext
 from tapcore import uws
 from tapcore.config import settings
+from tapcore.db import StreamedRows
 from tapcore.db import connection as db_connection
 from tapcore.observability import (
     JOBS_BY_PHASE,
@@ -251,7 +253,9 @@ def _execute_job_inner(job: dict, job_id, params, backend_pid, duration) -> None
     try:
         maxrec = min(int(params.get("MAXREC", settings.default_maxrec)), settings.hard_maxrec)
         fmt_key, mime, ext = normalize_format(params.get("RESPONSEFORMAT") or params.get("FORMAT"))
-        sql = tag_sql(apply_maxrec(job["query_sql"], maxrec))
+        # the job tag is what lets the abort watchdog (and anything reading
+        # pg_stat_activity) recognise this job's statement
+        sql = uws.job_query_tag(job_id) + tag_sql(apply_maxrec(job["query_sql"], maxrec))
 
         uploads = []
         if params.get("UPLOAD"):
@@ -265,8 +269,8 @@ def _execute_job_inner(job: dict, job_id, params, backend_pid, duration) -> None
         os.makedirs(result_dir, exist_ok=True)
         result_path = os.path.join(result_dir, f"result.{ext}")
 
-        # stream from a server-side cursor straight into the result file, so
-        # large result sets are never materialized in memory
+        # stream the statement straight into the result file, so large
+        # result sets are never materialized in memory
         result_size = 0
         with db_connection() as conn, conn.transaction():
             tap_meta = tap_schema_metadata(conn, touched_tables(job["query_sql"]))
@@ -293,23 +297,25 @@ def _execute_job_inner(job: dict, job_id, params, backend_pid, duration) -> None
                     _count_finalized_elsewhere(job_id)
                     log.info("job %s aborted before execution", job_id)
                     return
-            # JIT compilation runs uninterruptibly at cursor DECLARE and can
-            # ignore cancellation for many seconds on high-cost plans; it is
-            # a net loss for streaming cursor workloads anyway
+            # JIT compilation runs uninterruptibly before the first row and
+            # can ignore cancellation for many seconds on high-cost plans; it
+            # is a net loss for streaming workloads anyway
             conn.execute("SET LOCAL jit = off")
             conn.execute(f"SET LOCAL ROLE {settings.query_role}")
-            with (
-                _AbortWatchdog(job_id, pid),
-                conn.cursor(name=f"tap_job_{job_id}") as cur,
-            ):
-                cur.itersize = 5000
-                cur.execute(sql)
-                duration.query_ran = True
-                columns = columns_from_cursor(cur.description, tap_meta)
-                limiter = RowLimiter(cur, maxrec)
-                with open(result_path, "wb") as fh:
-                    for chunk in stream(columns, limiter, fmt_key):
-                        result_size += fh.write(chunk)
+            # A plain streamed statement, not a DECLARE'd cursor: the planner
+            # may use parallel workers and plans for the whole result, which
+            # a cursor forbids. statement_timeout (the job's execution
+            # duration) consequently bounds the whole statement, which is
+            # what UWS executionDuration means.
+            with _AbortWatchdog(job_id, pid), conn.cursor() as cur:
+                rows = StreamedRows(cur, sql, chunk_rows=5000)
+                with contextlib.closing(rows):
+                    duration.query_ran = True
+                    columns = columns_from_cursor(cur.description, tap_meta)
+                    limiter = RowLimiter(rows, maxrec)
+                    with open(result_path, "wb") as fh:
+                        for chunk in stream(columns, limiter, fmt_key):
+                            result_size += fh.write(chunk)
 
         with db_connection() as conn:
             # atomic transition: an ABORT committed at any point (even

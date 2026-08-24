@@ -10,6 +10,7 @@ make benchmark-db-scaling       # concurrency sweep at each dataset size
 make benchmark-fixed-scaling    # replica scaling, autoscalers off
 make benchmark-keda             # autoscaling scenarios K1-K7
 make benchmark-result-formats   # every result writer over the same rows
+make benchmark-stress           # just the stress classes, each on its own
 make benchmark-serialize        # the writers alone, in process, seconds, no cluster
 make benchmark-full             # every family, every dataset
 make benchmark-report RUN=<dir> # redraw plots and HTML for an existing run
@@ -153,7 +154,8 @@ generated data:
 The normal mix is Q01 5%, Q02 15%, Q03 15%, Q04 10%, Q05 25%, Q06 10%,
 Q07 10%, Q08 5%, Q10 5%. Q09/Q11/Q13/Q14 run on their own: one Q14 in a
 hundred requests moves the p99 of everything else and tells you nothing about
-either.
+either. `tapbench stress` runs just those four, each at fixed concurrency —
+minutes instead of a whole family, for a change aimed at one expensive class.
 
 ## Load generation
 

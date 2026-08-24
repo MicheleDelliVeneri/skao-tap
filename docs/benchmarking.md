@@ -12,6 +12,7 @@ make benchmark-db-scaling             # concurrency sweep at each dataset size
 make benchmark-fixed-scaling          # replica scaling, autoscalers off
 make benchmark-keda                   # autoscaling scenarios K1-K7
 make benchmark-result-formats         # every result writer over the same rows
+make benchmark-stress                 # just Q09/Q11/Q13/Q14, each on its own
 make benchmark-serialize              # the writers alone, in process, no cluster
 make benchmark-full                   # every family, every dataset
 make benchmark-publish RUN=<run-dir>  # graphs and CSV into this site
