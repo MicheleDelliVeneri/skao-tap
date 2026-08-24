@@ -8,6 +8,8 @@
 #   make benchmark-db-scaling             concurrency sweep per dataset size
 #   make benchmark-fixed-scaling          replica scaling, autoscalers off
 #   make benchmark-keda                   autoscaling scenarios K1-K7
+#   make benchmark-result-formats         every result writer over the same rows
+#   make benchmark-serialize              writers only, in process, no cluster
 #   make benchmark-full                   every family, every dataset
 #   make benchmark-report                 redraw plots and HTML for a run
 #   make benchmark-publish RUN=<dir>      publish graphs to the docs site
@@ -23,11 +25,12 @@ RESUME_ARG := $(if $(RESUME),--resume $(RESUME),)
 NO_BUILD_ARG := $(if $(NO_BUILD),--no-build,)
 
 .PHONY: benchmark-smoke benchmark-db-scaling benchmark-fixed-scaling \
-        benchmark-keda benchmark-full benchmark-report benchmark-setup \
+        benchmark-keda benchmark-result-formats benchmark-serialize \
+        benchmark-full benchmark-report benchmark-setup \
         benchmark-teardown benchmark-publish benchmark-help
 
 benchmark-help:
-	@sed -n '1,20p' $(firstword $(MAKEFILE_LIST))
+	@sed -n '1,18p' $(firstword $(MAKEFILE_LIST))
 
 benchmark-setup:
 	$(BENCH) setup $(NO_BUILD_ARG)
@@ -43,6 +46,14 @@ benchmark-fixed-scaling:
 
 benchmark-keda:
 	$(BENCH) keda $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASET),--dataset $(DATASET),) $(if $(SCENARIOS),--scenarios $(SCENARIOS),) $(if $(ASYNC_C1),--async-c1 $(ASYNC_C1),)
+
+benchmark-result-formats:
+	$(BENCH) result-formats $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASET),--dataset $(DATASET),)
+
+# No cluster: the writers on their own, so a change to the serialisation path
+# can be measured in seconds instead of an afternoon.
+benchmark-serialize:
+	$(BENCH) serialize $(if $(ROWS),--rows $(ROWS),) $(if $(OUT),--out $(OUT),)
 
 benchmark-full:
 	$(BENCH) full $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASETS),--datasets $(DATASETS),)

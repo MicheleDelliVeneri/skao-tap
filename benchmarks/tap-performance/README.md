@@ -1,14 +1,16 @@
 # TAP / PostgreSQL / KEDA benchmark suite
 
-Measures four things separately, because they fail separately: the TAP service
-itself, PostgreSQL as the data grows, horizontal replica scaling, and the
-behaviour of the autoscaler.
+Measures five things separately, because they fail separately: the TAP service
+itself, PostgreSQL as the data grows, horizontal replica scaling, the
+behaviour of the autoscaler, and what a result format costs to produce.
 
 ```bash
 make benchmark-smoke            # ~10 min: everything wired, nothing measured for long
 make benchmark-db-scaling       # concurrency sweep at each dataset size
 make benchmark-fixed-scaling    # replica scaling, autoscalers off
 make benchmark-keda             # autoscaling scenarios K1-K7
+make benchmark-result-formats   # every result writer over the same rows
+make benchmark-serialize        # the writers alone, in process, seconds, no cluster
 make benchmark-full             # every family, every dataset
 make benchmark-report RUN=<dir> # redraw plots and HTML for an existing run
 ```
@@ -53,11 +55,26 @@ tapbench/
 results/        one directory per run (git-ignored)
 ```
 
+## What it needs installed
+
+Docker, `kind`, `kubectl` and **Helm 4**. Helm 3 fails at chart install with
+`unknown flag: --force-conflicts`: the chart is applied server-side, and the
+KEDA family changes replica counts through the scale subresource, so the next
+upgrade has to be able to take those fields back.
+
+Public images (KEDA's three, Prometheus, kube-state-metrics) are pulled on the
+host and imported into the node, not pulled by the node — a host that reaches
+a registry through a proxy or an image mirror can then still bring the cluster
+up. `docker save --platform linux/amd64` rather than `kind load
+docker-image`: with Docker's containerd image store a multi-platform reference
+saves manifests whose blobs are not local, and the node's importer rejects the
+archive for a digest it cannot find.
+
 ## The hardware budget, and how it is imposed
 
 `config/hardware.yaml` holds both the intended budget and how it is enforced.
 kind has no CPU or memory setting of its own, so the cap goes on the node
-*container* (`docker update --cpus 12 --memory 14g`), and the load generator
+*container* (`docker update --cpus 24 --memory 96g`), and the load generator
 runs on the host outside that cap — otherwise it competes for the cores it is
 measuring. Its own CPU is watched anyway, because a saturated generator
 produces exactly the flat throughput curve a saturated service does.
@@ -128,7 +145,7 @@ generated data:
 | Q08 | Observation→Plane join | the CAOM join clients actually make |
 | Q09 | four-level CAOM join | join depth with fan-out (stress) |
 | Q10 | ~1,000 rows | serialisation and streaming |
-| Q11 | ~10,000 rows | where the response body dominates (stress) |
+| Q11 | ~10,000 rows | where the response body dominates (stress, and the class the result-format family runs) |
 | Q12 | empty spatial result | the cost of finding nothing |
 | Q13 | aggregation | full scan and hash, tiny answer (stress) |
 | Q14 | deliberately expensive | five-way join, unanchored LIKE, forced sort (stress) |
@@ -159,6 +176,31 @@ The API's CPU ceiling is `min(pod CPU limit, workers)`, not the pod limit: ADQL
 translation holds the GIL, so one worker cannot exceed one core whatever the
 cgroup allows. Comparing against the pod limit reports a pinned process as
 having headroom.
+
+## Result formats
+
+The generator asks for CSV unless told otherwise, and for a long time nothing
+told it otherwise — so every latency the suite ever published was a CSV
+latency and nothing said so. The format is now recorded on every measurement
+and varied deliberately by one family:
+
+```
+tapbench result-formats     Q10 and Q11 through all six writers, fixed concurrency
+tapbench serialize          the writers in process: no cluster, no database, no HTTP
+```
+
+They answer different questions and neither answers the other's. Behind an
+HTTP request the writer is a tenth of the response time and the database is
+most of the rest, so `result-formats` says what a *client* pays for asking for
+a format — bytes on the wire included — while `serialize` says what the
+*writer* costs, which is the number a change to the serialisation path moves.
+`serialize` runs in seconds and needs nothing installed, so it is the one to
+run while making such a change; `result-formats` is what confirms the change
+reached a user.
+
+Both hold everything but the format still: the same query class, the same
+corpus entries in the same order, so the rows found and fetched are identical
+and the difference between two measurements is the writer.
 
 ## Autoscaling
 
@@ -224,6 +266,8 @@ Roughly, on the reference machine:
 | D2 | 10 min |
 | D4 | 45–90 min |
 | concurrency sweep, one dataset | 20–60 min depending on where it saturates |
+| result formats, 2 classes x 6 formats x 3 reps | ~50 min |
+| `serialize` (no cluster) | 15 s |
 | fixed replica scaling | ~2 h for 4 counts x 6 rates |
 | KEDA K1–K7 | ~1.5 h |
 | `benchmark-full` on all four datasets | 25–40 h |

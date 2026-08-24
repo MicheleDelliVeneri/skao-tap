@@ -11,14 +11,30 @@ make benchmark-smoke                  # ~10 min: everything wired, nothing measu
 make benchmark-db-scaling             # concurrency sweep at each dataset size
 make benchmark-fixed-scaling          # replica scaling, autoscalers off
 make benchmark-keda                   # autoscaling scenarios K1-K7
+make benchmark-result-formats         # every result writer over the same rows
+make benchmark-serialize              # the writers alone, in process, no cluster
 make benchmark-full                   # every family, every dataset
 make benchmark-publish RUN=<run-dir>  # graphs and CSV into this site
 ```
 
-Needs Docker, `kind`, `kubectl` and `helm`. The suite builds the images from
-the working tree, brings up a single-node cluster, installs KEDA and a
-Prometheus that scrapes at 2-second resolution, deploys the chart, and grows a
-synthetic CAOM/ObsCore database to a measured size before measuring anything.
+`benchmark-serialize` is the exception to everything else on this page: it
+needs no cluster, no database and no Docker, and it finishes in seconds. It
+runs the result writers in process against rows it builds itself, which is the
+only way to measure what a writer costs — behind an HTTP request the writer is
+a tenth of the response time and the database is most of the rest. See
+[Result formats](result-formats.md) for what it currently says.
+
+Needs Docker, `kind`, `kubectl` and **Helm 4** — the chart is applied
+server-side with `--force-conflicts`, which Helm 3 does not have and reports
+as `unknown flag`. The suite builds the images from the working tree, brings
+up a single-node cluster, installs KEDA and a Prometheus that scrapes at
+2-second resolution, deploys the chart, and grows a synthetic CAOM/ObsCore
+database to a measured size before measuring anything.
+
+Every public image it needs — KEDA's three, Prometheus, kube-state-metrics —
+is pulled on the host and imported into the node rather than pulled by the
+node, so a host that reaches a registry through a proxy or a mirror can still
+set the cluster up.
 
 Every target takes `RESUME=<run-dir>` and continues where it stopped.
 `benchmark-full` is a 25-40 hour run; that is why it is resumable.
@@ -65,6 +81,10 @@ first, and when it fires the rest of that measurement describes the client.
 - **Autoscaling scenarios drive `/tap/async`.** The chart's ScaledObject scales
   executors on queue depth, so only work that creates jobs moves the scaler
   metric.
+- **Every measurement records its result format.** The load generator
+  defaults to CSV, which for a long time meant every published latency was a
+  CSV latency with nothing saying so. It is now recorded per measurement, and
+  `benchmark-result-formats` varies it deliberately.
 - **Cone search needs an expression index.** The translator emits
   `spoint(RADIANS(s_ra), RADIANS(s_dec)) @ scircle(...)`, so the GiST index has
   to be on that expression — see [Autoscaling](autoscaling.md) and the suite's

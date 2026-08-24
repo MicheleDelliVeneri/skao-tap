@@ -46,6 +46,21 @@ LIMITS_FROM_VALUES = {
     "tap_api_cpu_limit_cores": ("tapApi", "resources", "limits", "cpu"),
     "tap_executor_cpu_limit_cores": ("tapExecutor", "resources", "limits", "cpu"),
     "postgres_cpu_limit_cores": ("postgresql", "resources", "limits", "cpu"),
+    "tap_api_memory_limit_bytes": ("tapApi", "resources", "limits", "memory"),
+    "postgres_memory_limit_bytes": ("postgresql", "resources", "limits", "memory"),
+}
+
+# Kubernetes memory suffixes. The binary ones are what a chart writes; the
+# decimal ones are legal and would otherwise be read as bytes.
+_MEMORY_UNITS = {
+    "Ki": 1 << 10,
+    "Mi": 1 << 20,
+    "Gi": 1 << 30,
+    "Ti": 1 << 40,
+    "K": 10**3,
+    "M": 10**6,
+    "G": 10**9,
+    "T": 10**12,
 }
 
 
@@ -65,6 +80,17 @@ def _quantity(value: typing.Any, default: float) -> float:
         return default
     text = str(value)
     return float(text[:-1]) / 1000.0 if text.endswith("m") else float(text)
+
+
+def _memory_bytes(value: typing.Any, default: int) -> int:
+    """Kubernetes memory quantity to bytes."""
+    if value is None:
+        return default
+    text = str(value).strip()
+    for suffix, factor in _MEMORY_UNITS.items():
+        if text.endswith(suffix):
+            return int(float(text[: -len(suffix)]) * factor)
+    return int(float(text))
 
 
 def limits(cfg: dict) -> dict:
@@ -98,8 +124,17 @@ def limits(cfg: dict) -> dict:
         "tap_executor_pod_cpu_limit_cores": exec_cpu,
         "postgres_cpu_limit_cores": pg_cpu,
         "db_pool_max_total": pool,
-        "tap_api_memory_limit_bytes": 1 << 30,
-        "postgres_memory_limit_bytes": 6 << 30,
+        # Read from the chart rather than restated here. These were constants
+        # matching the values file at the time it was written, which is a
+        # constant that goes wrong silently: MEMORY_BOUND is judged against
+        # them, so a chart whose limit moved would have every memory verdict
+        # measured against the old one.
+        "tap_api_memory_limit_bytes": _memory_bytes(
+            dig(LIMITS_FROM_VALUES["tap_api_memory_limit_bytes"]), 1 << 30
+        ),
+        "postgres_memory_limit_bytes": _memory_bytes(
+            dig(LIMITS_FROM_VALUES["postgres_memory_limit_bytes"]), 6 << 30
+        ),
     }
 
 
@@ -184,6 +219,7 @@ def measure(
     warmup_s: float | None = None,
     measure_s: float | None = None,
     request_mode: str = "sync",
+    response_format: str = "csv",
 ) -> dict | None:
     """Run one load window and record everything about it."""
     if run.done(key):
@@ -228,6 +264,7 @@ def measure(
                         workload,
                         steps,
                         mode=request_mode,
+                        response_format=response_format,
                         max_in_flight=int(
                             timing.get(
                                 "max_in_flight_async"
@@ -248,6 +285,7 @@ def measure(
                         warmup_s,
                         measure_s,
                         mode=request_mode,
+                        response_format=response_format,
                     )
                 )
                 timeline = []
@@ -324,6 +362,10 @@ def measure(
         "offered_rps": offered_rps,
         "repetition": repetition,
         "request_mode": request_mode,
+        # Which writer produced the bytes. Recorded on every measurement, not
+        # only the ones that vary it: the suite defaulted to CSV silently, so
+        # every published latency was a CSV latency and nothing said so.
+        "response_format": response_format,
         "window_seconds": window,
         "measured_phase_overrun_s": measured_elapsed - float(measure_s),
         "started_at": started,
@@ -929,6 +971,98 @@ def stress_classes(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
         if result:
             results.append(result)
     return results
+
+
+def result_formats(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
+    """One query class, one writer, everything else held still.
+
+    Package 10's question is what a large result costs to *produce*, which the
+    rest of the suite could not answer: every measurement it ever took went
+    out as CSV, because that was the load generator's default and nothing
+    varied it. Rows found, rows fetched and rows counted are identical across
+    the formats here, so the difference between two of these measurements is
+    the writer and nothing else.
+
+    Repeated, because the differences worth acting on are tens of
+    milliseconds and one window's page cache is worth more than that.
+    """
+    settings = cfg["scenarios"]["result_formats"]
+    results: list[dict] = []
+    for query_class in settings["query_classes"]:
+        for fmt in settings["formats"]:
+            for repetition in range(settings["repetitions"]):
+                result = measure(
+                    run,
+                    cfg,
+                    key=f"format-{dataset}-{query_class}-{fmt}-r{repetition}",
+                    kind="format",
+                    dataset=dataset,
+                    # A fresh workload per measurement, not one shared across
+                    # the formats. `SingleClass` holds a counter-based PRNG, so
+                    # a shared instance hands the second format the sequence
+                    # the first one left off at — the writers would then be
+                    # compared on different queries, which is the one thing
+                    # this family exists not to do.
+                    workload=load_mod.SingleClass(entries, query_class, seed=7000),
+                    mode="closed",
+                    concurrency=settings["concurrency"],
+                    replicas=1,
+                    repetition=repetition,
+                    # Warmed once per format rather than once per class: the
+                    # page cache is shared, but the writer's own code paths and
+                    # the pyarrow import are not.
+                    warmup_s=settings["warmup_seconds"] if repetition == 0 else 0,
+                    measure_s=settings["measure_seconds"],
+                    response_format=fmt,
+                )
+                if result:
+                    results.append(result)
+    return results
+
+
+def format_comparison(results: list[dict]) -> list[dict]:
+    """Per (class, format): the cost of a row, and of a byte.
+
+    Latency alone does not separate the two things a writer can be expensive
+    at, so both are reported: seconds per row is what the writer costs to
+    produce a cell, and bytes per row is what the client then has to receive.
+    A format can win on one and lose on the other, and Parquet does.
+    """
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for result in results:
+        if result.get("kind") != "format":
+            continue
+        for query_class, summary in (result.get("by_class") or {}).items():
+            grouped.setdefault((query_class, result["response_format"]), []).append(summary)
+
+    rows: list[dict] = []
+    for (query_class, fmt), summaries in sorted(grouped.items()):
+        requests = sum(s.get("requests") or 0 for s in summaries)
+        if not requests:
+            continue
+        # Weighted by requests, and the p95 taken as the worst repetition
+        # rather than an average of percentiles — averaging percentiles is not
+        # a percentile of anything.
+        p95 = max((s.get("latency") or {}).get("p95_s") or 0.0 for s in summaries)
+        p50 = max((s.get("latency") or {}).get("p50_s") or 0.0 for s in summaries)
+        rps = sum(s.get("rps") or 0.0 for s in summaries) / len(summaries)
+        mean_bytes = (
+            sum((s.get("mean_response_bytes") or 0.0) * (s.get("requests") or 0) for s in summaries)
+            / requests
+        )
+        rows.append(
+            {
+                "query_class": query_class,
+                "response_format": fmt,
+                "repetitions": len(summaries),
+                "requests": requests,
+                "rps": rps,
+                "latency_p50_s": p50,
+                "latency_p95_s": p95,
+                "mean_response_bytes": mean_bytes,
+            }
+        )
+    return rows
 
 
 def capture_plans(run, cfg: dict, entries: list) -> dict:

@@ -122,6 +122,7 @@ def write_csv(summary: dict, path: pathlib.Path) -> None:
         "dataset",
         "database_gib",
         "mode",
+        "response_format",
         "concurrency",
         "replicas",
         "offered_rps",
@@ -167,6 +168,10 @@ def write_csv(summary: dict, path: pathlib.Path) -> None:
                     "dataset": run.get("dataset"),
                     "database_gib": round(sizes.get(run.get("dataset"), 0.0), 3),
                     "mode": run.get("mode"),
+                    # Defaulted rather than omitted: every measurement had a
+                    # response format, including the ones taken before the
+                    # suite recorded it, and all of those were CSV.
+                    "response_format": run.get("response_format", "csv"),
                     "concurrency": run.get("concurrency"),
                     "replicas": run.get("replicas"),
                     "offered_rps": run.get("offered_rps"),
@@ -356,6 +361,7 @@ def render(run_dir: pathlib.Path, summary: dict, figures: list) -> pathlib.Path:
                     run.get("kind"),
                     run.get("dataset"),
                     run.get("mode"),
+                    run.get("response_format", "csv"),
                     run.get("concurrency"),
                     run.get("replicas"),
                     run.get("offered_rps"),
@@ -375,6 +381,7 @@ def render(run_dir: pathlib.Path, summary: dict, figures: list) -> pathlib.Path:
                     "kind",
                     "dataset",
                     "mode",
+                    "format",
                     "clients",
                     "replicas",
                     "offered rps",
@@ -388,7 +395,56 @@ def render(run_dir: pathlib.Path, summary: dict, figures: list) -> pathlib.Path:
                     "bottleneck",
                 ],
                 rows,
-                numeric={3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+                numeric={4, 5, 6, 7, 8, 9, 10, 11, 12, 13},
+            )
+        )
+
+    # -- result formats -----------------------------------------------------
+    comparison = summary.get("format_comparison") or []
+    if comparison:
+        sections.append("<h2>Result formats</h2>")
+        sections.append(
+            "<p>The same rows out through every writer, at fixed concurrency, so "
+            "the difference between two lines is the writer and the bytes it "
+            "produced. Cheapest first, per query class.</p>"
+        )
+        cheapest = {
+            query_class: min(
+                r["latency_p95_s"] for r in comparison if r["query_class"] == query_class
+            )
+            for query_class in {r["query_class"] for r in comparison}
+        }
+        rows = []
+        for row in sorted(comparison, key=lambda r: (r["query_class"], r["latency_p95_s"])):
+            floor = cheapest[row["query_class"]] or None
+            rows.append(
+                [
+                    row["query_class"],
+                    row["response_format"],
+                    row["repetitions"],
+                    row["requests"],
+                    row["rps"],
+                    1000 * row["latency_p50_s"],
+                    1000 * row["latency_p95_s"],
+                    row["mean_response_bytes"] / 2**20,
+                    (row["latency_p95_s"] / floor) if floor else None,
+                ]
+            )
+        sections.append(
+            _table(
+                [
+                    "class",
+                    "format",
+                    "reps",
+                    "requests",
+                    "rps",
+                    "p50 ms",
+                    "p95 ms",
+                    "MiB / response",
+                    "vs cheapest",
+                ],
+                rows,
+                numeric={2, 3, 4, 5, 6, 7, 8},
             )
         )
 

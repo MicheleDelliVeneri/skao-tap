@@ -15,7 +15,10 @@ VOT_NS = {"v": "http://www.ivoa.net/xml/VOTable/v1.3"}
 COLUMNS = [
     ColumnMeta("id", kind="int64", ucd="meta.id"),
     ColumnMeta("name", kind="str"),
-    ColumnMeta("flux", kind="float64", unit="mJy", description="integrated flux"),
+    # `decimal`, not `float64`: PostgreSQL `numeric` arrives as a Decimal and
+    # is emitted as a VOTable double. The kind names both halves, which is
+    # what lets the writers skip per-cell type inspection.
+    ColumnMeta("flux", kind="decimal", unit="mJy", description="integrated flux"),
     ColumnMeta("obs", kind="timestamp"),
     ColumnMeta("ok", kind="bool"),
 ]
@@ -172,3 +175,132 @@ def test_error_votable_is_dali_error_document():
     assert info.get("name") == "QUERY_STATUS"
     assert info.get("value") == "ERROR"
     assert "something <bad> happened" in info.text
+
+
+# ---------------------------------------------------------------------------
+# Package 10: the typed encoders. What they must not change is the bytes.
+# ---------------------------------------------------------------------------
+
+# One column of every kind, and for each kind the values that make its
+# conversion (or lack of one) observable: the boundary, the awkward
+# representation, and NULL.
+KIND_CASES = [
+    ("bool", [True, False, None]),
+    ("int16", [0, -32768, 32767, None]),
+    ("int32", [123456, None]),
+    ("int64", [-1, 9007199254740993, None]),
+    ("float32", [1.5, -0.0, None]),
+    ("float64", [1e300, 0.1, None]),
+    ("decimal", [Decimal("1.50"), Decimal("-3"), None]),
+    ("str", ["plain", "a&b<c>d", "", "é", None]),
+    (
+        "timestamp",
+        [
+            datetime.datetime(2026, 1, 2, 3, 4, 5, 6),
+            datetime.date(2026, 1, 2),
+            datetime.time(1, 2, 3),
+            None,
+        ],
+    ),
+    ("opaque", [b"\x00\xff", {"a": 1}, [1, 2], Decimal("2.5"), "x<y", 42, None]),
+]
+
+KIND_COLUMNS = [ColumnMeta(f"c_{kind}", kind=kind) for kind, _ in KIND_CASES]
+KIND_ROWS = [
+    tuple(values[index % len(values)] for _, values in KIND_CASES)
+    for index in range(max(len(v) for _, v in KIND_CASES))
+]
+
+
+def test_column_meta_defaults_to_opaque():
+    """An undeclared column keeps the dynamic path.
+
+    `serialize()` builds these from bare column names for callers with rows of
+    mixed Python types, so the default has to be the kind that inspects every
+    cell rather than one that promises a type nobody stated.
+    """
+    assert ColumnMeta("x").kind == "opaque"
+    body = serialize(["n", "when"], [(Decimal("2.5"), datetime.date(2026, 1, 2))], "csv")
+    assert body.decode().splitlines()[1] == "2.5,2026-01-02"
+
+
+@pytest.mark.parametrize("fmt", ["votable", "csv", "tsv", "json"])
+def test_every_kind_serializes_with_nulls(fmt):
+    body, limiter = _materialize(KIND_COLUMNS, KIND_ROWS, fmt)
+    assert limiter.count == len(KIND_ROWS)
+    # Each format escapes quotes its own way (CSV doubles them, JSON
+    # backslashes them), so the doubling is normalised out and what is
+    # asserted is the conversion rather than the quoting.
+    text = body.decode().replace('""', '"').replace('\\"', '"')
+    # The conversions the kinds exist to declare, each visible in the output.
+    assert "1.5" in text  # decimal -> double, not "1.50"
+    assert "2026-01-02T03:04:05" in text  # timestamp -> ISO-8601
+    assert "00ff" in text  # opaque bytes -> hex
+    assert '{"a": 1}' in text  # opaque mapping -> JSON
+
+
+def test_votable_escapes_text_and_leaves_numbers_alone():
+    """Escaping follows the declared kind, so it has to be right per kind."""
+    columns = [ColumnMeta("t", kind="str"), ColumnMeta("o", kind="opaque")]
+    body, _ = _materialize(columns, [("a&b<c>d", "<x>"), (None, None)], "votable")
+    text = body.decode()
+    assert "<TD>a&amp;b&lt;c&gt;d</TD>" in text
+    assert "<TD>&lt;x&gt;</TD>" in text
+    assert text.count("<TD/>") == 2
+    # A row with no NULL takes the joined fast path; both must produce the
+    # same markup, which is what this pair of rows checks.
+    assert text.count("<TR>") == 2
+
+
+@pytest.mark.parametrize("fmt", ["votable", "csv", "tsv", "json"])
+def test_typed_and_opaque_columns_agree(fmt):
+    """The fast path is an optimisation, so it must be unobservable.
+
+    Every kind declares the conversion that `opaque` would have discovered by
+    inspecting the cell. Declaring the type therefore has to produce the same
+    bytes as not declaring it — for numbers, text, timestamps and NULLs
+    alike. This is the guarantee the per-column encoders rest on.
+    """
+    opaque = [ColumnMeta(c.name, kind="opaque") for c in KIND_COLUMNS]
+    typed, _ = _materialize(KIND_COLUMNS, KIND_ROWS, fmt)
+    dynamic, _ = _materialize(opaque, KIND_ROWS, fmt)
+    if fmt == "votable":
+        # The FIELD declarations differ by design (a double is not a char*);
+        # the TABLEDATA must not.
+        typed = typed.split(b"<TABLEDATA>")[1]
+        dynamic = dynamic.split(b"<TABLEDATA>")[1]
+    elif fmt == "json":
+        # Same: the metadata block carries the declared datatypes.
+        typed = typed.split(b'"data": ')[1]
+        dynamic = dynamic.split(b'"data": ')[1]
+    assert typed == dynamic
+
+
+@pytest.mark.parametrize("fmt", ["parquet", "arrow"])
+def test_every_kind_survives_arrow(fmt):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    body, _ = _materialize(KIND_COLUMNS, KIND_ROWS, fmt)
+    if fmt == "parquet":
+        table = pq.read_table(io.BytesIO(body))
+    else:
+        with pa.ipc.open_stream(io.BytesIO(body)) as reader:
+            table = reader.read_all()
+    assert table.num_rows == len(KIND_ROWS)
+    assert table.schema.field("c_decimal").type == pa.float64()
+    # `opaque` is declared a string column, so its values have to arrive as
+    # text however exotic the Python object was.
+    assert table.schema.field("c_opaque").type == pa.string()
+    assert table.column("c_decimal").to_pylist()[0] == 1.5
+    assert table.column("c_opaque").to_pylist()[0] == "00ff"
+
+
+def test_json_batches_do_not_change_the_document():
+    """The JSON writer encodes 500 rows per call; the seam must be invisible."""
+    columns = [ColumnMeta("i", kind="int32")]
+    rows = [(i,) for i in range(1201)]
+    body, _ = _materialize(columns, rows, "json")
+    payload = json.loads(body.decode())
+    assert payload["data"] == [[i] for i in range(1201)]
+    assert payload["status"] == "OK"

@@ -64,8 +64,10 @@ prometheus:
   enabled: false
 
 config:
-  # 8 per process against a 4-CPU server: the pool is the concurrency limit
+  # 8 per process against an 8-CPU server: the pool is the concurrency limit
   # under test, so it is stated rather than left at whatever the default is.
+  # Unchanged when the server's cores doubled, because moving the pool and the
+  # cores together would leave nothing to attribute a change to.
   dbPoolMin: 1
   dbPoolMax: 8
   dbPoolTimeoutSeconds: 5
@@ -81,10 +83,10 @@ results:
 
 postgresql:
   enabled: true
-  storage: 60Gi
+  storage: 200Gi
   resources:
-    requests: {cpu: 2, memory: 2Gi}
-    limits: {cpu: 4, memory: 6Gi}
+    requests: {cpu: 4, memory: 4Gi}
+    limits: {cpu: 8, memory: 12Gi}
   tuning:
     # pg_stat_statements and I/O timing are requirements of the suite, not
     # tuning: without them there is no per-statement or per-relation I/O data
@@ -93,10 +95,10 @@ postgresql:
     track_io_timing: "on"
     "pg_stat_statements.max": "10000"
     "pg_stat_statements.track": all
-    # Sized for the 6 GiB limit: shared_buffers a quarter of it, the rest left
+    # Sized for the 12 GiB limit: shared_buffers a quarter of it, the rest left
     # to the page cache, which is where a 45 GiB database lives or does not.
-    shared_buffers: 1536MB
-    effective_cache_size: 4GB
+    shared_buffers: 3GB
+    effective_cache_size: 8GB
     work_mem: 32MB
     maintenance_work_mem: 512MB
     max_connections: "200"

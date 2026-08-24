@@ -15,6 +15,7 @@ def test_columns_from_cursor_maps_oids():
         Desc("f8", 701),
         Desc("f4", 700),
         Desc("num", 1700),
+        Desc("vc", 1043),
         Desc("flag", 16),
         Desc("txt", 25),
         Desc("ts", 1184),
@@ -27,11 +28,15 @@ def test_columns_from_cursor_maps_oids():
         "int16",
         "float64",
         "float32",
-        "float64",
+        "decimal",
+        "str",
         "bool",
         "str",
         "timestamp",
-        "str",
+        # An OID this module does not recognise is `opaque`, not `str`: psycopg
+        # makes no promise about the Python type, so the value keeps the fully
+        # dynamic per-cell conversion instead of a text column's fast path.
+        "opaque",
     ]
 
 
