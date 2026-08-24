@@ -50,6 +50,103 @@ A running log of what the benchmark suite
 established, newest first. Each entry is a measurement rather than an opinion,
 so it can be checked and it can go stale — the run that produced it is named.
 
+### 2026-08-24 — the executor autoscaler asks for three pods against a three-thousand-job queue
+
+Run `20260824T074332Z-b4fa9d64-keda`, D2, all seven autoscaling scenarios
+against the repository's own ScaledObject, unmodified: trigger
+`max(tap_oldest_queued_job_seconds)`, threshold 60, min 1, max 8, polling every
+5 s. Offered rates from 0.5x to 6x async-C1 (6 jobs/s).
+
+**Peak replicas was 3 in every scenario that scaled at all, out of a maximum of
+8, across a twelve-fold spread of offered rate:**
+
+| | profile | max queued | max oldest | max desired | peak ready | p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| K1 | idle to 0.5xC1 | 8 | 1 s | 1 | 1 | 1.3 s |
+| K2 | 0.5x step to 3.5xC1 | 2,536 | 135 s | 3 | 3 | 257 s |
+| K3 | 0 to 6xC1 spike | 2,968 | 155 s | 3 | 3 | 305 s |
+| K4 | ramp to 6xC1 | 2,737 | 145 s | 3 | 3 | 289 s |
+| K5 | alternating 0.5x/4xC1 | 1,039 | 79 s | 3 | 3 | 83 s |
+| K6 | sustained 6xC1 | 2,855 | 167 s | 3 | 3 | 320 s |
+| K7 | 4xC1 to 0.2xC1 | 2,904 | 144 s | 3 | 3 | 240 s |
+
+K1 is the one scenario that behaved: the metric never crossed 60, nothing
+scaled, and p95 stayed at 1.3 s inside the 2 s SLO. Every other scenario missed
+the SLO for its entire window while **five of the eight executors it was
+allowed were never asked for**. Nothing was busy while this happened: API CPU
+p95 was 0.25 to 0.35 cores, PostgreSQL 0.08 to 0.22.
+
+The cause is the signal, not the autoscaler. `desired = ceil(oldest_queued_age /
+60)`, and the age of the *head* of the queue is not proportional to the depth
+of it. Depth grows at (arrivals − drain); the head's age grows far more slowly,
+because the head is being served the whole time. At t+80 s in K3 there were
+**1,713 jobs queued and the oldest had waited 54 s**, so the scaler read 54,
+which is under the threshold, and asked for **one** pod. The signal saturates
+around 150-170 s of head-age — three replicas — no matter how deep the queue
+goes. It undershoots hardest exactly when arrivals most exceed capacity, which
+is when the pods are most needed.
+
+The chart's own comment describes the intent — "300s of backlog against 60 here
+asks for 5 replicas" — and head-of-queue age does not deliver it. What would:
+scale on queue *depth* against a jobs-per-replica figure, or on depth divided by
+the measured drain rate, which is an estimated wait rather than an observed one.
+Either is a change to `deploy/helm/skao-tap` values and the ScaledObject
+template, and neither is made here: this entry is the measurement.
+
+Two secondary observations. The scaler flaps — K3 scaled up three times and
+down three times inside one window and ended at one replica with the queue
+still draining; K7 reversed twice. And scale-out is slow before it is
+insufficient: detection alone took 92 to 254 s, and total scale-out where it
+could be established was 221 to 356 s.
+
+**Four of the seven scenarios are invalid** and the guard says why: K3, K4, K6
+and K7 abandoned 39%, 28%, 41% and 7% of their arrivals at the generator's
+in-flight cap. For this family that is worse than a mislabelled rate — the
+arrivals it dropped are the backlog the autoscaler was being measured on, so
+the scenario shrank the thing under test. The numbers above survive it because
+they are all *lower* bounds on the queue and on the mismatch: a fuller offered
+rate makes the queue deeper and the undershoot worse, not better. The cap is
+now configurable with a much larger value for async work, and the family is
+worth re-running under it before anything is asserted about the stage timings.
+
+### 2026-08-24 — the KEDA family's own analysis had been reporting less than it measured (fixed)
+
+Reading the seven scenarios above turned up five defects in how they were
+analysed. All are fixed, and all were correctable from the artefacts the run had
+already written.
+
+**Every autoscaling dashboard was skipped.** The plot looked for
+`metrics/K3.parquet`; the series are written as `metrics/keda-K3.parquet`. Seven
+of seven timelines — the whole visual output of the family the run exists for —
+were absent from the report, under the message "no metrics parquet for this
+scenario", which was not true.
+
+**A scenario could not be marked invalid.** `measure()` computes the guards and
+the `invalid` flag, and the scenario entry was then rebuilt from a list of
+fields to keep, which dropped them. The guards ran on all seven and were
+discarded before anything read them.
+
+**`reclassify` skipped the family.** The scenarios live under `keda` rather than
+`runs`, so every correction to the analysis rules reached every family except
+this one. It now walks both, re-derives the stage timings from the stored stamps,
+and will not clear a guard failure the run recorded — a rerun of the analysis
+must not be able to accept a rejected measurement by forgetting why it was
+rejected.
+
+**A recovery scenario was timed as a scale-out.** `timings()` takes a
+`scale_up` flag and nothing ever passed it, so K7 — 4xC1 falling to 0.2xC1 —
+looked for the metric *crossing* the threshold and found it 2 s in, left over
+from the phase before the transition. Read from the profile now: K7's detection
+is 156 s, its HPA decision 265 s, and its recovery 186 s.
+
+**A stage duration of -1.5 s was publishable.** T1 and T2 come from a Prometheus
+range query quantised to its 2 s step; a Pod's lifecycle is stamped to the whole
+second. A stage shorter than either comes out ordered backwards. Inside what the
+two clocks can resolve — measured from the series rather than assumed — the
+stage now reads 0 with a note; beyond it, absent. And where the pods that served
+a scale-out were deleted before the run ended, which is what happens to every
+flapping scenario, T3 and T6 fall back to the state watcher that saw them live.
+
 ### 2026-08-24 — the replica sweep cannot measure replica scaling, and almost published a number claiming it had (fixed)
 
 Run `20260824T014320Z-a5058118-fixed-scaling`, D2, autoscalers off, offered

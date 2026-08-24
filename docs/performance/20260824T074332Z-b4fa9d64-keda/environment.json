@@ -1,0 +1,56 @@
+{
+  "chart_values": "# Chart values for the benchmark deployment. Everything here is either the\n# hardware budget or a value the benchmark needs to observe; the service's own\n# defaults are left alone, because a benchmark of a tuned-for-the-benchmark\n# configuration measures the tuning.\nimage:\n  registry: tapbench\n  tag: bench\n  pullPolicy: Never\n\ntapApi:\n  replicas: 1\n  # The load generator runs on the host, so the URLs the service hands out\n  # (UWS job locations, result links) have to be reachable from there. Left at\n  # the in-cluster default, every async job would return a location pointing at\n  # a Service name the generator cannot resolve, and the KEDA scenarios would\n  # measure DNS failures.\n  baseUrl: \"http://127.0.0.1:30080/tap\"\n  # One worker per pod. The replica count is the variable under test, and a\n  # pod that also scales internally would make \"throughput per replica\" mean\n  # two different things at once.\n  workers: 1\n  resources:\n    requests: {cpu: 1, memory: 512Mi}\n    limits: {cpu: 2, memory: 1Gi}\n\ntapExecutor:\n  replicas: 1\n  resources:\n    requests: {cpu: 500m, memory: 512Mi}\n    limits: {cpu: 2, memory: 1Gi}\n\n# Both autoscalers are configured here and switched on per scenario, so the\n# KEDA runs use the repository's real ScaledObject rather than one written for\n# the benchmark.\nhorizontalAutoscaling:\n  tapApi:\n    enabled: false\n    minReplicas: 1\n    maxReplicas: 8\n    targetCPUUtilizationPercentage: 70\n  tapExecutor:\n    enabled: false\n    scaler: keda\n    minReplicas: 1\n    maxReplicas: 8\n    backlogSecondsPerReplica: 60\n    prometheusAddress: http://prometheus.benchmon.svc:9090\n    pollingIntervalSeconds: 5\n\nverticalAutoscaling:\n  enabled: false\n\nmetrics:\n  scrapeAnnotations: true\n\n# The benchmark's own Prometheus scrapes the pods (manifests/monitoring.yaml);\n# the chart's bundled one would be a second scraper on the same endpoints.\nprometheus:\n  enabled: false\n\nconfig:\n  # 8 per process against a 4-CPU server: the pool is the concurrency limit\n  # under test, so it is stated rather than left at whatever the default is.\n  dbPoolMin: 1\n  dbPoolMax: 8\n  dbPoolTimeoutSeconds: 5\n  syncTimeoutSeconds: 60\n  asyncExecDurationSeconds: 600\n  hardMaxrec: 1000000\n  defaultMaxrec: 10000\n  logLevel: WARNING\n  executorMetricsPort: 9100\n\nresults:\n  size: 5Gi\n\npostgresql:\n  enabled: true\n  storage: 60Gi\n  resources:\n    requests: {cpu: 2, memory: 2Gi}\n    limits: {cpu: 4, memory: 6Gi}\n  tuning:\n    # pg_stat_statements and I/O timing are requirements of the suite, not\n    # tuning: without them there is no per-statement or per-relation I/O data\n    # to attribute anything to.\n    shared_preload_libraries: pg_stat_statements\n    track_io_timing: \"on\"\n    \"pg_stat_statements.max\": \"10000\"\n    \"pg_stat_statements.track\": all\n    # Sized for the 6 GiB limit: shared_buffers a quarter of it, the rest left\n    # to the page cache, which is where a 45 GiB database lives or does not.\n    shared_buffers: 1536MB\n    effective_cache_size: 4GB\n    work_mem: 32MB\n    maintenance_work_mem: 512MB\n    max_connections: \"200\"\n    max_wal_size: 4GB\n    random_page_cost: \"1.1\"\n",
+  "chart_values_sha256": "b6e9c1b32e19c965be52d7b6c305dbbfc76769cf2df7c7b16c22e98da6d63a8f",
+  "cluster": {
+    "architecture": "arm64",
+    "container_runtime": "containerd://2.3.1",
+    "helm": "v4.2.3+g43e8b7f",
+    "keda_image": "ghcr.io/kedacore/keda:2.18.1",
+    "kernel": "6.12.76-linuxkit",
+    "kind": "kind v0.32.0 go1.26.3 darwin/arm64",
+    "kubernetes": "v1.36.1",
+    "node_cpu_capacity": "14",
+    "node_memory_capacity": "16354760Ki",
+    "os_image": "Debian GNU/Linux 13 (trixie)",
+    "postgres": "PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+    "postgres_extensions": "pg_sphere 1.5.2, pg_stat_statements 1.12, plpgsql 1.0"
+  },
+  "corpus_sha256": "c02caf7c44edae7768ad8a5674e1d431dba6ddd9d8bf3d95d5838226e0c2aecb",
+  "git": {
+    "branch": "bench/remaining-families",
+    "describe": "1a99bda",
+    "dirty": false,
+    "sha": "1a99bdad43052c41745475a7b88c472fdce4ec74"
+  },
+  "hardware_budget": {
+    "budget": {
+      "host_cpus": 16,
+      "host_memory_gib": 24,
+      "host_storage_gb": 100,
+      "kubernetes_cpus": 12,
+      "kubernetes_memory_gib": 16,
+      "postgres_cpus": 4,
+      "postgres_memory_gib": 6,
+      "postgres_storage_cap_gb": 55,
+      "tap_replicas_max": 8,
+      "tap_replicas_min": 1
+    },
+    "enforcement": {
+      "kind_node_cpus": 12,
+      "kind_node_memory": "14g",
+      "load_generator_on_host": true,
+      "min_free_disk_gb": 15
+    }
+  },
+  "host": {
+    "cpu_count": 14,
+    "free_disk_bytes": 153311293440,
+    "machine": "arm64",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "python": "3.14.7"
+  },
+  "images": {},
+  "recorded_at": 1787565240.8251579,
+  "seed": 20260823
+}
