@@ -58,5 +58,8 @@ nav:
   - Observability: observability.md
   - Autoscaling: autoscaling.md
   - Benchmarking: benchmarking.md
-  - Performance: performance/index.md
+  - Performance:
+    - Results: performance/index.md
+    - PostgreSQL and TAP load testing: postgres-performance.md
+    - Python profiling: python-performance.md
   - Roadmap: roadmap.md
