@@ -50,6 +50,64 @@ A running log of what the benchmark suite
 established, newest first. Each entry is a measurement rather than an opinion,
 so it can be checked and it can go stale — the run that produced it is named.
 
+### 2026-08-24 — the autoscaler's answer to every load is three pods, and the delay is never the pod
+
+Run `20260824T102832Z-29507cbb-keda`: all seven scenarios again, with the
+generator's in-flight cap raised so it stops abandoning arrivals. Six of the
+seven are valid — the [first attempt](#2026-08-24-the-executor-autoscaler-asks-for-three-pods-against-a-three-thousand-job-queue)
+had four invalid — so this is the family's real result.
+
+| | max queued | oldest | desired | p95 | errors |
+| --- | --- | --- | --- | --- | --- |
+| K1 idle to 0.5xC1 | 9 | 1 s | 1 | 1.3 s | 0.00% |
+| K2 step to 3.5xC1 | 2,689 | 139 s | 3 | 315 s | 0.02% |
+| K3 spike to 6xC1 | 4,094 | 197 s | 3 | 946 s | 9.79% |
+| K4 ramp to 6xC1 | 3,863 | 185 s | 3 | 567 s | 0.09% |
+| K5 alternating 0.5x/4xC1 | 1,767 | 119 s | 3 | 124 s | 0.05% |
+| K6 sustained 6xC1 ⚠ | 4,028 | 189 s | 3 | 1,203 s | 17.31% |
+| K7 4xC1 to 0.2xC1 | 3,041 | 154 s | 3 | 327 s | 0.02% |
+
+**Three replicas, every time, out of a permitted eight.** Queues from 1,700 to
+4,100 jobs; offered rates spanning twelve-fold; profiles as different as a cold
+spike, a ten-minute ramp, a two-minute square wave and a sustained overload. The
+answer does not move, because `desired = ceil(oldest_queued_age / 60)` and the
+head-of-queue age saturates near 190 s whatever the depth behind it. K1 is the
+control: below the threshold nothing scales and p95 stays at 1.3 s inside the
+SLO, which is correct behaviour.
+
+**And the stage breakdown, now complete for five scenarios:**
+
+| | detect | HPA | provision | routing | total | recovery |
+| --- | --- | --- | --- | --- | --- | --- |
+| K2 | 98 s | 19 s | **1 s** | 129 s | 246 s | — |
+| K3 | 106 s | 149 s | **0 s** | 243 s | 497 s | — |
+| K4 | 250 s | 21 s | **1 s** | 83 s | 352 s | 26 s |
+| K5 | 340 s | — | **0 s** | 121 s | 476 s | 216 s |
+| K7 | 220 s | 270 s | — | — | — | 254 s |
+
+Provisioning a Pod — created, scheduled, container started, Ready — is **zero to
+one second in every scenario**. Scale-out totals are 246 to 497 s. Kubernetes is
+not the delay and there is no point tuning it. The delay is detection (98 to
+340 s: the 60 s threshold, the scaler's polling interval, and the time the head
+of the queue takes to age into the threshold at all) and routing (83 to 243 s
+from Ready to demonstrably serving, measured by proxy and worth confirming).
+
+The slowest detection is K5's 340 s, and its profile explains it: alternating
+bursts let the queue drain between them, so the head-age signal keeps falling
+back under the threshold and the scaler spends most of the window unconvinced.
+Bursty traffic is the case this signal handles worst.
+
+`KEDA_SCALE_LAG` is now the leading verdict on five of the seven, which is the
+right name: capacity existed, and it arrived four to eight minutes late.
+
+**K6 is invalid and cannot be made otherwise.** It abandoned 19% of arrivals
+even at a 20,000-request cap, because a sustained overload grows its queue
+without bound and no finite cap can hold it. That is a property of the scenario,
+not a bug to fix: a sustained-overload point is not measurable open-loop, and the
+honest version of it is a bounded-concurrency run. Its numbers are kept as
+evidence — 4,028 queued, 17.3% of jobs never finishing — and not as a
+measurement of the offered rate on its label.
+
 ### 2026-08-24 — the undershoot is not the harness, and provisioning is not the slow part
 
 Run `20260824T100103Z-d14a207c-keda`: the 0-to-6xC1 spike scenario alone, with
