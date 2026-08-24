@@ -50,6 +50,129 @@ A running log of what the benchmark suite
 established, newest first. Each entry is a measurement rather than an opinion,
 so it can be checked and it can go stale — the run that produced it is named.
 
+### 2026-08-24 — the replica sweep cannot measure replica scaling, and almost published a number claiming it had (fixed)
+
+Run `20260824T014320Z-a5058118-fixed-scaling`, D2, autoscalers off, offered
+rates at 0.5, 1, 2, 4, 6 and 8 times C1 against 1, 2, 4 and 8 API replicas.
+**Seventeen of the 24 measurements are invalid**, and the seven that are left
+do not bracket a ceiling at any replica count.
+
+What the valid points do establish:
+
+| replicas | offered | served | p95 | errors |
+| --- | --- | --- | --- | --- |
+| 1 | 115.3 | 114.7 | 52 ms | 0% |
+| 1 | 230.7 | 1.4 | — | 98.7% |
+| 2 | 230.7 | 229.3 | 33 ms | 0% |
+| 4 | 230.7 | 229.2 | 17 ms | 0% |
+| 8 | 230.7 | 229.3 | 16 ms | 0% |
+
+So: one replica cannot serve C1 itself — at exactly 230.7 rps the pool was
+full for 99.9% of the window and refused 1,576 requests — and two, four and
+eight replicas all serve it with a p95 between 16 and 33 ms and no errors. The
+p95 falling from 33 ms to 16 ms as replicas double while throughput stays at
+229 is the shape of a service with headroom to spare, not of one scaling.
+
+Every rung that would have found where four and eight replicas stop is
+unmeasurable as offered. The generator holds at most 4,096 requests in flight;
+past 1×C1 it hits that cap and **abandons 71% to 99% of its arrivals**. What is
+left is a closed-loop measurement at concurrency 4,096 wearing an open-loop
+label — which is exactly why 2×, 4×, 6× and 8× C1 all report the same ~120
+requests/s at the same ~92-second p95 on both four and eight replicas. Four
+different offered rates, two different replica counts, one experiment.
+
+The [existing lateness guard](#2026-08-24-a-guard-was-missing-for-the-generators-own-schedule-fixed)
+could not see this: at the cap the generator does not fall behind its schedule,
+it drops the arrival, so p95 lateness stayed under four seconds on points that
+issued 7% of what they claimed. There is now a second guard on the same
+principle — more than 1% of arrivals abandoned and the run is marked — and the
+count is recorded per measurement so a finished run can be re-judged.
+
+The suite was about to publish **"replica scaling efficiency at 8: 0.25"** from
+this, with the evidence "229.3 rps on 8 replicas against 114.7 on one". Both of
+those are rates the service met in full; neither is a limit; and the report's
+per-replica efficiency column (1.000, 1.000, 0.500, 0.250) and its scaling
+efficiency plot said the same thing with the same authority. A ratio of two
+rates nobody raised is not an efficiency, and the caption attributing the
+shortfall to "one PostgreSQL" attributed it to the wrong party — the shortfall
+was the ladder's. The headline, the table and the plot now require each figure
+to be a *bracketed* capacity: a rate the service was pushed past by a valid
+higher rung. Where it was not, the efficiency reads "—" and says why, and C1 is
+labelled a lower bound.
+
+To actually measure replica scaling, the family needs bounded-concurrency runs
+per replica count — the shape the size sweep already uses — or rungs between 1×
+and 2× C1, which is where the interesting region for two replicas and up
+turned out to be.
+
+### 2026-08-24 — the classifier was comparing a fleet's total against one pod's ceiling (fixed)
+
+Every API series the bottleneck rules read is a Prometheus `sum()` over the
+pods. Three of the ceilings they were compared against were per-pod or
+per-process:
+
+- `tap_db_connections_in_use` (fleet) against `dbPoolMax` = 8 (one worker
+  process). An eight-replica deployment holding 12 of its 64 connections was
+  called pool-full at 19% utilisation.
+- `tap_api_memory_bytes` (fleet) against 1 GiB (one pod). 1.77 GB across eight
+  pods is 220 MiB each; it was reported as memory pressure.
+- API CPU was already multiplied by the *configured* replica count, which is
+  the right idea and the wrong number under an autoscaler, where the
+  configuration is not what served.
+
+Reclassifying the fixed-replica run moved **9 of 24 measurements** off
+`MEMORY_BOUND`, which they had been assigned at a fifth of the real limit. All
+three ceilings now scale by the peak *ready* replica count taken from the run
+itself, so an autoscaled window is judged against the fleet that served it.
+`CONNECTION_POOL_BOUND` still fires where the pool genuinely timed out — the
+503s are real — but `fraction_of_window_pool_full` now means what it says.
+
+Two related artefacts are recorded rather than fixed, because fixing either
+means changing the service image and losing comparability with the runs already
+measured: `peak_pool_wait_p95_s` reads ~9.7 s against a 5 s pool timeout
+because the histogram's last finite bucket is 10 s, so every timed-out acquire
+interpolates to the middle of (5, 10]; and `CONNECTION_POOL_BOUND` takes
+confidence `min(1.0, pool_wait)`, so any wait over a second is full confidence
+and the class outranks everything else wherever the pool waited at all.
+
+### 2026-08-24 — a third of the shed load is a reset, not a refusal, wherever the pool tips
+
+Same run. At every point where the connection pool tipped over, a large
+fraction of the load was dropped at the socket rather than refused with an
+answer:
+
+| measurement | requests | 503 | ReadError | ReadTimeout |
+| --- | --- | --- | --- | --- |
+| 1 replica, 1×C1 | 4,194 | 1,330 | 893 | 586 |
+| 2 replicas, 2×C1 | 15,211 | 2,594 | 11,968 | 540 |
+| 4 replicas, 6×C1 | 12,421 | 7,294 | 4,012 | 753 |
+
+The 503s are the pool-timeout path working as designed. The `ReadError`s are
+not: a reset connection is indistinguishable from a crash to the client that
+receives it, and a client cannot retry it safely. This is not specific to one
+point — it appears at one replica, at two and at four — so the earlier note
+asking for the four-replica 6×C1 point to be repeated is superseded: the
+behaviour reproduces across the family, and that point is in any case
+generator-capped and now marked invalid.
+
+What cannot be said from this family is the offered rate at which resets start,
+because every measurement that shows them abandoned most of its arrivals. Four
+replicas at 8×C1 ran clean (197 refusals in 32,590 requests) while the same
+replicas at 6×C1 collapsed, which looks like rate-independence but is really
+two incomparable experiments at the in-flight cap. Pinning the reset path needs
+a bounded-concurrency run held just past pool saturation.
+
+### 2026-08-24 — `kubectl scale` then `helm upgrade` is a hard stop under server-side apply (fixed)
+
+The KEDA family would not start. `helm upgrade` failed with `conflict with
+"kubectl" with subresource "scale" using apps/v1: .spec.replicas` — the
+fixed-replica family had set replica counts through the scale subresource,
+which made `kubectl` the field's owner, and Helm 4 applies server-side. The
+first upgrade that switches an autoscaler on then aborts. `--force-conflicts`
+on the chart install takes the field back: the chart is the authority on every
+field it renders. Cost the run about 75 minutes of wall clock, entirely
+avoidably, because the failure was instant and unattended.
+
 ### 2026-08-23 — the liveness probe turned overload into an outage (fixed)
 
 Both Kubernetes probes pointed at `/tap/availability`, which reports on the
@@ -87,6 +210,15 @@ overloaded service and an unavailable one.
 Note the non-monotonicity: eight times C1 on the same four replicas ran clean
 (32,391 of 32,590 successful, 197 refusals). So this is not a simple function
 of offered rate, and the 6x point needs repeating before its cause is asserted.
+
+**Superseded on 2026-08-24.** Two corrections. The parenthetical "a service
+that sustains ~230 per replica" is wrong: one replica does not sustain C1, it
+sheds 98.7% of it. And the request to repeat the 6× point is answered by the
+family as a whole — resets appear at one replica, at two and at four, wherever
+the pool tips — while the point itself abandoned 96% of its arrivals at the
+generator's in-flight cap and is now marked invalid, so the comparison against
+8×C1 was never between two comparable experiments. See
+[a third of the shed load is a reset](#2026-08-24-a-third-of-the-shed-load-is-a-reset-not-a-refusal-wherever-the-pool-tips).
 
 ### 2026-08-24 — a guard was missing for the generator's own schedule (fixed)
 
