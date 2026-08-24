@@ -444,6 +444,10 @@ config:
   dbPoolTimeoutSeconds: 5
   defaultMaxrec: 10000
   hardMaxrec: 1000000
+  # -- Bounds the whole synchronous statement, execution and streaming both
+  # (it is applied as the backend's statement_timeout). This is the sync
+  # path's admission control: a query is refused by what it actually costs,
+  # not by what an EXPLAIN estimate guessed it would.
   syncTimeoutSeconds: 30
   asyncExecDurationSeconds: 600
   jobRetentionSeconds: 604800

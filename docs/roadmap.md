@@ -15,6 +15,63 @@ Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/tap-performance/results/`.
 
+### 2026-08-24 — the aggregate was paying for the cursor, not the aggregate (package 11, delivered)
+
+Q13 (`GROUP BY` over the whole ObsCore table) was never the price of the
+scan. Result queries ran on named (`DECLARE`'d) cursors, and a cursor decides
+the plan twice over: PostgreSQL never parallelises a cursor's query, and
+`cursor_tuple_fraction` biases the planner toward fast-start plans on the
+assumption the client stops reading early — always false here, since the
+service reads every result to MAXREC + 1. On D1 the cursor ran Q13 as a
+serial full **index** scan at 614 ms where the same statement, planned
+plainly, runs a parallel seq scan in 195 ms with PostgreSQL's default two
+workers (108 ms with four). The bias is also unstable: an earlier record
+shows the cursor picking a 400 ms serial seq scan for the identical query —
+two different crippled plans on two hosts, neither of them the plain one.
+
+Result queries now run as plain streamed statements (`Cursor.stream()`,
+chunked delivery, TCP backpressure against a slow reader — memory stays
+flat). Stress family before (`20260824T200849Z-80cf325b`, main image) and
+after (`20260824T201619Z-a5ee5628`), same corpus, D1, four clients, CSV:
+
+| | before | after | |
+| --- | --- | --- | --- |
+| Q13, full aggregate | 6.7 rps, p95 655 ms | **21.7 rps, p95 269 ms** | now honestly `DATABASE_CPU_BOUND` |
+| Q11, 10,000 rows | 6.2 rps, p95 745 ms | 6.8 rps, p95 681 ms | |
+| Q09, deep join | 30.9 rps, p95 161 ms | 32.3 rps, p95 151 ms | |
+| Q14, expensive join | 25.0 rps, p95 416 ms | 26.3 rps, p95 409 ms | |
+
+The package's three questions, answered:
+
+- **Parallel settings.** Q13 execution on the 8-CPU pod, best of five:
+  serial 373 ms, 2 workers (the PostgreSQL default) 144 ms, 4 workers
+  95 ms, 6 and 8 flat at ~92 ms — the scan floor. The default already
+  captures most of it; `max_parallel_workers_per_gather: 4` is a latency
+  knob for deployments where single-query aggregate latency matters, and
+  `max_parallel_workers` (default 8) is what keeps concurrent aggregates
+  from taking the whole pod. The chart's defaults are unchanged: the knob
+  is documented in `values.yaml`, not pre-turned.
+- **`EXPLAIN`-based sync rejection.** Not built, and not on these numbers:
+  a 269 ms p95 needs no steering, and `syncTimeoutSeconds` now honestly
+  bounds the *whole* statement (it used to bound each cursor FETCH), which
+  refuses a query by what it actually costs rather than by what an
+  estimate guessed. The open case is D3, where this query held a sync
+  connection for 18 s pre-fix — remeasured post-fix under package 17
+  before deciding.
+- **Summary tables / materialised views.** A data-domain decision, not
+  service infrastructure: the service's job was to stop charging 6× the
+  scan's honest price, and nothing at D1 justifies maintaining
+  precomputed answers. Revisit only if the D3/D4 numbers say the honest
+  price is still too high for the queries users actually run.
+
+Two things travelled with the fix. The abort path used to recognise a job's
+backend by the cursor's *name* in `pg_stat_activity`; that identity now
+rides as a leading SQL comment (`uws.job_query_tag`), placed first so
+statement truncation can never hide it — the component suite's abort tests
+dropped from 87 s to 30 s because cancels now land instantly. And the plans
+the suite records with `EXPLAIN` (`plan-flags`) were always plain-statement
+plans; the service now executes what the suite was measuring.
+
 ### 2026-08-24 — the large-result cost was the per-cell type question (package 10, delivered)
 
 Package 10 asked where the `SERIALIZATION_BOUND` time went. Into asking,
@@ -168,10 +225,13 @@ Forty-five times the latency for twelve times the data, and at D3 it is
 `DATABASE_IO_BOUND` with a plan that discards 616,550 rows after reading them.
 Nothing here is a bad plan — a full aggregate over 7.4 million wide rows is
 proportional work — but a user can issue this *synchronously* today, and one
-such request occupies a connection for eighteen seconds. That is what makes
-package 11's `EXPLAIN`-based admission decision worth building: the service
-should be able to recognise this shape and route it to `/async` rather than
-hold a synchronous connection for it.
+such request occupies a connection for eighteen seconds. These numbers were
+taken when result queries still ran on cursors (serial, fast-start-biased
+plans; see the package 11 entry above): D3 must be remeasured with parallel
+plans before the admission decision is made, which package 17's sweep now
+carries. What already stands either way is that `syncTimeoutSeconds` bounds
+the whole statement, so a runaway synchronous aggregate is refused by its
+actual cost rather than holding the connection indefinitely.
 
 ### 2026-08-24 — D3 is where the working set stops fitting
 
@@ -215,30 +275,6 @@ and D2 (10 GiB) alike: PostgreSQL sits near idle for it. Saturation moved from
 four concurrent clients on D1 to eight on D2. So replicas and `tapApi.workers`
 remain the throughput lever — and each worker is now worth roughly 200
 requests/s rather than 20.
-
-### 2026-08-23 — the remaining costs have separated
-
-With parsing no longer dominating, the expensive classes are individually
-attributable rather than uniformly slow:
-
-| | p95 on D1 | classified |
-| --- | --- | --- |
-| normal mix (Q01–Q08, Q10) | 22–43 ms | `TAP_CPU_BOUND` |
-| Q11, 10,000-row result | 352 ms | `SERIALIZATION_BOUND` |
-| Q13, full aggregate | 393 ms | `DATABASE_CPU_BOUND` |
-
-Those two are the next optimisation targets, and they are unrelated to each
-other — Q11 was package 10 (delivered; see the entry above), Q13 is package 11.
-
-## Package 11 — Aggregate and scan-bound queries
-
-Q13 (`GROUP BY` over the whole ObsCore table) has a p95 of 393 ms and is the
-only class that makes PostgreSQL the constraint. A full aggregate over a large
-table is honest work, so the question is not how to make the scan free but
-what a service should do about it: parallel query settings for the in-chart
-database, whether `EXPLAIN`-based rejection should refuse the most expensive
-synchronous queries and steer them to `/async`, and whether summary tables or
-materialised views belong in the metadata domains that need them.
 
 ## Package 7 — Queryable region footprints (`s_region`)
 
@@ -477,7 +513,11 @@ retracted as a size effect.
 
 Work, benchmark-side: widen the warmup for the larger tiers, run the
 concurrency sweep on D3 and D4, and re-publish throughput-versus-size from
-post-fix runs only.
+post-fix runs only. Include the stress classes: Q13 held a sync connection
+for 18 s on D3 when it ran on a cursor (serial, fast-start-biased plan), and
+whether a parallel plan brings that inside a defensible `syncTimeoutSeconds`
+is the measurement the deferred `EXPLAIN`-based admission decision (package
+11) is waiting on.
 
 **Resolution is shown by** a db-scaling run covering D1–D4 with one corpus,
 in which the first repetition at each size is statistically indistinct from
