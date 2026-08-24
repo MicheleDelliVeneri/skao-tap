@@ -274,6 +274,12 @@ def install_chart(overrides: dict[str, str] | None = None) -> None:
         "--wait",
         "--timeout",
         "10m",
+        # scale() sets replicas through the scale subresource, which leaves
+        # kubectl owning that field. Helm applies server-side, so the next
+        # upgrade — the one switching an autoscaler on for the KEDA family —
+        # aborts on the conflict instead. The chart is the authority on every
+        # field it renders, so take the field back rather than fail.
+        "--force-conflicts",
     ]
     for key, value in overrides.items():
         args += ["--set", f"{key}={value}"]
