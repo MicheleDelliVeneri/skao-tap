@@ -19,6 +19,39 @@ Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/egernia-performance/results/`.
 
+### 2026-08-25 — one async job was the parse, and almost nothing else (package 20)
+
+Not a suite run: measured by `tests/performance/profile_async_job.py`
+(committed with this finding), which replays the executor's stage sequence
+with a timer around each stage against the docker-compose database on the
+benchmark host, and cross-checks the stage sum against the real
+`execute_job()` wall time (they agree within 4%). Median of 200 jobs of the
+cone-search shape, everything after the claim:
+
+| stage | ms |
+| --- | --- |
+| `touched_tables(query_sql)` — the per-job re-parse | **190.4** |
+| nine statements of bookkeeping (claim, metadata, PID publish, session setup, finalize) | 5.3 |
+| execute + serialize + write the result file | 0.7 |
+
+The parse was 97% of a job's fixed overhead, and it is not the 39 ms the
+`adql.py` comment remembered: `PostgreSQLQueryProcessor.process_query()` costs
+101–193 ms across the four query shapes measured (aggregate 101, point lookup
+129, join 140, cone search 193) — it never got the SLL fast path that took the
+translator's own parse to 1–2 ms (`e38ed30`), and nothing had re-measured it
+since. The answer it computes was already known at submit: `translate()`
+returns the table list from the parse the API does anyway.
+
+The fix shipped with this finding: the API stores that list on the job row
+(`query_tables`), and the executor reads it instead of re-deriving it — the
+parse survives only as a fallback for jobs queued by an API that predates the
+column. After: a job's fixed overhead is ~5 ms wall against a local database,
+where before it was ~199 ms. What the local measurement cannot say is what
+this does to jobs-per-executor in the deployed environment, where the ~2
+jobs/s figure was measured — that number and every autoscaling default derived
+from it (`tapExecutor.replicas`, `queuedJobsPerReplica`) predate the parse
+removal and are re-measured under package 20's remaining work.
+
 ### 2026-08-25 — the size sweep is finished, and size almost is not the story (packages 16 and 17, delivered)
 
 One db-scaling run (`20260825T005436Z-b450b0a9`), one corpus, D1 through
@@ -452,29 +485,34 @@ the measurement supports one.
 
 The chart puts an executor at ~2 jobs/s (`values.yaml`, `tapExecutor.replicas`
 note) where the API serves ~98 rps of the same mix: a job costs about fifty
-times a sync request, and no finding here has ever profiled one. The
-autoscaling packages measured how many executors get scheduled and how fast a
-queue drains; none of them asked what the ~500 ms goes into. The answer
+times a sync request, and until this package no finding had ever profiled one.
+The autoscaling packages measured how many executors get scheduled and how
+fast a queue drains; none of them asked what the ~500 ms goes into. The answer
 decides whether "eight executors for ~22 jobs/s" is physics or overhead, and
 async is the path a client takes for exactly the queries where cost is real.
 
-One term is visible without measuring anything. `worker.py` calls
-`touched_tables(job["query_sql"])` once per job — a full
-`PostgreSQLQueryProcessor` parse of the translated SQL, which is the second
-parse the API removed from its own path in `4e520b5`. `adql.py` records that
-cost at 39 ms against 14 ms for the translation itself, and the function's
-docstring concedes the executor "pays a full parse, once per job". The API
-already has the ADQL table list from the parse it does at submit time
-(`translate()` returns `tables`), so the executor can read it off the job row
-instead of deriving it again.
+**Done (see the 2026-08-25 finding above):** the job was profiled end to end,
+and the answer was overhead — the per-job `touched_tables` parse was 190 ms of
+a ~199 ms fixed cost, five times the 39 ms the `adql.py` comment remembered.
+The table list is now carried on the job row (`query_tables`, written at queue
+time from the parse the API already does at submit), the executor reads it
+instead of re-parsing, and the parse remains only as a fallback for jobs
+queued by an API that predates the column. Everything else a job pays —
+claim, metadata lookup, PID publish, session setup, the result-file write,
+the phase transitions — totals ~6 ms against a local database.
 
-Work: profile one job end to end — claim, parse, execute, write the result
-file to the ReadWriteMany volume, phase transitions — then remove the terms
-that turn out to be avoidable, starting with the per-job parse.
+Remaining work: the before/after jobs-per-executor figure from the
+autoscaling family on the same scenarios. Every published executor figure —
+~2 jobs/s per executor (`values.yaml`, `autoscaling.md`, `architecture.md`),
+`queuedJobsPerReplica`'s "10 ≈ 5 s of queue", "eight executors for ~22
+jobs/s" — was measured with the parse in the loop, and if the local profile
+transfers, an executor's fixed overhead just fell by more than an order of
+magnitude, which moves the defaults derived from those figures.
 
-**Resolution is shown by** a per-job cost breakdown published as a finding,
-the table list carried on the job rather than re-parsed, and a before/after
-jobs-per-executor figure from the autoscaling family on the same scenarios.
+**Resolution is shown by** ~~a per-job cost breakdown published as a
+finding~~, ~~the table list carried on the job rather than re-parsed~~, and a
+before/after jobs-per-executor figure from the autoscaling family on the same
+scenarios — plus the ~2 jobs/s figures above republished from that run.
 
 ## Package 21 — ADQL 2.1
 

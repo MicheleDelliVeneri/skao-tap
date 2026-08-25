@@ -312,8 +312,9 @@ one executor can never use more than one core, so give it a CPU limit of 1
 or none at all. Measured under sustained load an executor pins at ~0.96
 cores with zero throttling against a 2-core limit: the second core is
 headroom that cannot be used, and it makes utilisation numbers lie. Per-pod
-throughput (~2 jobs/s) is fixed by the single thread; replicas are the
-scaling axis.
+throughput (~2 jobs/s, measured before the executor's 190 ms per-job SQL
+re-parse was removed — package 20 re-measures it) is fixed by the single
+thread; replicas are the scaling axis.
 
 **The results volume must be `ReadWriteMany`** as soon as more than one pod
 writes or reads it — the executor writes result files and the API serves them.

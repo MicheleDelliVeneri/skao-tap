@@ -98,7 +98,9 @@ replicas = ceil(queued_jobs / queuedJobsPerReplica)
 So 50 queued jobs against the default 10 asks for 5 executors. One executor
 works through roughly 2 jobs/s, so the default is about 5 s of queue per
 replica. Lower it to react sooner and run more; raise it to tolerate a
-queue.
+queue. The 2 jobs/s figure predates the removal of the executor's 190 ms
+per-job SQL re-parse and is being re-measured (package 20,
+[Roadmap](roadmap.md)); expect it to rise.
 
 !!! note "Renamed values"
     `backlogSecondsPerReplica` and `activationBacklogSeconds` are refused by
