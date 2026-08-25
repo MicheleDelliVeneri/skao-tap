@@ -114,7 +114,8 @@ def finalise(
         }
     slo_p95_s = cfg["scenarios"]["slo"]["p95_seconds"]
     c1 = runner.sustainable_capacity(results, slo_p95_s)
-    headline.update(runner.capacity_headline(results, slo_p95_s))
+    signals_required = runner.saturation_signals_required(cfg)
+    headline.update(runner.capacity_headline(results, slo_p95_s, signals_required))
 
     invalid_path = run.path / "invalid.json"
     summary = {
@@ -134,7 +135,7 @@ def finalise(
         "bottleneck_tally": tally,
         "by_query_class": pooled,
         "headline": headline,
-        "replica_capacity": runner.replica_capacities(results, slo_p95_s),
+        "replica_capacity": runner.replica_capacities(results, slo_p95_s, signals_required),
         "format_comparison": runner.format_comparison(results),
         "shedding": runner.shedding_summary(results),
         "plan_flags": {
@@ -343,7 +344,7 @@ def cmd_replicas(args) -> int:
     results = runner.replica_sweep(run, cfg, dataset, entries)
     finalise(run, cfg, results, datasets, digests, corpus_entries=entries)
     slo = cfg["scenarios"]["slo"]["p95_seconds"]
-    for row in runner.replica_capacities(results, slo):
+    for row in runner.replica_capacities(results, slo, runner.saturation_signals_required(cfg)):
         print(
             f"n={row['replicas']}: {row['rps']:.1f} rps"
             f" ({'ceiling' if row['bracketed'] else 'open-ended'}, {row['key']})"

@@ -435,3 +435,51 @@ def test_replica_capacities_prefer_the_bracketed_kind():
     assert row["kind"] == "replica_sweep"
     assert row["bracketed"]
     assert row["rps"] == 207.0
+
+
+def test_a_saturated_low_rung_under_a_climbing_top_rung_is_no_bracket():
+    """The evidence for a ceiling has to come from where the ladder stopped.
+    Two signals at c8 with c16 still gaining throughput is a ladder that
+    never found a plateau — an any()-over-the-ladder test would have called
+    it bracketed and published the ratio as a scaling efficiency."""
+    results = [
+        _sweep_point(1, 4, 180.0),
+        _sweep_point(1, 8, 205.0, saturation_count=2),
+        _sweep_point(1, 16, 260.0),
+    ]
+    at_one = runner.bracketed_capacity(results, kind="replica_sweep", replicas=1, slo_p95_s=2.0)
+    assert not at_one["saturated"]
+    assert not at_one["bracketed"]
+
+
+def test_the_top_rung_saturates_on_whichever_repetition_carries_the_signals():
+    """A rung is `repetitions` measurements and only the median one gets the
+    saturation block, so the bracket cannot depend on which of them is seen
+    first."""
+    results = [
+        _sweep_point(1, 8, 205.0),
+        _sweep_point(1, 16, 207.0),
+        _sweep_point(1, 16, 206.0, saturation_count=2),
+    ]
+    at_one = runner.bracketed_capacity(results, kind="replica_sweep", replicas=1, slo_p95_s=2.0)
+    assert at_one["saturated"]
+    assert at_one["bracketed"]
+
+
+def test_the_bracket_uses_the_configured_signal_count_not_a_hardcoded_two():
+    """Raise concurrency_sweep.saturation_signals_required and the ladder
+    climbs past two agreeing signals — an analyzer still stopping at two
+    would report a bracketed ceiling for a sweep that never saturated."""
+    results = [_sweep_point(1, 8, 205.0), _sweep_point(1, 16, 207.0, saturation_count=2)]
+    kwargs = {"kind": "replica_sweep", "replicas": 1, "slo_p95_s": 2.0}
+    assert runner.bracketed_capacity(results, **kwargs, signals_required=2)["bracketed"]
+    assert not runner.bracketed_capacity(results, **kwargs, signals_required=3)["bracketed"]
+    # and the configured value is what the production paths read
+    assert runner.saturation_signals_required(runner.load_config()) == 2
+    assert runner.saturation_signals_required({"scenarios": {"concurrency_sweep": {}}}) == 2
+    assert (
+        runner.saturation_signals_required(
+            {"scenarios": {"concurrency_sweep": {"saturation_signals_required": 3}}}
+        )
+        == 3
+    )
