@@ -94,10 +94,26 @@ def test_view_sql_carries_the_mapping_decisions():
     assert "COALESCE(o.collection, 'unclassified')" in sql
     assert "LEFT JOIN LATERAL" in sql and "art.semantics = 'science'" in sql
     assert "round(a.access_estsize / 1000.0)::bigint" in sql
-    assert (
-        "'ivo://skao.int/~?' || p.project_id || '/' || p.obs_id || '/' || p.sbd_id"
-        " || '/' || p.eb_id || '/' || p.product_id AS obs_publisher_did" in sql
-    )
+    assert sql.startswith("CREATE VIEW ivoa.obscore AS")
+    assert obscore.view_sql(or_replace=True).startswith("CREATE OR REPLACE VIEW ivoa.obscore AS")
+
+
+def test_the_did_percent_encodes_every_key_component():
+    """A PublisherDID is permanent and the five key columns are free text: a
+    product_id holding '/' or a space would forge a path segment or produce
+    an identifier no client can parse, and two products could collide on
+    one DID."""
+    sql = obscore.view_sql()
+    did = next(line for line in sql.splitlines() if line.endswith(" AS obs_publisher_did,"))
+    assert did.lstrip().startswith("'ivo://skao.int/~?' || ")
+    # the separators stay literal; the components do not
+    assert did.count(" || '/' || ") == 4
+    for column in obscore.DID_KEY_COLUMNS:
+        assert f"regexp_split_to_table(p.{column}, '')" in did, column
+        assert f"CASE WHEN p.{column} ~ '^[{obscore.DID_SAFE_CLASS}]*$'" in did, column
+    # unreserved characters survive; anything else becomes %XX per UTF-8 byte
+    assert did.count("upper(encode(convert_to(ch, 'UTF8'), 'hex'))") == 5
+    assert "p.project_id ||" not in did  # never interpolated raw
 
 
 def test_did_prefix_outside_the_identifier_alphabet_is_refused(auth_settings):
@@ -136,25 +152,47 @@ def test_registry_record_inherits_the_data_model(auth_settings):
     assert "ObsCore-1.1</dataModel>" in vosi.voresource_xml()
 
 
-class _RecordingConn:
-    """Just enough connection for ensure_obscore: records statements and
-    answers the relkind probe."""
+class _ViewShapeChanged(Exception):
+    """What psycopg raises when CREATE OR REPLACE VIEW meets a changed
+    column list (SQLSTATE 42P16)."""
 
-    def __init__(self, relkind: str | None):
+    sqlstate = "42P16"
+
+
+class _RecordingConn:
+    """Just enough connection for ensure_obscore: records statements, answers
+    the relkind/comment probe, and optionally refuses the view replacement
+    the way Postgres does when the column list changed."""
+
+    def __init__(self, relkind: str | None, comment: str | None = None, refuse_replace=False):
         self._relkind = relkind
+        self._comment = comment
+        self._refuse_replace = refuse_replace
         self.statements: list[str] = []
 
     def execute(self, sql, params=None):
         self.statements.append(sql)
-        relkind = self._relkind
+        if self._refuse_replace and sql.startswith("CREATE OR REPLACE VIEW"):
+            raise _ViewShapeChanged("cannot change name of view column")
+        relkind, comment = self._relkind, self._comment
 
         class Result:
             def fetchone(self):
                 if "pg_class" in sql:
-                    return (relkind,) if relkind else None
+                    return (relkind, comment) if relkind else None
                 return None
 
         return Result()
+
+
+def test_calib_level_description_does_not_claim_obscores_vocabulary():
+    """srcnet reads level 1 as calibrated where ObsCore 1.1 reads it as
+    instrumental, and the view passes the value through untranslated: the
+    description has to describe the column, not the standard."""
+    description = obscore.DESCRIPTIONS["calib_level"]
+    assert "1=calibrated" in description
+    assert "instrumental" not in description
+    assert "untranslated" in description
 
 
 def test_a_preexisting_obscore_table_is_left_alone():
@@ -167,8 +205,52 @@ def test_a_preexisting_obscore_table_is_left_alone():
     assert not any("tap_schema" in s for s in conn.statements)
 
 
-def test_a_preexisting_view_is_replaced_forward():
-    conn = _RecordingConn("v")
+def test_a_view_whose_definition_did_not_change_is_not_touched():
+    """DROP + CREATE and CREATE OR REPLACE both take ACCESS EXCLUSIVE on the
+    view for the rest of the bootstrap transaction, and the bootstrap runs on
+    every pod start — so the unchanged case must issue no view DDL at all,
+    only the lock-free registration."""
+    conn = _RecordingConn("v", comment=obscore.definition_comment(obscore.view_sql()))
     obscore.ensure_obscore(conn)
-    assert any("DROP VIEW IF EXISTS ivoa.obscore" in s for s in conn.statements)
+    assert not any("VIEW" in s for s in conn.statements)
+    assert any("tap_schema.columns" in s for s in conn.statements)
+
+
+def test_a_stale_view_is_replaced_in_place():
+    conn = _RecordingConn("v", comment="ObsCore 1.1 over the ODP metadata (definition older0)")
+    obscore.ensure_obscore(conn)
+    assert any(s.startswith("CREATE OR REPLACE VIEW ivoa.obscore") for s in conn.statements)
+    assert not any("DROP VIEW" in s for s in conn.statements)
+    assert conn.statements.count("SAVEPOINT obscore_view") == 1
+    assert "RELEASE SAVEPOINT obscore_view" in conn.statements
+    assert any(s.startswith("COMMENT ON VIEW ivoa.obscore") for s in conn.statements)
+
+
+def test_a_changed_column_list_falls_back_to_drop_and_create():
+    """CREATE OR REPLACE VIEW is refused (42P16) when the column list moves,
+    and the failed statement has aborted the transaction — so the fallback
+    has to roll back to the savepoint before it can run."""
+    conn = _RecordingConn("v", comment="stale", refuse_replace=True)
+    obscore.ensure_obscore(conn)
+    order = [s.split("\n")[0] for s in conn.statements]
+    assert order.index("ROLLBACK TO SAVEPOINT obscore_view") < order.index(
+        "DROP VIEW IF EXISTS ivoa.obscore"
+    )
     assert any(s.startswith("CREATE VIEW ivoa.obscore") for s in conn.statements)
+
+
+def test_a_first_creation_needs_no_existing_view():
+    conn = _RecordingConn(None)
+    obscore.ensure_obscore(conn)
+    assert any(s.startswith("CREATE OR REPLACE VIEW ivoa.obscore") for s in conn.statements)
+
+
+def test_an_unrelated_database_error_is_not_swallowed_as_a_shape_change():
+    class _Boom(_RecordingConn):
+        def execute(self, sql, params=None):
+            if sql.startswith("CREATE OR REPLACE VIEW"):
+                raise RuntimeError("connection lost")
+            return super().execute(sql, params)
+
+    with pytest.raises(RuntimeError, match="connection lost"):
+        obscore.ensure_obscore(_Boom("v", comment="stale"))

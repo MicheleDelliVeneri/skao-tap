@@ -35,7 +35,7 @@ def availability_xml() -> str:
     )
 
 
-def _obscore_active() -> bool:
+def obscore_active() -> bool:
     """Whether this deployment publishes ivoa.obscore.
 
     Keyed off the active plugins — the same condition under which the odp
@@ -46,7 +46,7 @@ def _obscore_active() -> bool:
 
 
 def _data_model_elements() -> str:
-    if not _obscore_active():
+    if not obscore_active():
         return ""
     ivoid = obscore.DATAMODEL_IVOID
     return f'    <dataModel ivo-id="{ivoid}">ObsCore-1.1</dataModel>\n'

@@ -337,7 +337,7 @@ async def sync(request: Request):
 @app.get("/tap/examples")
 async def examples():
     obscore_example = ""
-    if vosi._obscore_active():
+    if vosi.obscore_active():
         obscore_example = """<div typeof="example" id="obscore-cone" resource="#obscore-cone">
   <h2 property="name">ObsCore: data products overlapping a cone</h2>
   <pre property="query">

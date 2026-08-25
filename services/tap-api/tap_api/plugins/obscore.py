@@ -5,8 +5,8 @@ table: `srcnet.data_products` already carries most of the mandatory columns
 under their exact ObsCore names, `srcnet.observations` has the collection
 and provenance names, and `srcnet.artifacts` the access columns. The view
 is created by the odp plugin's bootstrap (`MetadataPlugin.post_ensure`), so
-it exists exactly when its source tables do, and dropped-and-recreated on
-every startup so a mapping change migrates forward.
+it exists exactly when its source tables do, and replaced on every startup
+so a mapping change migrates forward.
 
 Column metadata is transcribed from REC-ObsCore-v1.1-20170509 Table 6 (the
 TAP_SCHEMA values for the mandatory fields); utypes carry the ``obscore:``
@@ -23,7 +23,10 @@ Mapping decisions (each visible in the SQL below):
   ``COALESCE(collection, 'unclassified')``.
 - ``obs_publisher_did`` is a configurable prefix (``TAP_OBSCORE_DID_PREFIX``)
   plus the primary-key chain — a DID must be permanent, so its shape is the
-  hierarchy's identity and nothing derived.
+  hierarchy's identity and nothing derived — with each key component
+  percent-encoded (see ``_did_component``).
+- ``calib_level`` is passed through untranslated; srcnet's declared meaning
+  and ObsCore 1.1's disagree at level 1 (see ``docs/obscore.md``).
 - ``access_*`` come from one representative science artifact per product
   (`LEFT JOIN LATERAL ... LIMIT 1`); a NULL ``access_url`` is spec-legal.
 - ``access_estsize`` converts the model's bytes to the REC's kbyte.
@@ -32,6 +35,7 @@ Mapping decisions (each visible in the SQL below):
   them, and NULL is permitted.
 """
 
+import hashlib
 import logging
 import re
 
@@ -421,7 +425,17 @@ OBSCORE_COLUMNS: list[tuple] = [
 
 DESCRIPTIONS = {
     "dataproduct_type": "Data product (file content) primary type",
-    "calib_level": "Calibration level (0=raw, 1=instrumental, 2=calibrated, 3=derived)",
+    # ObsCore 1.1 Table 6 reads this as 0=raw, 1=instrumental, 2=calibrated,
+    # 3=derived; srcnet declares 0=raw, 1=calibrated, 2=science-ready,
+    # 3=analysis (docs/model-schemas.md), and the view hands the value over
+    # unchanged. Relabelling real calibration levels is a data-model decision,
+    # not a view one, so the description states what the column holds rather
+    # than what ObsCore would like it to hold; docs/obscore.md records the
+    # discrepancy so a client author is not left to discover it by eye.
+    "calib_level": (
+        "Calibration level as declared by the SRCNet producer, passed through"
+        " untranslated (srcnet: 0=raw, 1=calibrated, 2=science-ready, 3=analysis)"
+    ),
     "obs_collection": "Name of the data collection",
     "obs_id": "Internal ID given by the ObsTAP service",
     "obs_publisher_did": "ID for the Dataset given by the publisher",
@@ -475,17 +489,51 @@ def did_prefix() -> str:
     return prefix
 
 
-def view_sql() -> str:
-    did = (
-        f"'{did_prefix()}' || p.project_id || '/' || p.obs_id || '/' || p.sbd_id"
-        " || '/' || p.eb_id || '/' || p.product_id"
+# The DID path is built from five free-``text`` primary-key columns. RFC 3986
+# unreserved is the safe core of the IVOA identifier alphabet; anything else
+# in a key would either forge a path segment ('/'), truncate the identifier
+# ('#', '?'), or make it unparseable (a space, a stray '%') — and a
+# PublisherDID is a permanent promise, so an ambiguous one cannot be taken
+# back later.
+DID_SAFE_CLASS = "A-Za-z0-9._~-"
+
+DID_KEY_COLUMNS = ("project_id", "obs_id", "sbd_id", "eb_id", "product_id")
+
+
+def _did_component(column: str) -> str:
+    """SQL for one percent-encoded component of the DID path.
+
+    ``regexp_replace`` cannot compute a per-match replacement, so the
+    encoding is a fold over the characters: unreserved ones survive,
+    everything else becomes ``%XX`` per UTF-8 byte (upper-case hex, as RFC
+    3986 recommends). ``convert_to``, ``encode`` and the ``regexp_*``
+    functions are all IMMUTABLE, so this is legal in a view definition.
+
+    The guard in front is not decoration: the fold splits the string into
+    one row per character, and this view is meant to be scanned whole.
+    Real identifiers are already clean, so the common row pays one anchored
+    regexp match and nothing else.
+    """
+    return (
+        f"CASE WHEN {column} ~ '^[{DID_SAFE_CLASS}]*$' THEN {column} ELSE ("
+        f"SELECT string_agg(CASE WHEN ch ~ '^[{DID_SAFE_CLASS}]$' THEN ch"
+        " ELSE regexp_replace(upper(encode(convert_to(ch, 'UTF8'), 'hex')),"
+        " '(..)', '%\\1', 'g') END, '' ORDER BY n)"
+        f" FROM regexp_split_to_table({column}, '') WITH ORDINALITY AS c(ch, n)) END"
+    )
+
+
+def view_sql(or_replace: bool = False) -> str:
+    did = f"'{did_prefix()}' || " + " || '/' || ".join(
+        _did_component(f"p.{column}") for column in DID_KEY_COLUMNS
     )
     selects = ",\n    ".join(
         f"{expression if expression is not None else did} AS {name}"
         for name, *_, expression in OBSCORE_COLUMNS
     )
+    verb = "CREATE OR REPLACE VIEW" if or_replace else "CREATE VIEW"
     return (
-        "CREATE VIEW ivoa.obscore AS\n"
+        f"{verb} ivoa.obscore AS\n"
         f"SELECT\n    {selects}\n"
         "FROM srcnet.data_products AS p\n"
         "JOIN srcnet.observations AS o\n"
@@ -502,15 +550,78 @@ def view_sql() -> str:
     )
 
 
+# Postgres refuses CREATE OR REPLACE VIEW with invalid_table_definition when
+# the replacement's column list differs in name, type or order.
+_VIEW_SHAPE_CHANGED = "42P16"
+
+
+def definition_comment(sql: str) -> str:
+    """The view's comment, carrying a fingerprint of its own definition.
+
+    Postgres normalises a stored view definition, so ``pg_get_viewdef``
+    never compares equal to the SQL written here — a fingerprint of our own
+    is the only way to recognise "nothing changed" without issuing DDL.
+    """
+    digest = hashlib.sha256(sql.encode()).hexdigest()[:16]
+    return f"ObsCore 1.1 over the ODP metadata (definition {digest})"
+
+
+def _replace_view(conn, current_comment: str | None) -> None:
+    """Install ivoa.obscore, doing nothing at all when it is already current.
+
+    Measured on PostgreSQL 16: CREATE OR REPLACE VIEW takes the same
+    ACCESS EXCLUSIVE lock on the view as DROP + CREATE, so changing
+    statement is not by itself the fix. That lock is held until the
+    bootstrap transaction commits and the bootstrap runs on every pod start,
+    so one long-running ObsCore query plus a rolling deploy is enough to
+    queue every new query on ivoa.obscore behind a pod's DDL. Hence the
+    fingerprint: reading a comment takes no relation lock (and GRANT takes
+    none either), so a restart that is not a mapping change touches nothing.
+
+    When the definition did change, CREATE OR REPLACE VIEW is still the
+    better statement — it keeps the relation's OID, so blocked queries and
+    cached plans survive it, and it keeps the grants — and it is refused
+    (SQLSTATE 42P16) in exactly the case that needs the drop: a changed
+    column list. A failed statement aborts the transaction, so the attempt
+    runs inside a SAVEPOINT. The shape is not pre-checked against
+    information_schema because the view's column types come from the select
+    expressions rather than from anything declared in this module, and a
+    type change missed by such a check would abort the whole bootstrap
+    instead of recreating the view. The SQLSTATE is matched by code rather
+    than by exception class so this module keeps reaching the database only
+    through tapcore's connection.
+    """
+    sql = view_sql()
+    comment = definition_comment(sql)
+    if current_comment == comment:
+        return
+    conn.execute("SAVEPOINT obscore_view")
+    try:
+        conn.execute(view_sql(or_replace=True))
+    except Exception as exc:
+        if getattr(exc, "sqlstate", None) != _VIEW_SHAPE_CHANGED:
+            raise
+        conn.execute("ROLLBACK TO SAVEPOINT obscore_view")
+        log.info("ivoa.obscore column list changed; recreating the view (%s)", exc)
+        conn.execute("DROP VIEW IF EXISTS ivoa.obscore")
+        conn.execute(sql)
+    else:
+        conn.execute("RELEASE SAVEPOINT obscore_view")
+    conn.execute("COMMENT ON VIEW ivoa.obscore IS %s", (comment,))
+
+
 def ensure_obscore(conn) -> None:
     """Create and register the ivoa.obscore view (odp post_ensure hook).
 
-    Drop-and-create, so a mapping change migrates forward; the caller holds
-    the bootstrap's advisory transaction lock, so concurrent pods serialise
-    here like they do on the rest of the schema.
+    Replace-in-place where possible and drop-and-create where not, so a
+    mapping change migrates forward and an unchanged one is left alone (see
+    :func:`_replace_view`); the caller holds the bootstrap's advisory
+    transaction lock, so concurrent pods serialise here like they do on the
+    rest of the schema.
     """
     existing = conn.execute(
-        "SELECT c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+        "SELECT c.relkind, obj_description(c.oid, 'pg_class') FROM pg_class c"
+        " JOIN pg_namespace n ON n.oid = c.relnamespace"
         " WHERE n.nspname = 'ivoa' AND c.relname = 'obscore'"
     ).fetchone()
     if existing and existing[0] != "v":
@@ -524,8 +635,7 @@ def ensure_obscore(conn) -> None:
         )
         return
     conn.execute("CREATE SCHEMA IF NOT EXISTS ivoa")
-    conn.execute("DROP VIEW IF EXISTS ivoa.obscore")
-    conn.execute(view_sql())
+    _replace_view(conn, existing[1] if existing else None)
     conn.execute(f"GRANT USAGE ON SCHEMA ivoa TO {settings.query_role}")
     conn.execute(f"GRANT SELECT ON ivoa.obscore TO {settings.query_role}")
     conn.execute(

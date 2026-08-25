@@ -86,3 +86,30 @@ def test_obscore_declarations_for_validators(tap_service):
 
     examples = httpx.get(f"{tap_service}/examples", timeout=10).text
     assert "ivoa.obscore" in examples
+
+
+def test_obscore_publisher_did_percent_encodes_the_key_chain(tap_service):
+    """The key columns are free text and a PublisherDID is permanent: a
+    product_id carrying a space, a '/' and a '#' must not forge a sixth path
+    segment or truncate the identifier at the fragment."""
+    payload = copy.deepcopy(SRC_INGESTION_EXAMPLE)
+    payload["project_id"] = "obscore-escape"
+    product = payload["observations"][0]["scheduling_blocks"][0]["execution_blocks"][0][
+        "data_products"
+    ][0]
+    product["product_id"] = "cube 3/a#1"
+    created = httpx.post(f"{_api(tap_service)}/notifications", json=payload, timeout=30)
+    assert created.status_code == 201, created.text
+
+    lines = _sync_csv(
+        tap_service,
+        "SELECT obs_publisher_did FROM ivoa.obscore"
+        " WHERE obs_publisher_did LIKE '%obscore-escape%'",
+    )
+    dids = lines[1:]
+    assert dids, lines
+    for did in dids:
+        assert did.startswith("ivo://skao.int/~?obscore-escape/")
+        assert did.endswith("/cube%203%2Fa%231")
+        # the raw characters never reach the identifier
+        assert " " not in did and "#" not in did
