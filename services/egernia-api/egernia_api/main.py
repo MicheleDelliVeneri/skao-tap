@@ -69,9 +69,13 @@ def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
         try:
             with db_connection() as conn, conn.transaction():
                 # forward-migrate deployments whose uws.jobs predates ABORT
-                # support (the column is in db/init for fresh databases)
+                # support (the columns are in db/init for fresh databases).
+                # query_tables is ensured here as well as in the executor:
+                # the API writes it at queue time, and in a rolling upgrade a
+                # new API can queue a job before any new executor has started.
                 conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS backend_pid integer")
                 conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS request_id text")
+                conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS query_tables text[]")
                 for plugin in plugins:
                     ingest.ensure_schema(conn, plugin)
             return
