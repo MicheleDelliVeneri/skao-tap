@@ -131,7 +131,7 @@ tooling that analysis actually uses.
 Metadata domains accept JSON at `/api/v1/<domain>` and become queryable
 through ordinary ADQL, because ingest registers the generated tables in
 `TAP_SCHEMA`. The runnable
-[PyVO notebook](https://github.com/MicheleDelliVeneri/egernia/blob/main/demo/srcnet_metadata_tap.ipynb)
+[PyVO notebook](https://github.com/ska-telescope/egernia/blob/main/demo/srcnet_metadata_tap.ipynb)
 populates `srcnet.data_products` and `srcnet.software` against this same
 Compose stack and queries both back through TAP.
 

@@ -5,7 +5,7 @@ findings and performance measurements are all as welcome as code.
 
 ## Where to ask
 
-- **Questions and bug reports** — [GitHub issues](https://github.com/MicheleDelliVeneri/egernia/issues).
+- **Questions and bug reports** — [GitHub issues](https://github.com/ska-telescope/egernia/issues).
   For a conformance bug, the most useful report names the standard and section
   the service is getting wrong, and the client that noticed.
 - **Security vulnerabilities** — follow [SECURITY.md](SECURITY.md). Please do
@@ -25,7 +25,7 @@ uv run --group docs mkdocs serve     # docs at http://localhost:8000
 ```
 
 The component tests need a reachable PostgreSQL and skip without one — see the
-[development guide](https://micheledelliveneri.github.io/egernia/development/)
+[development guide](https://ska-telescope.github.io/egernia/development/)
 for the connection details and the Docker Compose shortcut.
 
 ## What CI expects
@@ -58,7 +58,7 @@ update `/capabilities` so clients can discover it.
 ## Roadmap
 
 Larger work is organised as numbered packages in the
-[roadmap](https://micheledelliveneri.github.io/egernia/roadmap/), referenced
+[roadmap](https://ska-telescope.github.io/egernia/roadmap/), referenced
 by number in issues and PRs. If you plan something substantial, opening an
 issue first saves duplicated effort.
 
