@@ -50,7 +50,12 @@ operators turn out not to be in the final 2.1 REC at all — they were dropped
 after the drafts queryparser followed — so they parse as an undeclared
 extension. The hot path held: geometry translation 2.33 ms before, 2.27 ms
 after on the same machine (`tests/benchmarks/test_hot_paths.py`), with the
-SLL-equals-full-context parity guard extended over the new syntax. Across
+SLL-equals-full-context parity guard extended over the new syntax. The
+budget this package was written against has since been corrected by package
+18's profile: whole-request translation measures 3.19 ms (30.9% of a
+request, the largest named subsystem), not the "fast path's 1.2 ms" the
+Work paragraph cited — so the fork's ~2.3 ms is competitive with the
+pre-fork translator, not merely holding a narrower figure. Across
 the full 12,000-query benchmark corpus, the fork translates every query
 byte-identically to upstream 0.7.4, and the SLL fast path byte-identically
 to the fork's full-context parse — zero divergences either way. The
