@@ -15,6 +15,36 @@ Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/tap-performance/results/`.
 
+### 2026-08-24 — the classifier's three misreadings, corrected (package 15, delivered)
+
+None changed what was measured; all changed what a reader concludes, and
+each is now pinned by a test that fails if it comes back:
+
+- **Pool waits above the timeout were an interpolation artefact.**
+  Reclassifying the shedding run (`20260824T210726Z-9b2bfb85`) shows the
+  shape exactly: every saturated rung reports `peak_pool_wait_p95_s` of
+  9.7 s against a 5 s timeout — the midpoint of the (5, 10] bucket, where
+  every timed-out acquire landed because no bucket edge sat at the
+  timeout. The service's histogram now derives its edges from
+  `dbPoolTimeoutSeconds` (an edge at the timeout and one 20% past it), so
+  runs on the fixed image read within 20% of the truth; the verdict's
+  evidence now carries `pool_timeout_s` so the artefact is at least
+  legible in old runs.
+- **`CONNECTION_POOL_BOUND` confidence grades against the timeout.**
+  `min(1.0, wait)` made any wait over a second a certainty that outranked
+  every other verdict; a 0.5 s wait against a 5 s timeout is now a tenth
+  of a case.
+- **CPU ceilings are time-aligned to the fleet that was ready.** The
+  executor (and API) ceiling was the *peak* ready count times the per-pod
+  limit across the whole window, so a ramping fleet was judged mid-ramp
+  against pods that did not exist yet, and a fleet pinned at 2, then 8
+  cores — pinned the entire time — read `UNKNOWN` against an 8-core
+  ceiling it only reached at the end. Each CPU sample is now judged
+  against the replica count ready at that sample's timestamp (stepwise,
+  from the run's own series). The KEDA run the package named is not in
+  this checkout's results, so the correction is pinned by unit tests on
+  exactly that ramp shape rather than by a reclassify.
+
 ### 2026-08-24 — overload now sheds with answers, and the ceiling is placed (package 13, delivered)
 
 The bounded-concurrency shape the package asked for exists (`tapbench
@@ -334,31 +364,6 @@ runs per replica count, the shape the size sweep already uses.
 has a bracketed capacity (a valid rung the service was pushed past), the
 per-replica efficiency column populates from those brackets, and the p95 at
 each count's capacity is reported alongside it.
-
-## Package 15 — Analysis artefacts the classifier still carries
-
-Three recorded misreadings in the bottleneck analysis, none of which changes
-what was measured but all of which change what a reader concludes:
-
-- `peak_pool_wait_p95_s` reads ~9.7 s against a 5 s pool timeout, because
-  the pool-wait histogram's last finite bucket is 10 s and every timed-out
-  acquire interpolates to the middle of (5, 10]. Needs a bucket boundary at
-  the timeout — a service-image change, now unblocked since the image moved
-  anyway.
-- `CONNECTION_POOL_BOUND` takes confidence `min(1.0, pool_wait)`, so any
-  wait over a second is full confidence and the class outranks everything
-  else wherever the pool waited at all. Needs grading against the timeout.
-- The executor-CPU ceiling is the *peak* ready replica count times one core
-  across the whole window. An autoscaled fleet ramps, so mid-ramp the
-  ceiling is overstated and a pinned fleet classifies `UNKNOWN` — run
-  `20260824T140134Z-bf7e4b24-keda` shows exactly this on its maxed-out
-  scenarios. The ceiling has to be time-aligned to the ready count.
-
-**Resolution is shown by** `tapbench reclassify` over the depth-signal
-verification run: the maxed-out scenarios stop reading `UNKNOWN` where the
-per-timestamp fleet was pinned, pool-wait p95 never exceeds the configured
-timeout, and `CONNECTION_POOL_BOUND` confidence grades rather than
-saturates.
 
 ## Package 16 — Ship the planner what it needs
 
