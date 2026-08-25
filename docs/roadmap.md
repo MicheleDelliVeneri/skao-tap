@@ -4,9 +4,9 @@ Follow-up work is organized in numbered packages, referenced by number in
 issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
-**Packages 18 through 21 are open.** Everything through package 17 is
-delivered and merged; what each one settled is recorded in the findings
-below.
+**Packages 18 through 20 are open.** Everything through package 17, and
+package 21, is delivered and merged; what each one settled is recorded in
+the findings below.
 
 ## Measured findings
 
@@ -18,6 +18,46 @@ so it can be checked and it can go stale — the run that produced it is named.
 Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/egernia-performance/results/`.
+
+### 2026-08-25 — ADQL 2.1, by forking the grammar rather than replacing the parser (package 21, delivered)
+
+The parser question settled itself: upstream `queryparser` has not moved
+(0.7.4 is still the latest release) and no maintained Python alternative
+parses ADQL 2.1, while the translation fast path (SLL prediction, single
+parse) is built on exactly this ANTLR stack — so the ADQL dialect is now a
+vendored fork (`libs/egernia-core/egernia_core/query/_adql/`, grammar and
+generated parser both committed, ANTLR pinned to the 4.13.1 runtime already
+in `uv.lock`), and the rest of queryparser stays a PyPI dependency.
+
+The gap was smaller than the package assumed: 0.7.4 already parsed `ILIKE`,
+`OFFSET`, bitwise operators, hex literals, the optional coordinate system
+and 4-argument `DISTANCE`. What the fork adds is the 2.1 core-grammar change
+the sentinel existed for — a geometry-typed column anywhere a geometry
+argument goes (`INTERSECTS`/`CONTAINS`/`AREA`/`DISTANCE`/circle centres) —
+plus `CAST`, `COALESCE`, `LOWER`/`UPPER` over expressions, empty-string
+coordinate systems, and unlocked `EXCEPT`/`INTERSECT` (upstream refused them
+for MySQL's sake; PostgreSQL is fine). Two silent-wrong-answer holes are
+closed in translation: ADQL's `^` (XOR) now renders as PostgreSQL's `#`
+rather than passing through as exponentiation, and hex literals render in
+decimal so results do not depend on PostgreSQL 16+. The sentinel `POLYGON`
+substitution and its magic coordinates are deleted.
+
+`/capabilities` now declares 2.0 and 2.1 with a per-construct feature list,
+and only what a conformance test in `tests/unit/test_adql.py` exercises is
+declared: `IN_UNIT` (needs per-column unit metadata), `WITH` (still refused)
+and `CENTROID` (no pgsphere mapping) are deliberately absent. Bitwise
+operators turn out not to be in the final 2.1 REC at all — they were dropped
+after the drafts queryparser followed — so they parse as an undeclared
+extension. The hot path held: geometry translation 2.33 ms before, 2.27 ms
+after on the same machine (`tests/benchmarks/test_hot_paths.py`), with the
+SLL-equals-full-context parity guard extended over the new syntax. Across
+the full 12,000-query benchmark corpus, the fork translates every query
+byte-identically to upstream 0.7.4, and the SLL fast path byte-identically
+to the fork's full-context parse — zero divergences either way. The
+in-cluster translation *share* published by package 18's profile was
+measured against the un-vendored translator; `make benchmark-profile`
+(~40 min, D1 only) re-measures it — the profile's bucket already matches
+the vendored module path.
 
 ### 2026-08-25 — the size sweep is finished, and size almost is not the story (packages 16 and 17, delivered)
 
@@ -476,32 +516,3 @@ that turn out to be avoidable, starting with the per-job parse.
 the table list carried on the job rather than re-parsed, and a before/after
 jobs-per-executor figure from the autoscaling family on the same scenarios.
 
-## Package 21 — ADQL 2.1
-
-`/capabilities` declares ADQL 2.0 only, which is what the service implements:
-the parser is `queryparser`'s ANTLR grammar, and that grammar predates 2.1.
-The gap is not theoretical. The geometry-column argument form the ObsCore
-footprint queries need — `INTERSECTS(s_region_geom, ...)`, a column where 2.0
-allows only a constructor — is a syntax error to that grammar, and `adql.py`
-reaches it by hiding the column behind a sentinel `POLYGON` literal with magic
-coordinates and swapping the emitted pgsphere literal back afterwards, pinned
-by unit tests so an upstream change fails loudly rather than quietly producing
-wrong SQL. What 2.1 adds beyond that is what current clients write: `ILIKE`,
-`OFFSET`, `CAST`, bitwise operators, `IN_UNIT`.
-
-This is the largest user-visible gap left now that the performance surface has
-been worked over, and it is also the project's narrowest dependency: the whole
-query layer rests on one ANTLR grammar from a single upstream, wrapped in a
-substitution the service has to keep honest.
-
-Work: settle the parser question before writing any grammar — fork
-queryparser's grammar to 2.1, or replace the parse with a maintained
-alternative — and only then the feature surface, the sentinel's removal, and
-the declared version. Note that the parse is also the subject of package 18's
-profile, so the two packages share evidence: a replacement parser has to hold
-the fast path's 1.2 ms as well as accept more syntax.
-
-**Resolution is shown by** `/capabilities` declaring 2.1 truthfully; the
-sentinel substitution deleted because the grammar accepts a geometry column
-directly; a conformance test per added construct; and no regression in the
-translation hot-path benchmark.

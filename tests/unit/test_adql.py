@@ -1,4 +1,5 @@
-"""Unit tests for ADQL translation (queryparser-backed)."""
+"""Unit tests for ADQL translation (backed by the vendored ADQL 2.1 fork
+of queryparser in egernia_core.query._adql)."""
 
 import pytest
 from egernia_core.errors import QueryParseError
@@ -61,6 +62,7 @@ def test_apply_maxrec_wraps_with_one_extra_row():
 def test_check_language():
     check_language("ADQL")
     check_language("adql-2.0")
+    check_language("ADQL-2.1")
     with pytest.raises(QueryParseError):
         check_language("SQL")
 
@@ -89,6 +91,12 @@ SHAPES = (
     "SELECT collection, COUNT(*) FROM caom.observation GROUP BY collection",
     "SELECT DISTANCE(POINT('ICRS', 10, 20), POINT('ICRS', 11, 21)) FROM ska.continuum_sources",
     "SELECT ra FROM ska.continuum_sources WHERE dec BETWEEN -10 AND 10",
+    # ADQL 2.1 shapes: the fast path must agree on the new grammar too
+    "SELECT obs_id FROM ivoa.obscore WHERE 1=INTERSECTS(s_region_geom, CIRCLE('ICRS', 1, -3, 0.5))",
+    "SELECT CAST(flux AS DOUBLE PRECISION) FROM ska.continuum_sources",
+    "SELECT LOWER(obs_collection) FROM ivoa.obscore WHERE obs_collection ILIKE 'ska%'",
+    "SELECT ra FROM ska.continuum_sources ORDER BY ra OFFSET 100",
+    "SELECT a FROM t UNION SELECT a FROM u",
 )
 
 
@@ -97,7 +105,7 @@ def test_the_fast_path_translates_exactly_as_the_library_does(query):
     """SLL prediction is only sound if it produces the same tree. Verified
     here per shape, and separately across the whole 12,000-query benchmark
     corpus — this is the regression guard for a grammar or library bump."""
-    from queryparser.adql import ADQLQueryTranslator
+    from egernia_core.query._adql import ADQLQueryTranslator
 
     assert adql_to_postgresql(query) == ADQLQueryTranslator(query).to_postgresql()
 
@@ -170,7 +178,13 @@ def test_tables_come_from_the_single_parse():
 
 
 # ---------------------------------------------------------------------------
-# Geometry-typed columns as INTERSECTS/CONTAINS arguments (package 7)
+# Geometry-typed columns as INTERSECTS/CONTAINS arguments
+#
+# Originally supported (package 7) by hiding the column from the 2.0 grammar
+# behind a sentinel POLYGON literal and swapping the emitted pgsphere literal
+# back afterwards. The vendored 2.1 grammar accepts the column directly
+# (package 21), so these now pin the grammar-native translation — the
+# assertions are unchanged from the sentinel era on purpose.
 # ---------------------------------------------------------------------------
 
 
@@ -210,7 +224,7 @@ def test_point_in_geometry_column_via_contains():
     assert "spoint(RADIANS(1.0), RADIANS(2.0)) @ a.s_region_geom" in sql
 
 
-def test_two_geometry_columns_in_one_query_restore_independently():
+def test_two_geometry_columns_in_one_query():
     from egernia_core.query.adql import translate
 
     sql = translate(
@@ -219,7 +233,6 @@ def test_two_geometry_columns_in_one_query_restore_independently():
         " AND 1=CONTAINS(POINT('ICRS', 5, 6), s_region_geom)"
     ).sql
     assert sql.count("s_region_geom") == 2
-    assert "654321" not in sql  # no sentinel leaked
 
 
 def test_constructor_arguments_are_left_alone():
@@ -229,7 +242,7 @@ def test_constructor_arguments_are_left_alone():
         "SELECT TOP 5 obs_id FROM ivoa.obscore"
         " WHERE 1=CONTAINS(POINT('ICRS', s_ra, s_dec), CIRCLE('ICRS', 10.5, -30.2, 0.5))"
     ).sql
-    assert "@ scircle" in sql and "654321" not in sql
+    assert "@ scircle" in sql
 
 
 def test_predicate_names_inside_string_literals_are_not_rewritten():
@@ -239,3 +252,118 @@ def test_predicate_names_inside_string_literals_are_not_rewritten():
         "SELECT obs_id FROM ivoa.obscore WHERE obs_collection = 'INTERSECTS(trap, x)'"
     ).sql
     assert "'INTERSECTS(trap, x)'" in sql
+
+
+# ---------------------------------------------------------------------------
+# ADQL 2.1 conformance (package 21) — one test per construct the service
+# declares in /capabilities, plus the deliberate refusals. The declaration
+# is only truthful while these pass.
+# ---------------------------------------------------------------------------
+
+
+def test_area_of_a_geometry_column():
+    sql = adql_to_postgresql("SELECT AREA(s_region_geom) FROM ivoa.obscore")
+    assert "square_degrees(area(s_region_geom))" in sql
+
+
+def test_distance_between_point_columns():
+    sql = adql_to_postgresql("SELECT DISTANCE(p1, p2) FROM srcnet.artifacts")
+    assert "DEGREES(p1 <-> p2)" in sql
+
+
+def test_point_column_as_circle_center():
+    sql = adql_to_postgresql("SELECT 1 FROM t WHERE 1=CONTAINS(pt_col, CIRCLE(center_col, 0.5))")
+    assert "pt_col @ scircle(center_col, RADIANS(0.5))" in sql
+
+
+def test_coordinate_system_is_optional():
+    """2.1 deprecates the coordinate-system argument; constructors must
+    accept its omission and, for 2.0 compatibility, an empty string."""
+    omitted = adql_to_postgresql("SELECT 1 FROM t WHERE 1=CONTAINS(POINT(1,2), CIRCLE(1,2,0.1))")
+    empty = adql_to_postgresql(
+        "SELECT 1 FROM t WHERE 1=CONTAINS(POINT('',1,2), CIRCLE('',1,2,0.1))"
+    )
+    explicit = adql_to_postgresql(
+        "SELECT 1 FROM t WHERE 1=CONTAINS(POINT('ICRS',1,2), CIRCLE('ICRS',1,2,0.1))"
+    )
+    assert omitted == empty == explicit
+
+
+@pytest.mark.parametrize(
+    "target,sql_type",
+    [
+        ("SMALLINT", "SMALLINT"),
+        ("INTEGER", "INTEGER"),
+        ("BIGINT", "BIGINT"),
+        ("REAL", "REAL"),
+        ("DOUBLE PRECISION", "DOUBLE PRECISION"),
+        ("CHAR(2)", "CHAR (2)"),
+        ("VARCHAR(10)", "VARCHAR (10)"),
+        ("TIMESTAMP", "TIMESTAMP"),
+    ],
+)
+def test_cast_renders_as_itself(target, sql_type):
+    sql = adql_to_postgresql(f"SELECT CAST(flux AS {target}) FROM t")
+    assert f"CAST(flux AS {sql_type})" in sql
+
+
+def test_cast_to_a_geometry_type_is_a_clear_error():
+    """The 2.1 grammar admits geometry cast targets, but no pgsphere mapping
+    exists — better a parse-time error than SQL that fails in the database."""
+    with pytest.raises(QueryParseError, match="geometry"):
+        adql_to_postgresql("SELECT CAST(s_region_geom AS POINT) FROM t")
+
+
+def test_lower_and_upper_accept_expressions():
+    sql = adql_to_postgresql("SELECT LOWER(a) FROM t WHERE UPPER(t.b) = 'X'")
+    assert "LOWER(a)" in sql
+    assert "UPPER(t.b)" in sql
+
+
+def test_ilike_passes_through():
+    sql = adql_to_postgresql("SELECT a FROM t WHERE a ILIKE 'ska%'")
+    assert "ILIKE 'ska%'" in sql
+
+
+def test_coalesce_passes_through():
+    sql = adql_to_postgresql("SELECT COALESCE(a, b, 0) FROM t")
+    assert "COALESCE(a, b, 0)" in sql
+
+
+def test_offset_passes_through():
+    sql = adql_to_postgresql("SELECT a FROM t ORDER BY a OFFSET 100")
+    assert sql.rstrip(";").endswith("OFFSET 100")
+
+
+def test_set_operators_pass_through():
+    from egernia_core.query.adql import translate
+
+    for op in ("UNION", "EXCEPT", "INTERSECT"):
+        result = translate(f"SELECT a FROM t {op} SELECT a FROM u")
+        assert f" {op} " in result.sql
+        # the publication check must see both sides
+        assert result.tables == frozenset({"t", "u"})
+
+
+def test_bitwise_xor_becomes_postgres_hash():
+    """ADQL spells XOR '^', which is exponentiation in PostgreSQL — passing
+    it through would compute powers. (Bitwise operators were dropped from the
+    final 2.1 REC, so they are an undeclared extension; they must still not
+    produce wrong answers.)"""
+    sql = adql_to_postgresql("SELECT a ^ 3 FROM t WHERE b & 1 = 0")
+    assert "a # 3" in sql
+    assert "b & 1" in sql
+
+
+def test_hexadecimal_literals_render_in_decimal():
+    """Bare 0x… literals need PostgreSQL 16+; decimal works everywhere."""
+    sql = adql_to_postgresql("SELECT 0x1F FROM t WHERE a = 0xff")
+    assert "SELECT 31" in sql
+    assert "= 255" in sql
+
+
+def test_with_is_still_refused():
+    """Common table expressions are not declared in /capabilities, so the
+    refusal must stay a clear error rather than becoming silent breakage."""
+    with pytest.raises(QueryParseError, match="WITH"):
+        adql_to_postgresql("WITH x AS (SELECT a FROM t) SELECT a FROM x")

@@ -88,6 +88,44 @@ def test_the_child_elements_are_in_no_namespace(published):
     assert {child.tag for child in root} >= {"title", "identifier", "curation", "content"}
 
 
+def test_capabilities_declare_adql_2_1_with_its_features():
+    """Package 21: the declaration is only truthful alongside the per-construct
+    conformance tests in test_adql.py — this pins what is declared."""
+    root = ET.fromstring(vosi.capabilities_xml())
+    tap = next(
+        c for c in root.findall("capability") if c.get("standardID") == "ivo://ivoa.net/std/TAP"
+    )
+    language = next(lang for lang in tap.findall("language") if lang.findtext("name") == "ADQL")
+    versions = {v.get("ivo-id"): v.text for v in language.findall("version")}
+    assert versions == {
+        "ivo://ivoa.net/std/ADQL#v2.0": "2.0",
+        "ivo://ivoa.net/std/ADQL#v2.1": "2.1",
+    }
+    features = {
+        lf.get("type"): {f.findtext("form") for f in lf.findall("feature")}
+        for lf in language.findall("languageFeatures")
+    }
+    assert features["ivo://ivoa.net/std/TAPRegExt#features-adql-string"] == {
+        "LOWER",
+        "UPPER",
+        "ILIKE",
+    }
+    assert features["ivo://ivoa.net/std/TAPRegExt#features-adql-type"] == {"CAST"}
+    assert features["ivo://ivoa.net/std/TAPRegExt#features-adql-sets"] == {
+        "UNION",
+        "EXCEPT",
+        "INTERSECT",
+    }
+    assert features["ivo://ivoa.net/std/TAPRegExt#features-adql-offset"] == {"OFFSET"}
+    assert features["ivo://ivoa.net/std/TAPRegExt#features-adql-conditional"] == {"COALESCE"}
+    assert "CONTAINS" in features["ivo://ivoa.net/std/TAPRegExt#features-adqlgeo"]
+    # not implemented, so they must not be declared
+    all_forms = {form for forms in features.values() for form in forms}
+    assert "IN_UNIT" not in all_forms
+    assert "WITH" not in all_forms
+    assert "CENTROID" not in all_forms
+
+
 def test_the_record_advertises_the_same_capabilities_as_vosi(published):
     """A record that disagreed with /capabilities would be worse than none."""
     published()

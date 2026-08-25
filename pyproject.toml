@@ -51,7 +51,11 @@ benchmark = [
 [tool.ruff]
 line-length = 100
 target-version = "py314"
-extend-exclude = ["*.egg-info"]
+extend-exclude = [
+    "*.egg-info",
+    # ANTLR-generated parser modules of the vendored ADQL 2.1 fork
+    "libs/egernia-core/egernia_core/query/_adql/ADQL*.py",
+]
 
 [tool.ruff.lint]
 select = [
@@ -69,8 +73,18 @@ ignore = [
     "SIM108", # ternary operator not always clearer
 ]
 
+[tool.ruff.format]
+# vendored from queryparser: keeps upstream's layout so diffs against
+# upstream stay readable (it is still linted, with the ignores below)
+exclude = ["libs/egernia-core/egernia_core/query/_adql/translator.py"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011"]
+# vendored from queryparser: keeps upstream's style so diffs against
+# upstream stay readable
+"libs/egernia-core/egernia_core/query/_adql/translator.py" = [
+    "UP004", "UP008", "UP009", "UP030", "UP031", "UP032", "B904", "C419", "RUF005", "SIM",
+]
 
 [tool.pyright]
 # resolve the workspace's editable installs (and their third-party deps)
