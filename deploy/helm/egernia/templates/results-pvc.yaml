@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "egernia.fullname" . }}-results
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.results.accessModes | nindent 4 }}
+  {{- with .Values.results.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.results.size }}

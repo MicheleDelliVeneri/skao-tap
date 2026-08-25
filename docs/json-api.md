@@ -48,7 +48,7 @@ Metadata domains are **plugins**: each binds an upstream pydantic model
 package to a SQL schema and a mount point, and gets the same endpoint set
 (full guide: [Metadata plugins](plugins.md)).
 Two ship built in, and third-party model packages register through the
-`skao_tap.models` entry-point group — installed alongside the services,
+`egernia.models` entry-point group — installed alongside the services,
 no changes to this codebase. `TAP_MODEL_PLUGINS` (Helm:
 `config.modelPlugins`) selects what a deployment activates: `all`, or a
 comma-separated subset for dedicated per-model systems.
@@ -119,7 +119,7 @@ subject.
 ### Model-driven database schema
 
 Each plugin's tables are **generated from its pydantic models at startup**
-(`tapcore/metadata/schema_gen.py`):
+(`egernia_core/metadata/schema_gen.py`):
 
 - each `list[Model]` level becomes a child table with a composite primary
   key following the identity chain (`*_id` fields by convention,

@@ -1,0 +1,147 @@
+{{- if .Values.prometheus.enabled }}
+{{- /*
+A Prometheus for trying the metrics out in a cluster that has none. Off by
+default: a real deployment already runs one, and it scrapes the same endpoints
+through the pod annotations on the API and executor Deployments. Nothing else
+in the chart depends on this being enabled.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "egernia.fullname" . }}-prometheus
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ .Values.prometheus.scrapeInterval }}
+    scrape_configs:
+      - job_name: tap-api
+        metrics_path: /metrics
+        static_configs:
+          - targets: ["{{ include "egernia.fullname" . }}-tap-api:{{ .Values.tapApi.port }}"]
+      # The executor has no Service of its own — it serves no API — so its
+      # pods are discovered directly. By this release's own labels and the
+      # port the chart configured, not by the scrape annotations: those exist
+      # to tell somebody else's Prometheus what to pick up, and turning them
+      # off with metrics.scrapeAnnotations must not blind the one the chart
+      # deployed on purpose.
+      - job_name: tap-executor
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [{{ .Release.Namespace }}]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance]
+            action: keep
+            regex: {{ .Release.Name }}
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            action: keep
+            regex: tap-executor
+          - source_labels: [__address__]
+            action: replace
+            regex: ([^:]+)(?::\d+)?
+            replacement: $1:{{ .Values.config.executorMetricsPort }}
+            target_label: __address__
+---
+{{- if .Values.prometheus.rbac.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "egernia.fullname" . }}-prometheus
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "egernia.fullname" . }}-prometheus
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+rules:
+  # only what pod discovery needs, and only in this namespace
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "egernia.fullname" . }}-prometheus
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "egernia.fullname" . }}-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "egernia.fullname" . }}-prometheus
+    namespace: {{ .Release.Namespace }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "egernia.fullname" . }}-prometheus
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: prometheus
+  template:
+    metadata:
+      labels:
+        {{- include "egernia.labels" . | nindent 8 }}
+        app.kubernetes.io/component: prometheus
+    spec:
+      {{- if .Values.prometheus.rbac.create }}
+      serviceAccountName: {{ include "egernia.fullname" . }}-prometheus
+      {{- end }}
+      containers:
+        - name: prometheus
+          image: {{ .Values.prometheus.image | quote }}
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.retention.time={{ .Values.prometheus.retention }}
+          ports:
+            - name: http
+              containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+          resources:
+            {{- toYaml .Values.prometheus.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "egernia.fullname" . }}-prometheus
+        # emptyDir on purpose: this instance is for looking at metrics now,
+        # not for keeping them. Retention beyond a pod restart is a job for the
+        # Prometheus a deployment already runs.
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "egernia.fullname" . }}-prometheus
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+spec:
+  type: {{ .Values.prometheus.service.type }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+{{- end }}

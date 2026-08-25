@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/egernia-logo.svg" alt="skao-tap — IVOA TAP 1.1 for the SKA" width="640">
+  <img src="assets/egernia-logo.svg" alt="egernia — IVOA TAP 1.1 for the SKA" width="640">
 </p>
 
 <p align="center">
@@ -7,17 +7,17 @@
 </p>
 
 <p align="center">
-  <a href="https://micheledelliveneri.github.io/skao-tap/"><b>Documentation</b></a> ·
-  <a href="https://micheledelliveneri.github.io/skao-tap/quickstart/">Quickstart</a> ·
-  <a href="https://micheledelliveneri.github.io/skao-tap/architecture/">Architecture</a> ·
-  <a href="https://micheledelliveneri.github.io/skao-tap/roadmap/">Roadmap</a>
+  <a href="https://micheledelliveneri.github.io/egernia/"><b>Documentation</b></a> ·
+  <a href="https://micheledelliveneri.github.io/egernia/quickstart/">Quickstart</a> ·
+  <a href="https://micheledelliveneri.github.io/egernia/architecture/">Architecture</a> ·
+  <a href="https://micheledelliveneri.github.io/egernia/roadmap/">Roadmap</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml"><img src="https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/security.yml"><img src="https://github.com/MicheleDelliVeneri/skao-tap/actions/workflows/security.yml/badge.svg?branch=main" alt="Security"></a>
-  <a href="https://codecov.io/gh/MicheleDelliVeneri/skao-tap"><img src="https://codecov.io/gh/MicheleDelliVeneri/skao-tap/branch/main/graph/badge.svg" alt="Coverage"></a>
-  <a href="https://micheledelliveneri.github.io/skao-tap/"><img src="https://img.shields.io/badge/docs-github.io-blue" alt="Docs"></a>
+  <a href="https://github.com/MicheleDelliVeneri/egernia/actions/workflows/ci.yml"><img src="https://github.com/MicheleDelliVeneri/egernia/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/MicheleDelliVeneri/egernia/actions/workflows/security.yml"><img src="https://github.com/MicheleDelliVeneri/egernia/actions/workflows/security.yml/badge.svg?branch=main" alt="Security"></a>
+  <a href="https://codecov.io/gh/MicheleDelliVeneri/egernia"><img src="https://codecov.io/gh/MicheleDelliVeneri/egernia/branch/main/graph/badge.svg" alt="Coverage"></a>
+  <a href="https://micheledelliveneri.github.io/egernia/"><img src="https://img.shields.io/badge/docs-github.io-blue" alt="Docs"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.14%2B-blue" alt="Python 3.14+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
 </p>
@@ -97,10 +97,10 @@ standards-mandated XML at `/api/v1` — see the [JSON API][json-api].
 ## Deploy
 
 ```bash
-helm upgrade --install skao-tap deploy/helm/skao-tap \
-  --namespace skao-tap --create-namespace \
+helm upgrade --install egernia deploy/helm/egernia \
+  --namespace egernia --create-namespace \
   --set tapApi.baseUrl=https://tap.example.org/tap
-helm test skao-tap -n skao-tap       # in-cluster VOSI + sync smoke test
+helm test egernia -n egernia       # in-cluster VOSI + sync smoke test
 ```
 
 The chart covers both services, an optional in-chart PostgreSQL, anti-affinity
@@ -130,7 +130,7 @@ PostgreSQL, PITR, restore and hardening are in the [deployment guide][deploy].
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
 development loop and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the standards
 we hold each other to. Questions and bug reports belong in
-[GitHub issues](https://github.com/MicheleDelliVeneri/skao-tap/issues).
+[GitHub issues](https://github.com/MicheleDelliVeneri/egernia/issues).
 
 To report a security vulnerability, follow [SECURITY.md](SECURITY.md) rather
 than opening a public issue.
@@ -147,17 +147,17 @@ citation from [CITATION.cff](CITATION.cff) via *Cite this repository*.
 [tap-std]: https://www.ivoa.net/documents/TAP/
 [queryparser]: https://github.com/aipescience/queryparser
 [pgsphere]: https://pgsphere.github.io/
-[quickstart]: https://micheledelliveneri.github.io/skao-tap/quickstart/
-[arch]: https://micheledelliveneri.github.io/skao-tap/architecture/
-[api]: https://micheledelliveneri.github.io/skao-tap/api/
-[json-api]: https://micheledelliveneri.github.io/skao-tap/json-api/
-[deploy]: https://micheledelliveneri.github.io/skao-tap/deployment/
-[autoscaling]: https://micheledelliveneri.github.io/skao-tap/autoscaling/
-[auth]: https://micheledelliveneri.github.io/skao-tap/auth/
-[registry]: https://micheledelliveneri.github.io/skao-tap/registry/
-[plugins]: https://micheledelliveneri.github.io/skao-tap/plugins/
-[schemas]: https://micheledelliveneri.github.io/skao-tap/model-schemas/
-[obs]: https://micheledelliveneri.github.io/skao-tap/observability/
-[bench]: https://micheledelliveneri.github.io/skao-tap/benchmarking/
-[dev]: https://micheledelliveneri.github.io/skao-tap/development/
-[roadmap]: https://micheledelliveneri.github.io/skao-tap/roadmap/
+[quickstart]: https://micheledelliveneri.github.io/egernia/quickstart/
+[arch]: https://micheledelliveneri.github.io/egernia/architecture/
+[api]: https://micheledelliveneri.github.io/egernia/api/
+[json-api]: https://micheledelliveneri.github.io/egernia/json-api/
+[deploy]: https://micheledelliveneri.github.io/egernia/deployment/
+[autoscaling]: https://micheledelliveneri.github.io/egernia/autoscaling/
+[auth]: https://micheledelliveneri.github.io/egernia/auth/
+[registry]: https://micheledelliveneri.github.io/egernia/registry/
+[plugins]: https://micheledelliveneri.github.io/egernia/plugins/
+[schemas]: https://micheledelliveneri.github.io/egernia/model-schemas/
+[obs]: https://micheledelliveneri.github.io/egernia/observability/
+[bench]: https://micheledelliveneri.github.io/egernia/benchmarking/
+[dev]: https://micheledelliveneri.github.io/egernia/development/
+[roadmap]: https://micheledelliveneri.github.io/egernia/roadmap/

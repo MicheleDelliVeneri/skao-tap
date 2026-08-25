@@ -7,8 +7,8 @@ here the pinned surface is what a validator (taplint, pyvo) would read.
 """
 
 import pytest
-from tap_api.endpoints import vosi
-from tap_api.plugins import obscore
+from egernia_api.endpoints import vosi
+from egernia_api.plugins import obscore
 
 MANDATORY = [
     "dataproduct_type",

@@ -13,8 +13,8 @@ updates:
       interval: weekly
   - package-ecosystem: docker
     directories:
-      - "/services/tap-api"
-      - "/services/tap-executor"
+      - "/services/egernia-api"
+      - "/services/egernia-executor"
       - "/db"
     schedule:
       interval: weekly

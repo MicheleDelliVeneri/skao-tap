@@ -4,7 +4,7 @@
 # KSV-0047 — "Role permits privilege escalation from node proxy".
 # The benchmark Prometheus scrapes cAdvisor and the kubelet through the API
 # server proxy (/api/v1/nodes/<node>/proxy/metrics/cadvisor), which cannot work
-# without get on nodes/proxy. This is benchmarks/tap-performance/manifests/
+# without get on nodes/proxy. This is benchmarks/egernia-performance/manifests/
 # monitoring.yaml only: applied to a throwaway kind cluster by the benchmark
 # harness, never rendered by the Helm chart and never deployed. The alternative
 # (scraping kubelets directly on :10250) would change the measurement path that

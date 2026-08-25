@@ -1,4 +1,4 @@
-"""Unit tests for the /api/v1 JSON facade (tap_api.endpoints.json_api) on the fake pool."""
+"""Unit tests for the /api/v1 JSON facade (egernia_api.endpoints.json_api) on the fake pool."""
 
 import json
 import os
@@ -94,7 +94,7 @@ def test_delete_job(client, fake_db, caplog):
 
 
 def test_delete_job_warns_on_unexpected_cleanup_error(client, monkeypatch, caplog):
-    from tap_api.endpoints import json_api
+    from egernia_api.endpoints import json_api
 
     job_id = client.post("/api/v1/jobs", json={"query": QUERY}).json()["job_id"]
 

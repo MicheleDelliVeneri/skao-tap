@@ -443,7 +443,7 @@ def test_schema_evolution_adds_new_model_columns_without_data_loss(tap_service, 
     missing a column is migrated forward by ensure_schema (ADD COLUMN IF
     NOT EXISTS) and already-ingested rows survive."""
     import psycopg
-    from tap_api.plugins.odp import ensure_schema
+    from egernia_api.plugins.odp import ensure_schema
 
     httpx.post(f"{_api(tap_service)}/notifications", json=SRC_INGESTION_EXAMPLE, timeout=30)
 

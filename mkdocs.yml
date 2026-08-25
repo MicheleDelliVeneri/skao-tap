@@ -1,6 +1,6 @@
-site_name: skao-tap
+site_name: egernia
 site_description: IVOA TAP 1.1 server in Python — microservices on PostgreSQL
-repo_url: https://github.com/MicheleDelliVeneri/skao-tap
+repo_url: https://github.com/MicheleDelliVeneri/egernia
 theme:
   name: material
   # The mark is the single source in assets/; Material resolves theme paths

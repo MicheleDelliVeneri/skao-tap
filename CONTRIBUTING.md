@@ -5,7 +5,7 @@ findings and performance measurements are all as welcome as code.
 
 ## Where to ask
 
-- **Questions and bug reports** — [GitHub issues](https://github.com/MicheleDelliVeneri/skao-tap/issues).
+- **Questions and bug reports** — [GitHub issues](https://github.com/MicheleDelliVeneri/egernia/issues).
   For a conformance bug, the most useful report names the standard and section
   the service is getting wrong, and the client that noticed.
 - **Security vulnerabilities** — follow [SECURITY.md](SECURITY.md). Please do
@@ -13,19 +13,19 @@ findings and performance measurements are all as welcome as code.
 
 ## Development loop
 
-The repo is a [uv](https://docs.astral.sh/uv/) workspace (`libs/tapcore`,
-`services/tap-api`, `services/tap-executor`) on Python 3.14+:
+The repo is a [uv](https://docs.astral.sh/uv/) workspace (`libs/egernia-core`,
+`services/egernia-api`, `services/egernia-executor`) on Python 3.14+:
 
 ```bash
 uv sync --all-groups                 # dev + docs groups
 uv run ruff check . && uv run ruff format --check .
-uv run pytest tests/unit             # tapcore / tap-api unit tests
+uv run pytest tests/unit             # egernia-core / egernia-api unit tests
 uv run pytest tests/component        # boots the stack, exercised with PyVO
 uv run --group docs mkdocs serve     # docs at http://localhost:8000
 ```
 
 The component tests need a reachable PostgreSQL and skip without one — see the
-[development guide](https://micheledelliveneri.github.io/skao-tap/development/)
+[development guide](https://micheledelliveneri.github.io/egernia/development/)
 for the connection details and the Docker Compose shortcut.
 
 ## What CI expects
@@ -58,7 +58,7 @@ update `/capabilities` so clients can discover it.
 ## Roadmap
 
 Larger work is organised as numbered packages in the
-[roadmap](https://micheledelliveneri.github.io/skao-tap/roadmap/), referenced
+[roadmap](https://micheledelliveneri.github.io/egernia/roadmap/), referenced
 by number in issues and PRs. If you plan something substantial, opening an
 issue first saves duplicated effort.
 

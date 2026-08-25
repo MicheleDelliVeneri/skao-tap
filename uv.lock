@@ -4,10 +4,10 @@ requires-python = ">=3.14"
 
 [manifest]
 members = [
-    "skao-tap",
-    "tap-api",
-    "tap-executor",
-    "tapcore",
+    "egernia",
+    "egernia-api",
+    "egernia-core",
+    "egernia-executor",
 ]
 
 [[package]]
@@ -476,6 +476,132 @@ sdist = { url = "https://files.pythonhosted.org/packages/49/85/12f0a49a7c4ffb705
 wheels = [
     { url = "https://files.pythonhosted.org/packages/84/d0/205d54408c08b13550c733c4b85429e7ead111c7f0014309637425520a9a/deprecated-1.3.1-py2.py3-none-any.whl", hash = "sha256:597bfef186b6f60181535a29fbe44865ce137a5079f295b479886c82729d5f3f", size = 11298, upload-time = "2025-10-30T08:19:00.758Z" },
 ]
+
+[[package]]
+name = "egernia"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "egernia-api" },
+    { name = "egernia-core" },
+    { name = "egernia-executor" },
+]
+
+[package.dev-dependencies]
+benchmark = [
+    { name = "jinja2" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "psutil" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pyarrow" },
+    { name = "pyyaml" },
+]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+    { name = "pyvo" },
+    { name = "requests" },
+    { name = "ruff" },
+]
+docs = [
+    { name = "mkdocs" },
+    { name = "mkdocs-material" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "egernia-api", editable = "services/egernia-api" },
+    { name = "egernia-core", editable = "libs/egernia-core" },
+    { name = "egernia-executor", editable = "services/egernia-executor" },
+]
+
+[package.metadata.requires-dev]
+benchmark = [
+    { name = "jinja2", specifier = ">=3.1" },
+    { name = "matplotlib", specifier = ">=3.9" },
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "psutil", specifier = ">=6.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
+    { name = "pyarrow", specifier = ">=17" },
+    { name = "pyyaml", specifier = ">=6.0" },
+]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-cov", specifier = ">=6.0" },
+    { name = "pytest-timeout", specifier = ">=2.3" },
+    { name = "pyvo", specifier = ">=1.5" },
+    { name = "requests", specifier = ">=2.31" },
+    { name = "ruff", specifier = ">=0.8" },
+]
+docs = [
+    { name = "mkdocs", specifier = ">=1.6" },
+    { name = "mkdocs-material", specifier = ">=9.5" },
+]
+
+[[package]]
+name = "egernia-api"
+version = "0.1.0"
+source = { editable = "services/egernia-api" }
+dependencies = [
+    { name = "egernia-core" },
+    { name = "fastapi" },
+    { name = "python-multipart" },
+    { name = "ska-src-mm-notification" },
+    { name = "ska-src-sdm" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "egernia-core", editable = "libs/egernia-core" },
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
+    { name = "ska-src-mm-notification", specifier = ">=0.1.8" },
+    { name = "ska-src-sdm", git = "https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model.git?rev=cfb341ec307ce35f463065455b11317dc1a0ead9" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
+]
+
+[[package]]
+name = "egernia-core"
+version = "0.1.0"
+source = { editable = "libs/egernia-core" }
+dependencies = [
+    { name = "annotated-types" },
+    { name = "httpx" },
+    { name = "psycopg", extra = ["binary", "pool"] },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "queryparser-python3" },
+    { name = "ska-src-logging" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "annotated-types", specifier = ">=0.6" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
+    { name = "pyarrow", specifier = ">=17.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9" },
+    { name = "queryparser-python3", specifier = ">=0.7" },
+    { name = "ska-src-logging", git = "https://gitlab.com/ska-telescope/src/src-api/ska-src-api-logging.git?rev=9cdeaea15d2a" },
+]
+
+[[package]]
+name = "egernia-executor"
+version = "0.1.0"
+source = { editable = "services/egernia-executor" }
+dependencies = [
+    { name = "egernia-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "egernia-core", editable = "libs/egernia-core" }]
 
 [[package]]
 name = "fastapi"
@@ -1825,71 +1951,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "skao-tap"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "tap-api" },
-    { name = "tap-executor" },
-    { name = "tapcore" },
-]
-
-[package.dev-dependencies]
-benchmark = [
-    { name = "jinja2" },
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "psutil" },
-    { name = "psycopg", extra = ["binary"] },
-    { name = "pyarrow" },
-    { name = "pyyaml" },
-]
-dev = [
-    { name = "httpx" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "pytest-timeout" },
-    { name = "pyvo" },
-    { name = "requests" },
-    { name = "ruff" },
-]
-docs = [
-    { name = "mkdocs" },
-    { name = "mkdocs-material" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "tap-api", editable = "services/tap-api" },
-    { name = "tap-executor", editable = "services/tap-executor" },
-    { name = "tapcore", editable = "libs/tapcore" },
-]
-
-[package.metadata.requires-dev]
-benchmark = [
-    { name = "jinja2", specifier = ">=3.1" },
-    { name = "matplotlib", specifier = ">=3.9" },
-    { name = "numpy", specifier = ">=2.0" },
-    { name = "psutil", specifier = ">=6.0" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
-    { name = "pyarrow", specifier = ">=17" },
-    { name = "pyyaml", specifier = ">=6.0" },
-]
-dev = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-cov", specifier = ">=6.0" },
-    { name = "pytest-timeout", specifier = ">=2.3" },
-    { name = "pyvo", specifier = ">=1.5" },
-    { name = "requests", specifier = ">=2.31" },
-    { name = "ruff", specifier = ">=0.8" },
-]
-docs = [
-    { name = "mkdocs", specifier = ">=1.6" },
-    { name = "mkdocs-material", specifier = ">=9.5" },
-]
-
-[[package]]
 name = "starlette"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1908,67 +1969,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/78/a3/e811a94ac3853826805253c906faa99219b79951c7d58605e89c79e65768/structlog-24.4.0.tar.gz", hash = "sha256:b27bfecede327a6d2da5fbc96bd859f114ecc398a6389d664f62085ee7ae6fc4", size = 1348634, upload-time = "2024-07-17T12:38:43.483Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bf/65/813fc133609ebcb1299be6a42e5aea99d6344afb35ccb43f67e7daaa3b92/structlog-24.4.0-py3-none-any.whl", hash = "sha256:597f61e80a91cc0749a9fd2a098ed76715a1c8a01f73e336b746504d1aad7610", size = 67180, upload-time = "2024-07-17T12:38:41.043Z" },
-]
-
-[[package]]
-name = "tap-api"
-version = "0.1.0"
-source = { editable = "services/tap-api" }
-dependencies = [
-    { name = "fastapi" },
-    { name = "python-multipart" },
-    { name = "ska-src-mm-notification" },
-    { name = "ska-src-sdm" },
-    { name = "tapcore" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.110" },
-    { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "ska-src-mm-notification", specifier = ">=0.1.8" },
-    { name = "ska-src-sdm", git = "https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model.git?rev=cfb341ec307ce35f463065455b11317dc1a0ead9" },
-    { name = "tapcore", editable = "libs/tapcore" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
-]
-
-[[package]]
-name = "tap-executor"
-version = "0.1.0"
-source = { editable = "services/tap-executor" }
-dependencies = [
-    { name = "tapcore" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "tapcore", editable = "libs/tapcore" }]
-
-[[package]]
-name = "tapcore"
-version = "0.1.0"
-source = { editable = "libs/tapcore" }
-dependencies = [
-    { name = "annotated-types" },
-    { name = "httpx" },
-    { name = "psycopg", extra = ["binary", "pool"] },
-    { name = "pyarrow" },
-    { name = "pydantic" },
-    { name = "pyjwt", extra = ["crypto"] },
-    { name = "queryparser-python3" },
-    { name = "ska-src-logging" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "annotated-types", specifier = ">=0.6" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
-    { name = "pyarrow", specifier = ">=17.0" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9" },
-    { name = "queryparser-python3", specifier = ">=0.7" },
-    { name = "ska-src-logging", git = "https://gitlab.com/ska-telescope/src/src-api/ska-src-api-logging.git?rev=9cdeaea15d2a" },
 ]
 
 [[package]]

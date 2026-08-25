@@ -1,0 +1,29 @@
+{{- /*
+PodDisruptionBudgets keep at least one pod of each service through voluntary
+disruptions (node drains, cluster upgrades). Only rendered for components
+with more than one replica: with a single replica a maxUnavailable=1 budget
+is a no-op and anything stricter would block drains outright.
+*/}}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- /* With an autoscaler in charge, `replicas` is not what the cluster runs;
+       minReplicas is the floor, and it is the floor a drain has to respect. */}}
+{{- range $component := list "tap-api" "tap-executor" }}
+{{- $replicas := int (include "egernia.minReplicas" (dict "ctx" $ "component" $component)) }}
+{{- if gt $replicas 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "egernia.fullname" $ }}-{{ $component }}
+  labels:
+    {{- include "egernia.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  maxUnavailable: {{ $.Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: {{ $component }}
+---
+{{- end }}
+{{- end }}
+{{- end }}

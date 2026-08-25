@@ -3,14 +3,14 @@
 ## Supported versions
 
 This project is pre-release: only the `main` branch and the container images
-published from it (`ghcr.io/micheledelliveneri/skao-tap/*:latest`) receive
+published from it (`ghcr.io/micheledelliveneri/egernia/*:latest`) receive
 security fixes. There are no maintained release branches yet.
 
 ## Reporting a vulnerability
 
 Report vulnerabilities privately through GitHub's private vulnerability
 reporting: open
-<https://github.com/MicheleDelliVeneri/skao-tap/security/advisories/new>
+<https://github.com/MicheleDelliVeneri/egernia/security/advisories/new>
 ("Security" tab → "Report a vulnerability"). That channel keeps the report
 non-public until a fix ships.
 

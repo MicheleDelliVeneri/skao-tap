@@ -1,0 +1,15 @@
+apiVersion: v2
+name: egernia
+description: IVOA TAP 1.1 server — microservices on PostgreSQL (tap-api, tap-executor, optional in-chart PostgreSQL with pg_sphere)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - ivoa
+  - tap
+  - adql
+  - astronomy
+icon: https://raw.githubusercontent.com/MicheleDelliVeneri/egernia/main/assets/egernia-mark.svg
+home: https://github.com/MicheleDelliVeneri/egernia
+sources:
+  - https://github.com/MicheleDelliVeneri/egernia

@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "egernia.fullname" . }}-tap-executor
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tap-executor
+spec:
+  {{- /* omitted when an autoscaler owns it: a helm upgrade that set
+         replicas would reset the count the autoscaler had chosen, and
+         the two would then take turns overwriting each other */}}
+  {{- if not .Values.horizontalAutoscaling.tapExecutor.enabled }}
+  replicas: {{ .Values.tapExecutor.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: tap-executor
+  template:
+    metadata:
+      annotations:
+        # the executor has no Service, so annotations are how it is found; a deployment's own Prometheus discovers pods by these
+        prometheus.io/scrape: {{ .Values.metrics.scrapeAnnotations | quote }}
+        prometheus.io/path: /metrics
+        prometheus.io/port: "{{ .Values.config.executorMetricsPort }}"
+      labels:
+        {{- include "egernia.labels" . | nindent 8 }}
+        app.kubernetes.io/component: tap-executor
+    spec:
+      {{- include "egernia.scheduling" (dict "ctx" $ "component" "tap-executor" "values" .Values.tapExecutor) | nindent 6 }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: tap-executor
+          image: "{{ .Values.image.registry }}/tap-executor:{{ include "egernia.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "egernia.fullname" . }}-config
+            - secretRef:
+                name: {{ include "egernia.fullname" . }}-db
+          volumeMounts:
+            - name: results
+              mountPath: /results
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.tapExecutor.resources | nindent 12 }}
+      volumes:
+        - name: results
+          persistentVolumeClaim:
+            claimName: {{ include "egernia.fullname" . }}-results
+        - name: tmp
+          emptyDir: {}

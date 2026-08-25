@@ -8,8 +8,8 @@ performance fixes take a local harness and a sampling profiler.
 import time
 
 import pytest
+from egernia_core import observability as obs
 from prometheus_client import generate_latest
-from tapcore import observability as obs
 
 QUERY = "SELECT source_id, ra FROM ska.continuum_sources"
 
@@ -200,7 +200,7 @@ def test_the_sync_duration_is_recorded_when_the_stream_ends():
     the first chunk. Tested on the wrapper directly: through the test client
     the whole body is read before the call returns, so it could not tell the
     two apart."""
-    from tap_api.queries.query import _timed
+    from egernia_api.queries.query import _timed
 
     def sum_of():
         for line in generate_latest(obs.REGISTRY).decode().splitlines():
@@ -219,7 +219,7 @@ def test_the_sync_duration_is_recorded_when_the_stream_ends():
 def test_an_abandoned_stream_is_still_measured():
     """A client that disconnects halfway is a slow query too — dropping it
     would bias the metric towards the requests that finished."""
-    from tap_api.queries.query import _timed
+    from egernia_api.queries.query import _timed
 
     def count():
         for line in generate_latest(obs.REGISTRY).decode().splitlines():
@@ -239,7 +239,7 @@ def test_the_pool_wait_is_only_the_wait(fake_db):
     query keeps its connection for the whole of the client's download, and
     counting that as waiting would make a busy pool and a big result look the
     same."""
-    from tapcore import db
+    from egernia_core import db
 
     before = _metric("tap_db_pool_wait_seconds_sum")
     with db.connection():
@@ -249,8 +249,8 @@ def test_the_pool_wait_is_only_the_wait(fake_db):
 
 def test_a_wait_that_ends_in_a_timeout_is_still_recorded(monkeypatch, fake_db):
     """The longest wait there is must not be the one that goes unmeasured."""
+    from egernia_core import db
     from psycopg_pool import PoolTimeout
-    from tapcore import db
 
     class Exhausted:
         def connection(self):
@@ -272,7 +272,7 @@ def test_a_wait_that_ends_in_a_timeout_is_still_recorded(monkeypatch, fake_db):
 def test_a_failed_job_is_counted_as_a_failure(monkeypatch, fake_db):
     """Undercounting failures is worse than not counting them: an alert on
     this metric would have stayed quiet."""
-    from tap_executor import worker
+    from egernia_executor import worker
 
     def explode(*args, **kwargs):
         raise RuntimeError("query blew up")
@@ -302,7 +302,7 @@ def _metric(name: str) -> float:
 
 def _run_a_job_that_is_finalized_mid_stream(fake_db, monkeypatch):
     """A job whose phase flips to ABORTED after the query started."""
-    from tap_executor import worker
+    from egernia_executor import worker
 
     job = fake_db.add_job(
         phase="QUEUED",
@@ -341,7 +341,7 @@ def test_an_abort_before_the_query_starts_is_counted_but_not_timed(
 ):
     """No query ran, so timing it would pull the low buckets down with work
     that never happened — but the outcome is still an outcome."""
-    from tap_executor import worker
+    from egernia_executor import worker
 
     job = fake_db.add_job(
         phase="QUEUED",
@@ -361,7 +361,7 @@ def test_an_abort_before_the_query_starts_is_counted_but_not_timed(
 def test_a_deleted_job_is_not_counted_as_an_outcome(fake_db, results_dir, monkeypatch):
     """A row that is gone has no final phase to report; inventing one would put
     a wrong outcome in the metric rather than a missing one."""
-    from tap_executor import worker
+    from egernia_executor import worker
 
     job = fake_db.add_job(
         phase="QUEUED",
@@ -398,7 +398,7 @@ def test_pool_wait_buckets_bracket_the_timeout(auth_settings):
     edge pair (t, 1.2t] pins it there instead of letting quantile
     interpolation read the middle of a wide bucket (a 5 s timeout was
     reported as a 9.7 s p95)."""
-    from tapcore.observability import _pool_wait_buckets
+    from egernia_core.observability import _pool_wait_buckets
 
     buckets = _pool_wait_buckets()
     assert buckets == tuple(sorted(buckets))

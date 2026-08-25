@@ -3,7 +3,7 @@
 import datetime
 from xml.etree import ElementTree as ET
 
-from tapcore import uws
+from egernia_core import uws
 
 NS = {
     "uws": "http://www.ivoa.net/xml/UWS/v1.0",

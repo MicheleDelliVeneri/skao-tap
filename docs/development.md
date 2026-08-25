@@ -1,7 +1,7 @@
 # Development
 
 The repository is a [uv](https://docs.astral.sh/uv/) workspace with three
-members: `libs/tapcore`, `services/tap-api`, `services/tap-executor`.
+members: `libs/egernia-core`, `services/egernia-api`, `services/egernia-executor`.
 
 ```bash
 uv sync --all-groups        # create .venv with all members + dev/docs groups
@@ -24,7 +24,7 @@ uv run pytest tests/unit          # fast, no external dependencies
 uv run pytest tests/component    # needs PostgreSQL (+ pg_sphere) and psql
 ```
 
-The **unit tests** cover `tapcore` in isolation: ADQL translation, result
+The **unit tests** cover `egernia_core` in isolation: ADQL translation, result
 serialization, UWS XML rendering, and DALI parameter handling.
 
 The **component tests** boot the real stack — a dedicated
@@ -43,10 +43,10 @@ project's own database image — the same one CI runs, so the tests always see
 the shipped PostgreSQL major and pg_sphere build:
 
 ```bash
-docker build -t skao-tap/tap-db db
+docker build -t egernia/tap-db db
 docker run -d --name tap-db -p 5432:5432 \
   -e POSTGRES_USER=tap -e POSTGRES_PASSWORD=tap -e POSTGRES_DB=tap \
-  skao-tap/tap-db
+  egernia/tap-db
 docker exec tap-db psql -U tap -d tap -c "ALTER USER tap WITH SUPERUSER"
 ```
 

@@ -95,7 +95,7 @@ def tap_service(database_url, tmp_path_factory):
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "tap_api.main:app",
+                "egernia_api.main:app",
                 "--host",
                 "127.0.0.1",
                 "--port",
@@ -109,7 +109,7 @@ def tap_service(database_url, tmp_path_factory):
             stderr=subprocess.STDOUT,
         )
         executor = subprocess.Popen(
-            [sys.executable, "-m", "tap_executor.worker"],
+            [sys.executable, "-m", "egernia_executor.worker"],
             env=env,
             cwd=REPO_ROOT,
             stdout=executor_log,

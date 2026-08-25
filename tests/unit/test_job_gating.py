@@ -10,7 +10,7 @@ does close every path to a job.
 import json
 
 import pytest
-from tapcore.auth import OPERATIONS, QUERY_OPERATIONS, gated_operations
+from egernia_core.auth import OPERATIONS, QUERY_OPERATIONS, gated_operations
 
 QUERY = "SELECT source_id, ra FROM ska.continuum_sources"
 

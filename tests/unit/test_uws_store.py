@@ -1,8 +1,8 @@
-"""Unit tests for the tapcore.uws persistence helpers on the fake pool."""
+"""Unit tests for the egernia_core.uws persistence helpers on the fake pool."""
 
 import pytest
-from tapcore import db, uws
-from tapcore.errors import NotFoundError
+from egernia_core import db, uws
+from egernia_core.errors import NotFoundError
 
 pool = db.pool
 

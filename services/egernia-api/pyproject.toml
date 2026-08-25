@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "egernia-api"
+version = "0.1.0"
+description = "egernia HTTP frontend: /sync, /async (UWS), VOSI endpoints"
+requires-python = ">=3.14"
+dependencies = [
+    "egernia-core",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+    # SKA SRC notification data models: drive the srcnet DB schema and
+    # validate /api/v1/notifications payloads.
+    "ska-src-mm-notification>=0.1.8",
+    # SKA Software Discovery metadata model, for the built-in "software"
+    # metadata plugin. Pinned to a commit until published to a public index.
+    "ska-src-sdm",
+]
+
+[tool.uv.sources.ska-src-sdm]
+git = "https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model.git"
+rev = "cfb341ec307ce35f463065455b11317dc1a0ead9"
+
+# Metadata-domain plugins shipped by this service; third-party model
+# packages register in the same group (see egernia_core.plugins).
+[project.entry-points."egernia.models"]
+odp = "egernia_api.plugins.odp:PLUGIN"
+software = "egernia_api.plugins.software:PLUGIN"
+
+# Authorisation plugins shipped by this service; a site can register its own
+# in the same group and select it with TAP_AUTH_PLUGIN (see egernia_core.auth).
+[project.entry-points."egernia.auth"]
+iam-groups = "egernia_api.auth_plugins.iam_groups:IAMGroupsPlugin"
+permissions-api = "egernia_api.auth_plugins.permissions_api:PermissionsApiPlugin"
+
+[tool.uv.sources]
+egernia-core = { workspace = true }
+
+[tool.setuptools.packages.find]
+include = ["egernia_api*"]

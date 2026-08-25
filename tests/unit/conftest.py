@@ -11,9 +11,9 @@ import datetime
 import json
 import re
 
+import egernia_core.db
 import pytest
-import tapcore.db
-from tapcore import uws
+from egernia_core import uws
 
 JOB_KEYS = [c.strip() for c in uws.JOB_COLUMNS.split(",")]
 
@@ -445,7 +445,7 @@ class FakeDB:
 @pytest.fixture
 def fake_db(monkeypatch):
     db = FakeDB()
-    monkeypatch.setattr(tapcore.db, "_pool", FakePool(db))
+    monkeypatch.setattr(egernia_core.db, "_pool", FakePool(db))
     return db
 
 
@@ -593,7 +593,7 @@ def stub_iam(monkeypatch, iam_keypair):
     monkeypatch.setattr(httpx, "get", patched_get)
     monkeypatch.setattr(urllib.request, "urlopen", patched_urlopen)
 
-    from tapcore.auth import reset_verifier
+    from egernia_core.auth import reset_verifier
 
     reset_verifier()
     yield state
@@ -603,8 +603,8 @@ def stub_iam(monkeypatch, iam_keypair):
 @pytest.fixture
 def auth_settings(monkeypatch):
     """Override auth-related settings (Settings is frozen) and reset the caches."""
-    from tapcore.auth import reset_verifier
-    from tapcore.config import settings
+    from egernia_core.auth import reset_verifier
+    from egernia_core.config import settings
 
     original = {}
 
@@ -624,7 +624,7 @@ def auth_settings(monkeypatch):
 
 
 def _reset_api_auth():
-    from tap_api.auth import reset_plugin
+    from egernia_api.auth import reset_plugin
 
     reset_plugin()
 
@@ -632,7 +632,7 @@ def _reset_api_auth():
 @pytest.fixture
 def results_dir(tmp_path):
     """Point settings.results_dir at a temp dir (Settings is frozen)."""
-    from tapcore.config import settings
+    from egernia_core.config import settings
 
     original = settings.results_dir
     object.__setattr__(settings, "results_dir", str(tmp_path))
@@ -643,8 +643,8 @@ def results_dir(tmp_path):
 @pytest.fixture
 def client(fake_db, results_dir):
     """TestClient over the full app (lifespan runs srcnet bootstrap on the fake)."""
+    from egernia_api.main import app
     from fastapi.testclient import TestClient
-    from tap_api.main import app
 
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client

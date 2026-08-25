@@ -9,7 +9,7 @@ are exercised by the component suite against a real server.
 import math
 
 import pytest
-from tapcore.metadata.regions import (
+from egernia_core.metadata.regions import (
     CIRCLE_VERTICES,
     POSITION_RADIUS_DEG,
     stcs_to_spoly,

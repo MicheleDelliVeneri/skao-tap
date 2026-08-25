@@ -8,9 +8,9 @@ one — to check the enforcement really covers every path that can reach a job.
 import json
 
 import pytest
-from tapcore import uws
-from tapcore.auth import clear_job_viewer, set_job_viewer
-from tapcore.errors import AuthorizationError
+from egernia_core import uws
+from egernia_core.auth import clear_job_viewer, set_job_viewer
+from egernia_core.errors import AuthorizationError
 
 QUERY = "SELECT source_id, ra FROM ska.continuum_sources"
 ROLES = json.dumps({"metadata.ingest": {"groups": ["/ska/science-metadata/oper"]}})
@@ -104,7 +104,7 @@ def test_mutating_another_users_job_is_refused(fake_db, viewer):
 
 
 def uws_conn():
-    from tapcore.db import pool
+    from egernia_core.db import pool
 
     return pool().connection()
 

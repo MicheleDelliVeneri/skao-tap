@@ -3,7 +3,7 @@ and real ABORT via pg_cancel_backend (roadmap package 3)."""
 
 import datetime
 
-from tap_api.endpoints import uws_api
+from egernia_api.endpoints import uws_api
 
 QUERY = "SELECT source_id, ra FROM ska.continuum_sources"
 
@@ -76,7 +76,7 @@ def test_json_wait_blocks_until_phase_changes(client, fake_db, monkeypatch):
     job = fake_db.add_job(phase="EXECUTING")
     _flip_phase_on_sleep(monkeypatch, fake_db, job["job_id"], "ERROR")
 
-    import tap_api.endpoints.json_api as json_api
+    import egernia_api.endpoints.json_api as json_api
 
     monkeypatch.setattr(json_api.asyncio, "sleep", uws_api.asyncio.sleep, raising=False)
     response = client.get(f"/api/v1/jobs/{job['job_id']}", params={"wait": 30})
@@ -122,7 +122,7 @@ def test_abort_of_final_job_does_not_cancel(client, fake_db):
 
 
 def test_executor_registers_and_clears_backend_pid(fake_db, results_dir):
-    from tap_executor import worker
+    from egernia_executor import worker
 
     job = fake_db.add_job(phase="QUEUED", parameters={"QUERY": QUERY}, query_sql=QUERY)
     worker.execute_job(worker.claim_job())
@@ -133,7 +133,7 @@ def test_executor_registers_and_clears_backend_pid(fake_db, results_dir):
 
 
 def test_executor_treats_cancellation_of_aborted_job_as_abort(fake_db, results_dir):
-    from tap_executor import worker
+    from egernia_executor import worker
 
     fake_db.result_error = RuntimeError("canceling statement due to user request")
     job = fake_db.add_job(phase="QUEUED", parameters={"QUERY": QUERY}, query_sql=QUERY)
@@ -151,8 +151,8 @@ def test_abort_skips_cancel_when_pid_already_cleared(client, fake_db):
     job = fake_db.add_job(phase="EXECUTING", backend_pid=4242)
     stale = dict(job)  # what the API handler read before the executor finished
     fake_db.jobs[job["job_id"]]["backend_pid"] = None
-    from tapcore import uws
-    from tapcore.db import pool
+    from egernia_core import uws
+    from egernia_core.db import pool
 
     with pool().connection() as conn:
         uws.abort_job(conn, stale)
@@ -163,7 +163,7 @@ def test_abort_skips_cancel_when_pid_already_cleared(client, fake_db):
 def test_watchdog_cancels_then_escalates_to_terminate(fake_db, monkeypatch):
     import time as time_module
 
-    from tap_executor import worker
+    from egernia_executor import worker
 
     monkeypatch.setattr(worker._AbortWatchdog, "POLL_S", 0.01)
     monkeypatch.setattr(worker._AbortWatchdog, "TERMINATE_AFTER_CANCELS", 3)
@@ -179,7 +179,7 @@ def test_watchdog_cancels_then_escalates_to_terminate(fake_db, monkeypatch):
 def test_watchdog_stays_quiet_while_job_active(fake_db, monkeypatch):
     import time as time_module
 
-    from tap_executor import worker
+    from egernia_executor import worker
 
     monkeypatch.setattr(worker._AbortWatchdog, "POLL_S", 0.01)
     job = fake_db.add_job(phase="EXECUTING")

@@ -23,7 +23,7 @@ graph LR
     clients -->|"ADQL over TAP 1.1"| api
     producers -->|"POST /api/v1/&lt;domain&gt;"| api
 
-    api["skao-tap<br/>TAP 1.1 service"]
+    api["egernia<br/>TAP 1.1 service"]
 
     api -->|"OIDC discovery, JWKS"| iam["INDIGO IAM"]
     api -->|"authorisation"| papi["SRC Permissions API"]
@@ -70,10 +70,10 @@ graph TB
 
 | Component | Code | Responsibility |
 | --- | --- | --- |
-| `tap-api` | `services/tap-api` | Every TAP/UWS/VOSI HTTP endpoint; runs synchronous queries itself; creates and serves UWS jobs; the metadata-domain JSON API |
-| `tap-executor` | `services/tap-executor` | Claims and runs asynchronous jobs; writes result files; expires old jobs; publishes queue metrics |
+| `tap-api` | `services/egernia-api` | Every TAP/UWS/VOSI HTTP endpoint; runs synchronous queries itself; creates and serves UWS jobs; the metadata-domain JSON API |
+| `tap-executor` | `services/egernia-executor` | Claims and runs asynchronous jobs; writes result files; expires old jobs; publishes queue metrics |
 | `db` | `db/` | PostgreSQL 18 with pg_sphere; `TAP_SCHEMA`, `uws.jobs`, science tables and the read-only `tap_reader` role |
-| `tapcore` | `libs/tapcore` | Everything both services need |
+| `egernia_core` | `libs/egernia-core` | Everything both services need |
 
 Neither service holds state that survives its process. An API replica can be
 killed mid-request and a client retries; an executor can be killed mid-job and
@@ -84,7 +84,7 @@ PostgreSQL or on the volume.
 
 ```mermaid
 graph TB
-    subgraph core["tapcore"]
+    subgraph core["egernia_core"]
         cfg["config · db · errors<br/>uws · uws_xml"]
         obs["observability<br/>logging, metrics, request ids"]
         auth["auth<br/>tokens, plugins, challenges"]
@@ -97,8 +97,8 @@ graph TB
         meta["metadata/<br/>plugin framework, schema generation, ingest"]
     end
 
-    api["tap_api<br/>endpoints/ · queries/ · plugins/"] --> core
-    ex["tap_executor<br/>worker loop"] --> core
+    api["egernia_api<br/>endpoints/ · queries/ · plugins/"] --> core
+    ex["egernia_executor<br/>worker loop"] --> core
 ```
 
 The split is by role rather than by layer: `query/` is everything between an
@@ -368,7 +368,7 @@ to know. Set it up by disabling the in-chart database and pointing at the
 operator's read-write service:
 
 ```bash
-helm upgrade skao-tap deploy/helm/skao-tap \
+helm upgrade egernia deploy/helm/egernia \
   --set postgresql.enabled=false \
   --set externalDatabase.url=postgresql://tap:…@tap-db-rw:5432/tap
 ```
