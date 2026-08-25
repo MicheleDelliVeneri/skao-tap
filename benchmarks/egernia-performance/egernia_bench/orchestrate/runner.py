@@ -314,24 +314,38 @@ def measure(
         started = time.time()
         with kube.StateWatcher(watcher_path):
             if steps is not None:
-                recorder, timeline = asyncio.run(
-                    load_mod.open_loop(
-                        BASE_URL,
-                        workload,
-                        steps,
-                        mode=request_mode,
-                        response_format=response_format,
-                        max_in_flight=int(
-                            timing.get(
-                                "max_in_flight_async"
-                                if request_mode == "async"
-                                else "max_in_flight",
-                                4096,
-                            )
-                        ),
+                max_in_flight = int(
+                    timing.get(
+                        "max_in_flight_async" if request_mode == "async" else "max_in_flight",
+                        4096,
                     )
                 )
-                measured_elapsed = time.time() - started
+                if generator_processes > 1:
+                    # sharded for the same reason as the closed loop below —
+                    # and the async scenarios need it at even modest offered
+                    # rates, because every queued job holds a phase-poll loop
+                    assert workload_ingredients is not None
+                    recorder, timeline, measured_elapsed = load_mod.open_loop_sharded(
+                        BASE_URL,
+                        steps=steps,
+                        processes=generator_processes,
+                        mode=request_mode,
+                        response_format=response_format,
+                        max_in_flight=max_in_flight,
+                        **workload_ingredients,
+                    )
+                else:
+                    recorder, timeline = asyncio.run(
+                        load_mod.open_loop(
+                            BASE_URL,
+                            workload,
+                            steps,
+                            mode=request_mode,
+                            response_format=response_format,
+                            max_in_flight=max_in_flight,
+                        )
+                    )
+                    measured_elapsed = time.time() - started
             elif generator_processes > 1:
                 # sharded across processes: one asyncio loop tops out around
                 # one core, and the fleet under test serves more than that
@@ -1088,6 +1102,15 @@ def keda_scenarios(
             steps=steps,
             offered_rps=None,
             request_mode="async",
+            generator_processes=int(
+                cfg["scenarios"].get("keda_load", {}).get("generator_processes", 1)
+            ),
+            workload_ingredients={
+                "entries": entries,
+                "mix": mix,
+                "query_class": None,
+                "seed": 4000,
+            },
         )
         if not result:
             continue

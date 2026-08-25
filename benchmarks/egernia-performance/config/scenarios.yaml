@@ -39,6 +39,16 @@ fixed_replica_scaling:
   c1_multiples: [0.5, 1.0, 2.0, 4.0, 6.0, 8.0]
   dataset: D4
 
+# The async scenarios' generator, sharded like the replica sweep's. Even at
+# ~24 offered jobs/s one asyncio loop pinned its core (keda-K2 on
+# 20260825T220317Z, marked invalid by the headroom guard): every job in
+# flight holds a phase-poll loop, so a scenario that queues thousands of
+# jobs makes the generator's real request rate the poll rate, not the
+# arrival rate. Four processes put the ceiling far above what the polls
+# and the arrivals together need.
+keda_load:
+  generator_processes: 4
+
 keda_scenarios:
   - id: K1
     description: idle to 0.5*C1

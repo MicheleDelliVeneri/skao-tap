@@ -214,8 +214,9 @@ async def _issue_async(
     offered_at: float,
     recorder: Recorder,
     poll_interval: float = 0.25,
-    poll_interval_max: float = 2.0,
+    poll_interval_max: float = 60.0,
     poll_fine_window_s: float = 5.0,
+    poll_age_fraction: float = 0.1,
     timeout_s: float = 600.0,
 ) -> None:
     """One UWS job, timed from submission to a terminal phase.
@@ -246,13 +247,18 @@ async def _issue_async(
             ttfb = time.perf_counter() - t0  # the job exists from here
             deadline = t0 + timeout_s
             phase = "PENDING"
-            # Fine-grained while the job is young, then backing off. Every job
-            # in flight holds one of these loops, so at a few thousand
-            # outstanding jobs a flat quarter-second poll is thousands of
-            # requests a second at the service being measured — the harness
-            # bidding against the workload for the same API. The first seconds
-            # stay fine because that is where the SLO is decided; a job already
-            # three minutes into a queue does not need 4 Hz resolution.
+            # Fine-grained while the job is young, then backing off in
+            # proportion to the job's age. Every job in flight holds one of
+            # these loops, and an overloaded fleet holds thousands of jobs at
+            # once: with the old fixed 2 s ceiling those loops alone were
+            # thousands of requests a second — enough to pin the generator's
+            # core, which is exactly what invalidated keda-K2 on
+            # 20260825T220317Z (the poll storm, not the offered load). An
+            # interval of a tenth of the job's age bounds every job's measured
+            # completion error at ~10% of its own latency while the total poll
+            # rate stays roughly (jobs in flight) / (10 x mean age) — bounded,
+            # because the ages grow with the queue. The first seconds stay
+            # fine-grained because that is where the SLO is decided.
             interval = poll_interval
             while time.perf_counter() < deadline:
                 phase_response = await client.get(f"{location}/phase")
@@ -260,8 +266,9 @@ async def _issue_async(
                 if phase in ("COMPLETED", "ERROR", "ABORTED"):
                     break
                 await asyncio.sleep(interval)
-                if time.perf_counter() - t0 > poll_fine_window_s:
-                    interval = min(interval * 1.5, poll_interval_max)
+                age = time.perf_counter() - t0
+                if age > poll_fine_window_s:
+                    interval = min(max(poll_interval, age * poll_age_fraction), poll_interval_max)
             if phase == "COMPLETED":
                 result = await client.get(f"{location}/results/result")
                 size = len(result.content)
@@ -599,6 +606,124 @@ async def open_loop(
         log.warning("generator could not offer %d arrivals (in-flight cap)", dropped)
     timeline.append({"step": -1, "t": time.time(), "dropped_arrivals": dropped})
     return recorder, timeline
+
+
+def _open_loop_share(payload: dict) -> tuple[list, list, list, float]:
+    """One process's share of a sharded open loop (runs in a child).
+
+    Rebuilds its own workload from the picklable ingredients with a distinct
+    seed, exactly as the closed-loop shares do, so the shares draw different
+    query streams and their union is one workload rather than N copies.
+    """
+    if payload["query_class"] is not None:
+        workload = SingleClass(payload["entries"], payload["query_class"], seed=payload["seed"])
+    else:
+        workload = Workload(payload["entries"], payload["mix"], seed=payload["seed"])
+    steps = [Step(**s) for s in payload["steps"]]
+    started = time.time()
+    recorder, timeline = asyncio.run(
+        open_loop(
+            payload["base_url"],
+            workload,
+            steps,
+            mode=payload["mode"],
+            response_format=payload["response_format"],
+            arrival_seed=payload["arrival_seed"],
+            max_in_flight=payload["max_in_flight"],
+        )
+    )
+    return recorder.samples, recorder.cpu_samples, timeline, time.time() - started
+
+
+def open_loop_sharded(
+    base_url: str,
+    *,
+    entries: list,
+    mix: dict | None,
+    query_class: str | None,
+    seed: int,
+    steps: list[Step],
+    processes: int,
+    mode: str = "sync",
+    response_format: str = "csv",
+    arrival_seed: int = 90210,
+    max_in_flight: int = 4096,
+) -> tuple[Recorder, list[dict], float]:
+    """An open loop split across processes, so the generator scales.
+
+    The async scenarios need this even at modest offered rates: every job in
+    flight holds a phase-poll loop, so a scenario that queues thousands of
+    jobs makes the generator's real request rate the poll rate, not the
+    arrival rate — one asyncio loop pinned its core exactly that way while
+    offering 24 jobs/s. Each process runs the plain open loop with an equal
+    share of every step's rate; the sum of N thinned Poisson processes at
+    rate/N is the same Poisson process at the full rate, so the offered load
+    is statistically unchanged. Distinct arrival seeds keep the shards from
+    submitting in lockstep, and the in-flight cap is split so the total
+    outstanding work stays what the config states.
+    """
+    processes = max(1, processes)
+    if processes == 1:
+        samples, cpu, timeline, elapsed = _open_loop_share(
+            {
+                "base_url": base_url,
+                "entries": entries,
+                "mix": mix,
+                "query_class": query_class,
+                "seed": seed,
+                "steps": [dataclasses.asdict(s) for s in steps],
+                "mode": mode,
+                "response_format": response_format,
+                "arrival_seed": arrival_seed,
+                "max_in_flight": max_in_flight,
+            }
+        )
+        merged = Recorder()
+        merged.samples.extend(samples)
+        merged.cpu_samples.extend(cpu)
+        return merged, timeline, elapsed
+    payloads = [
+        {
+            "base_url": base_url,
+            "entries": entries,
+            "mix": mix,
+            "query_class": query_class,
+            "seed": seed + 100 * index,
+            "steps": [
+                dataclasses.asdict(s)
+                | {
+                    "rate": s.rate / processes,
+                    "rate_end": None if s.rate_end is None else s.rate_end / processes,
+                }
+                for s in steps
+            ],
+            "mode": mode,
+            "response_format": response_format,
+            "arrival_seed": arrival_seed + 137 * index,
+            "max_in_flight": max(1, max_in_flight // processes),
+        }
+        for index in range(processes)
+    ]
+    merged = Recorder()
+    merged_timeline: list[dict] = []
+    elapsed = 0.0
+    # fork, not spawn, for the same reason as the closed-loop shards: the
+    # children re-enter this module with the parent's imports already made,
+    # and no asyncio loop is running in the parent at this point
+    ctx = multiprocessing.get_context("fork")
+    with concurrent.futures.ProcessPoolExecutor(len(payloads), mp_context=ctx) as pool:
+        for samples, cpu, timeline, share_elapsed in pool.map(_open_loop_share, payloads):
+            merged.samples.extend(samples)
+            merged.cpu_samples.extend(cpu)
+            merged_timeline.extend(timeline)
+            elapsed = max(elapsed, share_elapsed)
+    log.info(
+        "sharded open loop over %d processes: %d requests, busiest process at %.0f%% of one core",
+        len(payloads),
+        len(merged.samples),
+        100 * merged.generator_cpu_peak,
+    )
+    return merged, merged_timeline, elapsed
 
 
 def samples_to_arrow(samples: typing.Sequence[Sample]):
