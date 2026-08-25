@@ -48,14 +48,19 @@ declared: `IN_UNIT` (needs per-column unit metadata), `WITH` (still refused)
 and `CENTROID` (no pgsphere mapping) are deliberately absent. Bitwise
 operators turn out not to be in the final 2.1 REC at all — they were dropped
 after the drafts queryparser followed — so they parse as an undeclared
-extension. The hot path held: geometry translation 2.33 ms before, 2.27 ms
-after on the same machine (`tests/benchmarks/test_hot_paths.py`), with the
-SLL-equals-full-context parity guard extended over the new syntax. The
-budget this package was written against has since been corrected by package
-18's profile: whole-request translation measures 3.19 ms (30.9% of a
-request, the largest named subsystem), not the "fast path's 1.2 ms" the
-Work paragraph cited — so the fork's ~2.3 ms is competitive with the
-pre-fork translator, not merely holding a narrower figure. Across
+extension. The hot path held, and slightly better than held: geometry
+translation 2.33 ms before the fork, 2.21–2.27 ms after across runs on the
+same machine (`tests/benchmarks/test_hot_paths.py`, including the
+geometry-slot column recording added for package 22), and package 18's
+independent run put the pre-fork translator at 2.37 ms min / 2.57 ms mean
+on the same cone-search shape — the fork is marginally faster while
+accepting more syntax. The SLL-equals-full-context parity guard is
+extended over the new syntax. The budget this package was written against
+has since been corrected by package 18's profile: whole-request
+translation measures 3.19 ms (30.9% of a request, the largest named
+subsystem), not the "fast path's 1.2 ms" the Work paragraph cited — read
+next to the numbers above, 2.1 did not move that share, it just accepts
+more of the language for the same price. Across
 the full 12,000-query benchmark corpus, the fork translates every query
 byte-identically to upstream 0.7.4, and the SLL fast path byte-identically
 to the fork's full-context parse — zero divergences either way. The
