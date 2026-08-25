@@ -64,7 +64,11 @@ def render_schema_docs(plugins: Iterable[MetadataPlugin]) -> str:
                 tap_type, arraysize = TAP_DATATYPES[column.sql_type]
                 if arraysize:
                     tap_type = f"{tap_type}[{arraysize}]"
-                model_field = ".".join(column.path)
+                model_field = (
+                    f"derived from {column.derived_from}"
+                    if column.derived_from
+                    else ".".join(column.path)
+                )
                 constraints = "; ".join(column.checks)
                 lines.append(
                     "| "

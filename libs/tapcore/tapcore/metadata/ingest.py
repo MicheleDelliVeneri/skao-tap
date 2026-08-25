@@ -22,8 +22,22 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from ..config import settings
 from ..errors import UsageError
+from . import regions
 from .plugins import MetadataPlugin
 from .schema_gen import TableSpec, ddl_statements, registration_statements
+
+# How a derived column's value is computed from its source column's value,
+# by SQL type (see ColumnSpec.derived_from in schema_gen). A conversion
+# error is the caller's mistake, so it surfaces as UsageError.
+DERIVATIONS = {"spoly": regions.stcs_to_spoly}
+
+
+def _derive(col, source_value):
+    try:
+        return DERIVATIONS[col.sql_type](source_value)
+    except ValueError as exc:
+        raise UsageError(str(exc)) from None
+
 
 log = logging.getLogger("tapcore")
 
@@ -138,6 +152,16 @@ def ingest_document(conn, plugin: MetadataPlugin, document: BaseModel) -> dict[s
         for col in table.columns:
             if col.name in row:
                 continue
+            if col.derived_from:
+                # subscript, not .get(): `row` starts as the key chain and is
+                # filled in table.columns order, so a derived column can only
+                # be resolved after its source. schema_gen appends the
+                # companion immediately after the source column, which holds
+                # today — and a KeyError on some future reordering is worth
+                # far more than the NULL geometry .get() would have written,
+                # since a NULL footprint answers no ADQL query and says nothing.
+                row[col.name] = _derive(col, row[col.derived_from])
+                continue
             row[col.name] = _resolve_path(instance, col.path)
         for child in tables:
             if child.parent is table:
@@ -179,11 +203,20 @@ def amend_rows(
 
     if not values:
         raise UsageError("values must contain at least one column to set")
+    # coerced values and derivations go into a copy: the caller's dict is an
+    # argument, not scratch space
+    resolved = dict(values)
+    derived = {c.name: c for c in table.columns if c.derived_from}
     for column, value in values.items():
         if column not in columns:
             raise UsageError(f"{table_name} has no column {column!r}")
         if column in keys:
             raise UsageError(f"{column} is a key column and cannot be amended")
+        if column in derived:
+            raise UsageError(
+                f"{column} is derived from {derived[column].derived_from};"
+                f" amend {derived[column].derived_from} instead"
+            )
         info = table.field_for_column(column)
         if info is not None:
             # constraints declared via Field(ge=..., ...) live in
@@ -192,22 +225,28 @@ def amend_rows(
             if info.metadata:
                 annotation = typing.Annotated[annotation, *info.metadata]  # pyright: ignore
             try:
-                values[column] = TypeAdapter(annotation).validate_python(value)
+                resolved[column] = TypeAdapter(annotation).validate_python(value)
             except ValidationError as exc:
                 errors = "; ".join(e["msg"] for e in exc.errors())
                 raise UsageError(f"invalid value for {table_name}.{column}: {errors}") from None
     for column in match:
         if column not in columns:
             raise UsageError(f"{table_name} has no column {column!r} to match on")
+    # an amended source column carries its derivations with it: a footprint
+    # whose text changed and whose geometry did not would answer ADQL
+    # queries with the old sky
+    for col in derived.values():
+        if col.derived_from in resolved:
+            resolved[col.name] = _derive(col, resolved[col.derived_from])
 
     root_id_column = tables[0].id_column
     conditions = dict(match)
     conditions[root_id_column] = root_id
-    sets = ", ".join(f"{c} = %s" for c in values)
+    sets = ", ".join(f"{c} = %s" for c in resolved)
     where = " AND ".join(f"{c} = %s" for c in conditions)
     cur = conn.execute(
         f"UPDATE {table.qualified} SET {sets} WHERE {where}",
-        tuple(_column_value(v) for v in values.values())
+        tuple(_column_value(v) for v in resolved.values())
         + tuple(_column_value(v) for v in conditions.values()),
     )
     return cur.rowcount
@@ -245,9 +284,11 @@ def fetch_document(conn, plugin: MetadataPlugin, root_id: str) -> dict | None:
             for child in tables:
                 if child.parent is table:
                     doc[child.field_name] = load(child, child_chain)
-            # drop inherited key columns and nulls for a clean document
+            # drop inherited key columns, nulls, and service-derived
+            # columns (internal query machinery, not document content)
+            derived = {c.name for c in table.columns if c.derived_from}
             for key in list(doc):
-                if (key in key_chain) or doc[key] is None:
+                if (key in key_chain) or doc[key] is None or key in derived:
                     del doc[key]
             documents.append(_unflatten(doc, table))
         return documents
@@ -295,9 +336,10 @@ def list_documents(conn, plugin: MetadataPlugin) -> list[dict]:
     rows = conn.execute(
         f"SELECT to_jsonb(p){count_selects} FROM {root.qualified} p ORDER BY p.{root.id_column}"
     ).fetchall()
+    root_derived = {c.name for c in root.columns if c.derived_from}
     summaries = []
     for row in rows:
-        doc = {k: v for k, v in row[0].items() if v is not None}
+        doc = {k: v for k, v in row[0].items() if v is not None and k not in root_derived}
         doc = _unflatten(doc, root)
         for table, count in zip(descendants, row[1:], strict=True):
             doc[table.field_name] = count
