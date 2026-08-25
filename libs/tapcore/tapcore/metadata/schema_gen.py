@@ -374,6 +374,42 @@ def ddl_statements(tables: list[TableSpec], query_role: str) -> list[str]:
             for col in table.columns
             if col.index
         )
+        # Cone searches translate to `spoint(RADIANS(s_ra), RADIANS(s_dec))
+        # @ scircle(...)`, and only an index on that *expression* is ever
+        # considered — a GiST index on a stored point column would not be.
+        # Any generated table carrying the ObsCore position pair gets it.
+        names = {c.name for c in table.columns}
+        if {"s_ra", "s_dec"} <= names:
+            statements.append(
+                f"CREATE INDEX IF NOT EXISTS {table.name}_spoint_gist"
+                f" ON {table.qualified}"
+                " USING gist (spoint(RADIANS(s_ra), RADIANS(s_dec)))"
+            )
+        # The hierarchy's key chain is perfectly correlated (a child key
+        # determines every parent key), which per-column statistics cannot
+        # see. What these declare is single-table: `dependencies` sharpens a
+        # conjunction of equality quals over those columns (the shape of
+        # every key-scoped lookup), `ndistinct` sharpens group-count
+        # estimates over the chain. What they do *not* do is fix join
+        # selectivity — the planner estimates `child.key = parent.key` from
+        # per-column statistics on the two relations and never consults
+        # extended statistics for it, so the 50x-477x join misestimates on
+        # the benchmark's join-heavy classes (Q09, Q11, Q14) stay open for a
+        # different lever.
+        #
+        # The name is schema-qualified where the CREATE INDEX above is not,
+        # and the asymmetry is real: an index is always created in its
+        # table's schema, but a statistics object lands in whatever
+        # search_path resolves to. Two plugins (or two deployments sharing a
+        # database) with same-named tables in different schemas would
+        # collide, and IF NOT EXISTS would turn that into a silent skip
+        # against the wrong table.
+        if len(table.pk_columns) >= 2:
+            statements.append(
+                f"CREATE STATISTICS IF NOT EXISTS {table.qualified}_keys_stx"
+                " (ndistinct, dependencies)"
+                f" ON {', '.join(table.pk_columns)} FROM {table.qualified}"
+            )
     statements.append(f"GRANT USAGE ON SCHEMA {schema} TO {query_role}")
     statements.append(f"GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO {query_role}")
     return statements

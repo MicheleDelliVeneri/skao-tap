@@ -129,6 +129,12 @@ CREATE TABLE IF NOT EXISTS ivoa.obscore (
 -- assumed — see analyze/explain flags.
 -- ---------------------------------------------------------------------------
 
+-- The index the comment above is about. Its name is a contract: the suite's
+-- EXPECTED_INDEXES (collect/postgres.py) asserts the cone-search classes
+-- plan through it.
+CREATE INDEX IF NOT EXISTS obscore_spoint_gist
+    ON ivoa.obscore USING gist (spoint(RADIANS(s_ra), RADIANS(s_dec)));
+
 CREATE INDEX IF NOT EXISTS observation_collection_idx
     ON caom.observation (collection);
 CREATE INDEX IF NOT EXISTS observation_instrument_idx
@@ -144,6 +150,28 @@ CREATE INDEX IF NOT EXISTS plane_time_idx
 CREATE INDEX IF NOT EXISTS artifact_plane_idx ON caom.artifact (plane_id);
 CREATE INDEX IF NOT EXISTS part_artifact_idx ON caom.part (artifact_id);
 CREATE INDEX IF NOT EXISTS chunk_part_idx ON caom.chunk (part_id);
+
+-- Extended statistics on the parent/child key pairs. A child key
+-- functionally determines its parent key, which per-column statistics cannot
+-- see; `dependencies` puts that in front of the planner for a conjunction of
+-- equality quals on one table, and `ndistinct` sharpens group counts over the
+-- pair. Both are single-table estimates.
+--
+-- They are not the fix for the 50x-477x cardinality misestimates on the
+-- join-heavy classes (Q09, Q11, Q14): those nodes misestimate
+-- `child.parent_key = parent.parent_key`, an equality across two relations,
+-- and Postgres estimates join selectivity from per-column statistics on the
+-- two sides without consulting extended statistics at all. That finding is
+-- still open and needs a different lever. Populated by the VACUUM ANALYZE
+-- the dataset build already runs.
+CREATE STATISTICS IF NOT EXISTS caom.plane_keys_stx (ndistinct, dependencies)
+    ON obs_id, plane_id FROM caom.plane;
+CREATE STATISTICS IF NOT EXISTS caom.artifact_keys_stx (ndistinct, dependencies)
+    ON plane_id, artifact_id FROM caom.artifact;
+CREATE STATISTICS IF NOT EXISTS caom.part_keys_stx (ndistinct, dependencies)
+    ON artifact_id, part_id FROM caom.part;
+CREATE STATISTICS IF NOT EXISTS caom.chunk_keys_stx (ndistinct, dependencies)
+    ON part_id, chunk_id FROM caom.chunk;
 
 CREATE INDEX IF NOT EXISTS obscore_obs_id_idx ON ivoa.obscore (obs_id);
 CREATE INDEX IF NOT EXISTS obscore_collection_type_idx
