@@ -38,7 +38,11 @@ corpus and seeds — and the w=1 column reproduces the replica ladder
   335.8 (2x2) against 342.9 (1x4); 8 processes measure 583.0 against 581.6.
   What a worker costs instead is ~140–165 MiB of essentially private memory
   (pod peaks 138 / 302 / 562 MiB at w=1/2/4 — the interpreter shares almost
-  nothing) and `dbPoolMax` more connections in the pod's ceiling.
+  nothing) and `dbPoolMax` more connections in the pod's ceiling. One caveat
+  on the memory: within a window the working set is flat (max/mean ≤ 1.01),
+  but across windows a fresh four-worker pod drifted 548 → 581 MiB over
+  ~25 minutes of serving without provably flattening, so read the default
+  1 Gi as hosting four workers with real, not generous, margin.
 - **The default follows the pod's CPU limit, and the mechanism was
   falsifiable in advance.** Package 18's profile priced a request at 10.5 ms
   of CPU with ~53% GIL-serialised and one worker at 1.05 cores, predicting
