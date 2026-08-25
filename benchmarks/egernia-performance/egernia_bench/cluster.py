@@ -429,6 +429,71 @@ def set_limit_concurrency(value: int) -> None:
     install_chart({"tapApi.limitConcurrency": str(value)})
 
 
+def set_workers(value: int) -> None:
+    """Set uvicorn worker processes per tap-api pod; the chart's own knob.
+
+    Same route and same caveats as `set_limit_concurrency`: the values file
+    stays the single authority on what is deployed, a helm upgrade resets
+    every override the previous one set, and it reverts the replica count to
+    the values file's — so the caller must re-apply `scale()` after every
+    call. The value reaches the pods through the ConfigMap, and the pod
+    template hashes the ConfigMap (checksum/config), so the upgrade is a
+    rollout `--wait` waits out rather than a config change no running pod has
+    read.
+    """
+    install_chart({"tapApi.workers": str(value)})
+    verify_workers(value)
+
+
+def verify_workers(expected: int, timeout_s: float = 120.0) -> None:
+    """Every ready tap-api pod started with `expected` in TAP_API_WORKERS.
+
+    Asked of the pods rather than read back from the ConfigMap, because the
+    failure this guards against is exactly the config saying one thing while
+    the running processes say another: the pods read TAP_API_WORKERS once, at
+    startup (it is uvicorn's `--workers`), so before the pod template hashed
+    the ConfigMap a workers change was an upgrade helm reported successful
+    and no running pod had read — a whole grid would have measured workers=1
+    twelve times over.
+    """
+    deadline = time.time() + timeout_s
+    last = ""
+    while time.time() < deadline:
+        pods = json.loads(
+            kubectl(
+                "get",
+                "pods",
+                "-l",
+                f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=tap-api",
+                "-o",
+                "json",
+            )
+        )["items"]
+        ready = [
+            p["metadata"]["name"]
+            for p in pods
+            if not p["metadata"].get("deletionTimestamp")
+            and any(
+                c["type"] == "Ready" and c["status"] == "True"
+                for c in p["status"].get("conditions", [])
+            )
+        ]
+        seen = {
+            name: kubectl(
+                "exec", name, "-c", "tap-api", "--", "printenv", "TAP_API_WORKERS"
+            ).strip()
+            for name in ready
+        }
+        stale = {name: value for name, value in seen.items() if value != str(expected)}
+        if ready and not stale:
+            return
+        last = f"ready={ready} TAP_API_WORKERS={seen}"
+        time.sleep(3)
+    raise RuntimeError(
+        f"tap-api pods did not come up with TAP_API_WORKERS={expected} within {timeout_s}s: {last}"
+    )
+
+
 def scale(component: str, replicas: int) -> None:
     """Fix a component's replica count, for the no-autoscaler runs."""
     kubectl("scale", f"deploy/{RELEASE}-{component}", f"--replicas={replicas}")

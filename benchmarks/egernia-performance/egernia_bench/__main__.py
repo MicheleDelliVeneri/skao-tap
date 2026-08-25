@@ -3,6 +3,7 @@
     python -m egernia_bench smoke
     python -m egernia_bench db-scaling
     python -m egernia_bench fixed-scaling
+    python -m egernia_bench workers
     python -m egernia_bench keda
     python -m egernia_bench result-formats
     python -m egernia_bench full
@@ -136,6 +137,12 @@ def finalise(
         "by_query_class": pooled,
         "headline": headline,
         "replica_capacity": runner.replica_capacities(results, slo_p95_s, signals_required),
+        "worker_capacity": runner.worker_capacities(
+            results,
+            slo_p95_s,
+            signals_required,
+            **runner.connection_arithmetic(cfg["chart_values"]),
+        ),
         "format_comparison": runner.format_comparison(results),
         "shedding": runner.shedding_summary(results),
         "plan_flags": {
@@ -352,6 +359,42 @@ def cmd_replicas(args) -> int:
     return 0
 
 
+def cmd_workers(args) -> int:
+    """Package 19: a bracketed capacity per (workers, replicas) point.
+
+    The replica ladder was measured at one worker per pod against a 2-core
+    CPU limit — every point in it half-idle by construction. This grid varies
+    both axes on the same host, corpus and seeds, and prints each point with
+    the connection arithmetic it implies, because a pod's pool ceiling is
+    workers x dbPoolMax and the two axes are therefore not interchangeable at
+    the database.
+    """
+    cfg = runner.load_config()
+    run = runs_mod.new_run("worker-sweep", args.resume)
+    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    dataset = args.dataset or "D1"
+    datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
+    entries = build_corpus(cfg, datasets)
+    run.write_json("corpus.json", [e.as_dict() for e in entries])
+    results = runner.worker_sweep(run, cfg, dataset, entries)
+    finalise(run, cfg, results, datasets, digests, corpus_entries=entries)
+    slo = cfg["scenarios"]["slo"]["p95_seconds"]
+    rows = runner.worker_capacities(
+        results,
+        slo,
+        runner.saturation_signals_required(cfg),
+        **runner.connection_arithmetic(cfg["chart_values"]),
+    )
+    for row in rows:
+        print(
+            f"w={row['workers']} n={row['replicas']}: {row['rps']:.1f} rps"
+            f" ({'ceiling' if row['bracketed'] else 'open-ended'}, {row['key']});"
+            f" pool ceiling {row['connection_ceiling']} connections"
+            + (" — EXCEEDS max_connections" if row["exceeds_max_connections"] else "")
+        )
+    return 0
+
+
 def cmd_shedding(args) -> int:
     """Package 13: hold a bounded-concurrency overload, watch the refusals.
 
@@ -512,6 +555,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = add("shedding", cmd_shedding, help="held overload: 503s versus socket drops")
     sub.add_argument("--dataset")
     sub = add("replicas", cmd_replicas, help="a bracketed capacity per replica count")
+    sub.add_argument("--dataset")
+    sub = add("workers", cmd_workers, help="a bracketed capacity per (workers, replicas) point")
     sub.add_argument("--dataset")
     sub = add("keda", cmd_keda, help="autoscaling scenarios K1-K7")
     sub.add_argument("--dataset")

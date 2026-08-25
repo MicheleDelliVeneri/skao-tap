@@ -94,6 +94,29 @@ replica_sweep:
   # processes put the client ceiling far above the fleet's.
   generator_processes: 4
 
+# Package 19: workers against replicas, on one host. The replica ladder was
+# measured at one worker per pod against a 2-core CPU limit, so every point
+# in it was half-idle by construction. Same closed-loop ladder and stop rule
+# as the replica sweep, once per (workers, replicas) point — same host, same
+# corpus, same workload seeds, so two points differ in the fleet's shape and
+# nothing else. Workers 1/2/4 against the 2-core pod is under-, at- and
+# over-subscribed: the chart's guidance ("set workers to the pod's CPU limit
+# and no higher") is a claim this grid either measures or corrects. The two
+# axes are not interchangeable at the database — a pod's pool ceiling is
+# workers x dbPoolMax — so every point's connection arithmetic is recorded
+# beside its capacity.
+worker_sweep:
+  workers: [1, 2, 4]
+  replicas: [1, 2, 4, 8]
+  warmup_seconds: 15
+  measure_seconds: 45
+  repetitions: 2
+  # Six, not the replica sweep's four: the top of this grid is a fleet of up
+  # to 16 worker processes, which serves more than four generator processes
+  # (~400 requests/second each) can offer, and the hardware budget reserves
+  # six host cores for the generator.
+  generator_processes: 6
+
 # Package 13: where does shed load stop being an answer? A closed loop is
 # bounded concurrency by construction — each client has exactly one request
 # outstanding — so holding it far past saturation is the sustained-overload

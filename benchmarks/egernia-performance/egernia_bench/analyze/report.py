@@ -332,6 +332,75 @@ class Plotter:
             "shortfall is what the replicas are contending over.",
         )
 
+    def rps_vs_workers(self) -> Figure:
+        """The worker grid: one line per worker count, over the replica axis.
+
+        Drawn from the summary's worker_capacity rows rather than re-derived
+        from the runs, for the same reason the efficiency plot reads
+        replica_capacity: the table and the picture must not be able to
+        disagree about which points are ceilings.
+        """
+        grid = self.summary.get("worker_capacity") or []
+        if not grid:
+            return self._skip(
+                "rps_vs_workers",
+                "Throughput vs workers and replicas",
+                "no worker-sweep measurements in this run",
+            )
+        fig, ax = self._axes(
+            "API replicas", "successful requests/second", "Throughput vs workers and replicas"
+        )
+        colors = [PALETTE["primary"], PALETTE["third"], PALETTE["fourth"]]
+        by_workers: dict[int, list[dict]] = {}
+        for row in grid:
+            by_workers.setdefault(row["workers"], []).append(row)
+        for i, workers in enumerate(sorted(by_workers)):
+            rows = sorted(by_workers[workers], key=lambda r: r["replicas"])
+            ax.plot(
+                [r["replicas"] for r in rows],
+                [r["rps"] for r in rows],
+                marker="o",
+                color=colors[i % len(colors)],
+                label=f"{workers} worker{'s' if workers > 1 else ''}/pod",
+            )
+            # An open-ended point is the largest rate anybody offered, not a
+            # ceiling: mark it so the line does not read as saturation.
+            open_ended = [r for r in rows if not r["bracketed"]]
+            if open_ended:
+                ax.scatter(
+                    [r["replicas"] for r in open_ended],
+                    [r["rps"] for r in open_ended],
+                    marker="^",
+                    s=90,
+                    facecolors="none",
+                    edgecolors=colors[i % len(colors)],
+                    zorder=5,
+                )
+        base = next(
+            (r["rps"] for r in grid if r["workers"] == 1 and r["replicas"] == 1 and r["bracketed"]),
+            None,
+        )
+        if base:
+            xs = sorted({r["replicas"] for r in grid})
+            ax.plot(
+                xs,
+                [base * x for x in xs],
+                linestyle="--",
+                color=PALETTE["grey"],
+                label="linear from (1 worker, 1 replica)",
+            )
+        ax.legend()
+        return self._save(
+            fig,
+            "rps_vs_workers",
+            "Throughput vs workers and replicas",
+            "Each point is the highest rate that (workers, replicas) shape met "
+            "inside the SLO; hollow triangles served everything offered, so "
+            "they are floors rather than ceilings. Lines above one another at "
+            "the same replica count are capacity that cost no extra pod — "
+            "paid for in connections, not cores.",
+        )
+
     # -- dataset size -------------------------------------------------------
 
     def _size_axis(self) -> dict[str, float]:
@@ -991,6 +1060,7 @@ class Plotter:
             self.errors_vs_concurrency,
             self.rps_vs_replicas,
             self.scaling_efficiency,
+            self.rps_vs_workers,
             self.rps_vs_size,
             self.latency_vs_size,
             self.tap_cpu_vs_throughput,

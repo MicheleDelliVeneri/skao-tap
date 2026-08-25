@@ -178,6 +178,24 @@ def limits(cfg: dict) -> dict:
     }
 
 
+def limits_with_workers(limits_map: dict, workers: int | None) -> dict:
+    """The per-pod ceilings for the worker count actually deployed.
+
+    The worker sweep deploys counts the values file does not state, and
+    `limits()` reads the file. Grading those measurements against the file's
+    count would repeat the mistake the min(cpu, workers) ceiling exists to
+    prevent: a two-worker pod judged against a one-worker ceiling reads as
+    past its limit at half load, and a four-worker pod's pool arithmetic
+    would be counted at a quarter of its real connections.
+    """
+    if workers is None or workers == limits_map.get("tap_api_workers"):
+        return limits_map
+    out = dict(limits_map)
+    out["tap_api_workers"] = workers
+    out["tap_api_cpu_limit_cores"] = min(out["tap_api_pod_cpu_limit_cores"], float(workers))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
@@ -268,6 +286,7 @@ def measure(
     concurrency: int | None = None,
     steps: list[load_mod.Step] | None = None,
     replicas: int | None = None,
+    workers: int | None = None,
     offered_rps: float | None = None,
     repetition: int = 0,
     warmup_s: float | None = None,
@@ -409,7 +428,9 @@ def measure(
     for failure in failed:
         run.invalidate(f"{key}: {failure.name}", {"detail": failure.detail, **failure.measured})
 
-    limits_map = limits(cfg)
+    # The worker sweep deploys a count the values file does not state; every
+    # ceiling below has to be the deployed pod's, not the file's.
+    limits_map = limits_with_workers(limits(cfg), workers)
     # The per-pod ceilings go in as they are: classify() multiplies each of
     # them by the replicas the run actually had ready, which is the only count
     # that is also right when an autoscaler moved it mid-window. The same
@@ -430,6 +451,10 @@ def measure(
         "mode": mode,
         "concurrency": concurrency,
         "replicas": replicas,
+        # None means "whatever the values file says" — only the worker sweep
+        # varies it, and a recorded 1 on every older measurement would claim a
+        # certainty about deployments this field did not exist to observe.
+        "workers": workers,
         "offered_rps": offered_rps,
         "repetition": repetition,
         "request_mode": request_mode,
@@ -498,6 +523,7 @@ def concurrency_sweep(
     *,
     quick: bool = False,
     replicas: int = 1,
+    workers: int | None = None,
     kind: str = "concurrency",
     key_prefix: str = "conc",
     refine_saturation: bool = True,
@@ -549,6 +575,7 @@ def concurrency_sweep(
                 mode="closed",
                 concurrency=concurrency,
                 replicas=replicas,
+                workers=workers,
                 repetition=repetition,
                 warmup_s=warmup_s
                 if warmup_s is not None
@@ -651,6 +678,7 @@ def bracketed_capacity(
     *,
     kind: str,
     replicas: int,
+    workers: int | None = None,
     slo_p95_s: float,
     signals_required: int = SATURATION_SIGNALS_REQUIRED_DEFAULT,
 ) -> dict | None:
@@ -673,7 +701,16 @@ def bracketed_capacity(
     is only for callers that have none, and a copy of it here that drifted
     from the ladder's would report a bracket for a ladder that never stopped.
     """
-    at = [r for r in results if r.get("kind") == kind and r.get("replicas") == replicas]
+    # `workers=None` means the caller's family does not vary the worker
+    # count, not "match rows without one": the replica families predate the
+    # field, and filtering them on it would empty every ladder they measured.
+    at = [
+        r
+        for r in results
+        if r.get("kind") == kind
+        and r.get("replicas") == replicas
+        and (workers is None or r.get("workers") == workers)
+    ]
     met = [r for r in at if _within_slo(r, slo_p95_s)]
     if not met:
         return None
@@ -873,6 +910,81 @@ def replica_capacities(
     return out
 
 
+def connection_arithmetic(values: dict) -> dict:
+    """What a (workers, replicas) point costs the database, from the chart.
+
+    Read from the deployed values rather than restated, for the same reason
+    limits() reads them: a constant matching the values file at the time it
+    was written goes wrong silently when the file moves.
+    """
+    pool_max = int((values.get("config") or {}).get("dbPoolMax") or 8)
+    tuning = (values.get("postgresql") or {}).get("tuning") or {}
+    return {
+        "pool_max": pool_max,
+        "max_connections": int(tuning.get("max_connections") or 0) or None,
+        # The executors' own pools sit on the same server, so the API fleet's
+        # ceiling has to fit around them.
+        "executor_pool": pool_max * int((values.get("tapExecutor") or {}).get("replicas") or 1),
+    }
+
+
+def worker_capacities(
+    results: list[dict],
+    slo_p95_s: float,
+    signals_required: int = SATURATION_SIGNALS_REQUIRED_DEFAULT,
+    *,
+    pool_max: int = 8,
+    max_connections: int | None = None,
+    executor_pool: int = 0,
+) -> list[dict]:
+    """Per (workers, replicas) point: the capacity, and its price at the database.
+
+    The two axes are not interchangeable there. Every worker process holds
+    its own pool, so a point's connection ceiling is
+    ``replicas x workers x dbPoolMax`` — stated beside each capacity because
+    the grid deliberately contains shapes (4 workers on 8 replicas at
+    dbPoolMax 8 is 256 connections) that a 200-connection server cannot
+    honour, and a capacity published without its arithmetic reads as a shape
+    an operator could pick.
+
+    ``executor_pool`` is the executors' own connections, which the API fleet's
+    ceiling has to fit around; PostgreSQL additionally holds 3 back for
+    superusers, the same accounting the chart's HPA guard applies.
+    """
+    points = sorted(
+        {
+            (r["workers"], r["replicas"])
+            for r in results
+            if r.get("kind") == "worker_sweep" and r.get("workers") and r.get("replicas")
+        }
+    )
+    usable = (max_connections - 3 - executor_pool) if max_connections else None
+    out = []
+    for workers, replicas in points:
+        found = bracketed_capacity(
+            results,
+            kind="worker_sweep",
+            replicas=replicas,
+            workers=workers,
+            slo_p95_s=slo_p95_s,
+            signals_required=signals_required,
+        )
+        if not found:
+            continue
+        ceiling = replicas * workers * pool_max
+        out.append(
+            {
+                "workers": workers,
+                "replicas": replicas,
+                "worker_processes": replicas * workers,
+                "connection_ceiling": ceiling,
+                "exceeds_max_connections": bool(usable is not None and ceiling > usable),
+                **found,
+            }
+        )
+    return out
+
+
 def capacity_headline(
     results: list[dict],
     slo_p95_s: float,
@@ -990,6 +1102,63 @@ def replica_sweep(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
                 generator_processes=int(plan.get("generator_processes", 1)),
             )
     finally:
+        cluster.scale("tap-api", 1)
+    return results
+
+
+def worker_sweep(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
+    """Package 19: the replica ladder's sweep, once per (workers, replicas).
+
+    The replica ladder was measured at one worker per pod against a pod whose
+    CPU limit is 2, so every point in it was half-idle by construction. This
+    grid varies both axes — same host, same corpus, same workload seeds, same
+    stop rule — so a worker and a replica can be compared as two prices of
+    the same capacity: one costs a pod, the other costs nothing but
+    connections. Workers 1/2/4 against the 2-core pod is under-, at- and
+    over-subscribed, which measures the chart's "set workers to the pod's CPU
+    limit and no higher" rather than repeating it.
+
+    Workers is the outer loop because changing it is a helm upgrade rolling
+    every pod, where a replica change is one write to the scale subresource —
+    and every upgrade resets the replica count to the values file's, so
+    scale() is re-applied per point either way. No set_autoscaling() call:
+    each set_workers() upgrade re-asserts the whole values file, which has
+    both autoscalers off, and a flag set before the loop would not survive
+    the first one.
+    """
+    plan = cfg["scenarios"]["worker_sweep"]
+    values = cfg["chart_values"]
+    pool = int((values.get("config") or {}).get("dbPoolMax") or 8)
+    default_workers = int((values.get("tapApi") or {}).get("workers") or 1)
+    results: list[dict] = []
+    try:
+        for workers in plan["workers"]:
+            cluster.set_workers(workers)
+            for replicas in plan["replicas"]:
+                log.info(
+                    "worker sweep point: workers=%d replicas=%d (pool ceiling %d connections)",
+                    workers,
+                    replicas,
+                    workers * replicas * pool,
+                )
+                cluster.scale("tap-api", replicas)
+                results += concurrency_sweep(
+                    run,
+                    cfg,
+                    dataset,
+                    entries,
+                    replicas=replicas,
+                    workers=workers,
+                    kind="worker_sweep",
+                    key_prefix=f"wsweep-w{workers}-n{replicas}",
+                    refine_saturation=False,
+                    repetitions=plan["repetitions"],
+                    warmup_s=plan["warmup_seconds"],
+                    measure_s=plan["measure_seconds"],
+                    generator_processes=int(plan.get("generator_processes", 1)),
+                )
+    finally:
+        cluster.set_workers(default_workers)
         cluster.scale("tap-api", 1)
     return results
 
@@ -1590,6 +1759,9 @@ def reclassify(run_dir, cfg: dict) -> dict:
     headline.update(capacity_headline(entries, slo_p95_s, signals_required))
     summary["headline"] = headline
     summary["replica_capacity"] = replica_capacities(entries, slo_p95_s, signals_required)
+    summary["worker_capacity"] = worker_capacities(
+        entries, slo_p95_s, signals_required, **connection_arithmetic(cfg["chart_values"])
+    )
     summary["sustainable_capacity_c1"] = sustainable_capacity(entries, slo_p95_s)
     summary["reanalysed_at"] = _time.time()
     summary_path.write_text(

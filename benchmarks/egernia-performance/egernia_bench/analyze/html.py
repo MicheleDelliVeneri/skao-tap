@@ -125,6 +125,7 @@ def write_csv(summary: dict, path: pathlib.Path) -> None:
         "response_format",
         "concurrency",
         "replicas",
+        "workers",
         "offered_rps",
         "repetition",
         "requests",
@@ -174,6 +175,10 @@ def write_csv(summary: dict, path: pathlib.Path) -> None:
                     "response_format": run.get("response_format", "csv"),
                     "concurrency": run.get("concurrency"),
                     "replicas": run.get("replicas"),
+                    # Empty rather than defaulted for older measurements: the
+                    # worker count was not recorded before the worker sweep
+                    # existed, and a written 1 would claim it was observed.
+                    "workers": run.get("workers"),
                     "offered_rps": run.get("offered_rps"),
                     "repetition": run.get("repetition"),
                     "requests": http.get("requests"),
@@ -396,6 +401,51 @@ def render(run_dir: pathlib.Path, summary: dict, figures: list) -> pathlib.Path:
                 ],
                 rows,
                 numeric={4, 5, 6, 7, 8, 9, 10, 11, 12, 13},
+            )
+        )
+
+    # -- workers against replicas --------------------------------------------
+    grid = summary.get("worker_capacity") or []
+    if grid:
+        sections.append("<h2>Workers against replicas</h2>")
+        sections.append(
+            "<p>The same closed-loop ladder at every (workers, replicas) "
+            "point — same corpus, same seeds — so two rows differ in the "
+            "fleet's shape and nothing else. A worker costs no pod but holds "
+            "its own connection pool, so each row states the arithmetic its "
+            "shape implies at the database.</p>"
+        )
+        sections.append(
+            _table(
+                [
+                    "workers",
+                    "replicas",
+                    "processes",
+                    "capacity (rps)",
+                    "rps per process",
+                    "ceiling?",
+                    "pool ceiling (connections)",
+                    "evidence",
+                ],
+                [
+                    [
+                        row["workers"],
+                        row["replicas"],
+                        row["worker_processes"],
+                        row["rps"],
+                        row["rps"] / row["worker_processes"],
+                        "ceiling" if row["bracketed"] else "open-ended",
+                        f"{row['connection_ceiling']}"
+                        + (
+                            " — exceeds max_connections"
+                            if row.get("exceeds_max_connections")
+                            else ""
+                        ),
+                        row["key"],
+                    ]
+                    for row in sorted(grid, key=lambda r: (r["workers"], r["replicas"]))
+                ],
+                numeric={0, 1, 2, 3, 4},
             )
         )
 
