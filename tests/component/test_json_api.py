@@ -30,6 +30,7 @@ def test_notification_built_with_library_builder_and_queried_via_tap(tap_service
         o_ucd="phot.flux",
         dataproduct_type="cube",
         calib_level=2,
+        data_product_origin="ODP",  # required since 0.1.8
         target_name="Builder Target",
         artifacts=[
             Artifact(
@@ -507,3 +508,124 @@ def test_amend_backfills_new_column_on_real_database(tap_service):
         timeout=30,
     )
     assert scoped.json()["updated"] == 0
+
+
+def test_region_footprints_are_queryable_with_adql(tap_service):
+    """Package 7 end to end: an ingested s_region becomes a pgsphere
+    geometry that INTERSECTS and CONTAINS find — and an amendment moves it."""
+    api = _api(tap_service)
+    payload = copy.deepcopy(SRC_INGESTION_EXAMPLE)
+    payload["project_id"] = "region-demo"
+    product = payload["observations"][0]["scheduling_blocks"][0]["execution_blocks"][0][
+        "data_products"
+    ][0]
+    product["product_id"] = "region-prod-1"
+    product["s_region"] = "CIRCLE ICRS 150.0 -30.0 0.5"
+    created = httpx.post(f"{api}/notifications", json=payload, timeout=30)
+    assert created.status_code == 201, created.text
+
+    def rows(adql: str) -> list[str]:
+        response = httpx.post(
+            f"{tap_service}/sync",
+            data={"LANG": "ADQL", "QUERY": adql, "RESPONSEFORMAT": "csv"},
+            timeout=30,
+        )
+        assert response.status_code == 200, response.text
+        return response.text.strip().splitlines()[1:]
+
+    overlapping = rows(
+        "SELECT product_id FROM srcnet.data_products WHERE project_id = 'region-demo'"
+        " AND 1=INTERSECTS(s_region_geom, CIRCLE('ICRS', 150.3, -30.0, 0.2))"
+    )
+    assert overlapping == ["region-prod-1"]
+
+    inside = rows(
+        "SELECT product_id FROM srcnet.data_products WHERE project_id = 'region-demo'"
+        " AND 1=CONTAINS(POINT('ICRS', 150.1, -30.1), s_region_geom)"
+    )
+    assert inside == ["region-prod-1"]
+
+    elsewhere = rows(
+        "SELECT product_id FROM srcnet.data_products WHERE project_id = 'region-demo'"
+        " AND 1=INTERSECTS(s_region_geom, CIRCLE('ICRS', 200.0, 45.0, 0.5))"
+    )
+    assert elsewhere == []
+
+    # the footprint is invisible in the rebuilt document...
+    document = httpx.get(f"{api}/notifications/region-demo", timeout=10).json()
+    fetched = document["observations"][0]["scheduling_blocks"][0]["execution_blocks"][0][
+        "data_products"
+    ][0]
+    assert "s_region_geom" not in fetched
+
+    # ...and an amendment to s_region moves the geometry with it
+    amended = httpx.patch(
+        f"{api}/notifications/region-demo",
+        json={
+            "table": "data_products",
+            "values": {"s_region": "POLYGON 199.5 44.5 200.5 44.5 200.0 45.5"},
+        },
+        timeout=10,
+    )
+    assert amended.status_code == 200, amended.text
+    assert rows(
+        "SELECT product_id FROM srcnet.data_products WHERE project_id = 'region-demo'"
+        " AND 1=INTERSECTS(s_region_geom, CIRCLE('ICRS', 200.0, 45.0, 0.5))"
+    ) == ["region-prod-1"]
+
+    # a malformed region is refused before it can poison the geometry
+    refused = httpx.patch(
+        f"{api}/notifications/region-demo",
+        json={"table": "data_products", "values": {"s_region": "NOT A REGION"}},
+        timeout=10,
+    )
+    assert refused.status_code == 400
+
+
+def test_position_footprints_are_queryable_with_adql(tap_service):
+    """POSITION is the one shape whose spoly is synthesised rather than
+    transcribed: eight vertices fifty milliarcseconds out, a 1.9e-7 rad
+    chord against pgsphere's 1e-9 rad coordinate epsilon. Only a real server
+    proves the literal parses and the polygon is non-degenerate, so the
+    CIRCLE/POLYGON cases above do not cover it."""
+    api = _api(tap_service)
+    payload = copy.deepcopy(SRC_INGESTION_EXAMPLE)
+    payload["project_id"] = "position-demo"
+    product = payload["observations"][0]["scheduling_blocks"][0]["execution_blocks"][0][
+        "data_products"
+    ][0]
+    product["product_id"] = "position-prod-1"
+    # RA=0 deliberately: that is where the vertices sit at ~1e-4 degrees with
+    # one of them numerically 1.7e-20 — the coordinates float repr would have
+    # emitted in exponent notation
+    product["s_region"] = "POSITION ICRS 0.0 45.0"
+    created = httpx.post(f"{api}/notifications", json=payload, timeout=30)
+    assert created.status_code == 201, created.text
+
+    def rows(adql: str) -> list[str]:
+        response = httpx.post(
+            f"{tap_service}/sync",
+            data={"LANG": "ADQL", "QUERY": adql, "RESPONSEFORMAT": "csv"},
+            timeout=30,
+        )
+        assert response.status_code == 200, response.text
+        return response.text.strip().splitlines()[1:]
+
+    overlapping = rows(
+        "SELECT product_id FROM srcnet.data_products WHERE project_id = 'position-demo'"
+        " AND 1=INTERSECTS(s_region_geom, CIRCLE('ICRS', 0.1, 45.0, 0.2))"
+    )
+    assert overlapping == ["position-prod-1"]
+
+    # the position itself falls inside the synthesised 8-gon
+    inside = rows(
+        "SELECT product_id FROM srcnet.data_products WHERE project_id = 'position-demo'"
+        " AND 1=CONTAINS(POINT('ICRS', 0.0, 45.0), s_region_geom)"
+    )
+    assert inside == ["position-prod-1"]
+
+    elsewhere = rows(
+        "SELECT product_id FROM srcnet.data_products WHERE project_id = 'position-demo'"
+        " AND 1=INTERSECTS(s_region_geom, CIRCLE('ICRS', 180.0, -45.0, 0.5))"
+    )
+    assert elsewhere == []

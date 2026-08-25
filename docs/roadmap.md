@@ -316,37 +316,6 @@ four concurrent clients on D1 to eight on D2. So replicas and `tapApi.workers`
 remain the throughput lever — and each worker is now worth roughly 200
 requests/s rather than 20.
 
-## Package 7 — Queryable region footprints (`s_region`)
-
-Unblocked: `ska-src-mm-notification` 0.1.8 is released and ships the STC-S
-validator this depends on, so the work can start. **First step is the version
-bump** — `services/tap-api/pyproject.toml` still pins `>=0.1.7`, so nothing
-sees the validator until that becomes `>=0.1.8` and `uv.lock` is refreshed.
-
-The notification model carries `s_region` (STC-S/pgsphere-style strings,
-e.g. `CIRCLE 3.5867 -30.4 0.25`) on data products and artifacts, but the
-generated schema stores it as plain text — so ObsCore-style footprint
-queries (`INTERSECTS(s_region, CIRCLE('ICRS', ...))`) do not work on the
-ingested metadata.
-
-- **Parse at ingestion**: convert the STC-S string into a companion
-  pgsphere geometry column (`s_region_geom spoly`; circles converted to
-  polygon approximations), register it in TAP_SCHEMA, and index it with
-  GiST so ADQL `INTERSECTS`/`CONTAINS` over footprints are fast.
-- **Take the 0.1.8 validator** *(upstream, done — needs the pin bump)*: the
-  region type mismatch is fixed. `0.1.7` declared `s_region: str | None`
-  with no format validation, so any string (e.g. `"NOT A REGION"`) validated,
-  unlike the numeric fields with their Ge/Le constraints. `0.1.8` adds
-  `models/regions.py` with `validate_s_region()` — the `CIRCLE`, `POLYGON`
-  and `POSITION` STC-S subset in ICRS with coordinate-range checks — wired
-  as a model validator on `BaseNotificationModel`, so malformed regions are
-  now rejected at the producer, before they reach any archive.
-- **Reject malformed regions at the API boundary**: keep validating region
-  syntax at the ingestion endpoint as defence in depth, since a producer can
-  always be running an older model package than the service.
-- **Amendments follow**: `PATCH` updates to `s_region` re-derive the
-  geometry column.
-
 ## Package 12 — ObsCore 1.1 compliance (`ivoa.obscore` view)
 
 The service is not ObsCore 1.1 compliant today, and the gap was measured

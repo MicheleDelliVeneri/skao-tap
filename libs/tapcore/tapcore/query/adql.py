@@ -7,6 +7,7 @@ expressions, so the PostgreSQL backend needs the pg_sphere extension.
 """
 
 import logging
+import re
 from dataclasses import dataclass
 
 import antlr4
@@ -121,6 +122,150 @@ class _TableCollector(ADQLParserListener):
         self.tables.add(ctx.getText())
 
 
+# ---------------------------------------------------------------------------
+# Geometry-typed columns as INTERSECTS/CONTAINS arguments
+# ---------------------------------------------------------------------------
+#
+# ADQL 2.1 allows a column of geometry type where INTERSECTS and CONTAINS
+# take a region — which is how the metadata domains' derived footprint
+# columns (s_region_geom, pgsphere spoly) are queried. The queryparser
+# grammar predates that: it accepts only geometry *constructors* there, and
+# a bare column reference is a syntax error. Rather than fork the grammar,
+# the column is hidden from the parser behind a sentinel POLYGON literal
+# whose coordinates are unique magic numbers, and the pgsphere literal the
+# translator deterministically emits for that sentinel is swapped back for
+# the column name in the SQL. The sentinel's shape is pinned by unit tests,
+# so a queryparser upgrade that changes its output fails loudly here rather
+# than quietly producing wrong SQL.
+
+_GEOMETRY_PREDICATES = ("INTERSECTS", "CONTAINS")
+_SENTINEL_RA = 654321.0  # far outside [0, 360]; no real query writes this
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
+
+
+def _sentinel_adql(index: int) -> str:
+    ra = _SENTINEL_RA + index
+    return f"POLYGON('ICRS', {ra}, 1.0, {ra}, 2.0, {ra}, 3.0)"
+
+
+def _sentinel_sql(index: int) -> str:
+    ra = _SENTINEL_RA + index
+    return f"spoly('{{({ra}d,1.0d),({ra}d,2.0d),({ra}d,3.0d)}}')"
+
+
+def _predicate_spans(query: str):
+    """(args_start, args_end) index pairs of every INTERSECTS/CONTAINS
+    argument list, ignoring string literals."""
+    upper = query.upper()
+    spans = []
+    i = 0
+    while i < len(query):
+        if query[i] == "'":  # skip string literals ('' is an escaped quote)
+            i += 1
+            while i < len(query):
+                if query[i] == "'":
+                    i += 1
+                    if i < len(query) and query[i] == "'":
+                        i += 1
+                        continue
+                    break
+                i += 1
+            continue
+        matched = next(
+            (
+                p
+                for p in _GEOMETRY_PREDICATES
+                if upper.startswith(p, i)
+                and (i == 0 or not (query[i - 1].isalnum() or query[i - 1] == "_"))
+            ),
+            None,
+        )
+        if matched is None:
+            i += 1
+            continue
+        j = i + len(matched)
+        while j < len(query) and query[j].isspace():
+            j += 1
+        if j >= len(query) or query[j] != "(":
+            i += 1
+            continue
+        depth, k = 0, j
+        while k < len(query):
+            if query[k] == "'":
+                k += 1
+                while k < len(query) and query[k] != "'":
+                    k += 1
+            elif query[k] == "(":
+                depth += 1
+            elif query[k] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        if depth == 0 and k < len(query):
+            spans.append((j + 1, k))
+            i = j + 1  # nested predicates inside the args are found too
+        else:
+            i += 1
+    return spans
+
+
+def _hide_geometry_columns(query: str) -> tuple[str, list[tuple[str, str]]]:
+    """Replace bare-column geometry arguments with sentinel literals.
+
+    Returns the rewritten query and [(sql_literal, column_text), ...] for
+    the restore pass. A query with no such arguments comes back unchanged.
+    """
+    replacements: list[tuple[int, int, str]] = []  # (start, end, new_text)
+    found: list[tuple[str, str]] = []
+    for start, end in _predicate_spans(query):
+        arg_start, depth = start, 0
+        pieces = []
+        k = start
+        while k <= end:
+            if k == end or (query[k] == "," and depth == 0):
+                pieces.append((arg_start, k))
+                arg_start = k + 1
+            elif query[k] == "(":
+                depth += 1
+            elif query[k] == ")":
+                depth -= 1
+            elif query[k] == "'":
+                k += 1
+                while k <= end and query[k] != "'":
+                    k += 1
+            k += 1
+        for a, b in pieces:
+            text = query[a:b].strip()
+            if _IDENTIFIER.match(text):
+                index = len(found)
+                found.append((_sentinel_sql(index), text))
+                replacements.append((a, b, _sentinel_adql(index)))
+    if not found:
+        return query, []
+    rewritten = []
+    last = 0
+    for a, b, new_text in sorted(replacements):
+        rewritten.append(query[last:a])
+        rewritten.append(new_text)
+        last = b
+    rewritten.append(query[last:])
+    return "".join(rewritten), found
+
+
+def _restore_geometry_columns(sql: str, found: list[tuple[str, str]]) -> str:
+    for literal, column in found:
+        if sql.count(literal) != 1:
+            # a queryparser upgrade changed how the sentinel renders: this
+            # is a service defect, not a user error, so fail loudly
+            raise RuntimeError(
+                "geometry-column substitution failed: sentinel literal not"
+                f" found exactly once in the translated SQL ({literal!r})"
+            )
+        sql = sql.replace(literal, column)
+    return sql
+
+
 def translate(query: str) -> Translation:
     """Translate ADQL to PostgreSQL and list the tables, parsing once.
 
@@ -133,14 +278,16 @@ def translate(query: str) -> Translation:
     ADQL-side names are also the better source: TAP_SCHEMA publishes what a
     client is allowed to write in a query, which is what this returns.
     """
+    prepared, geometry_columns = _hide_geometry_columns(query)
     try:
-        translator = _Translator(query)
+        translator = _Translator(prepared)
         sql = translator.to_postgresql()
     except QuerySyntaxError as exc:
         detail = "; ".join(str(e) for e in exc.syntax_errors) or str(exc)
         raise QueryParseError(f"ADQL syntax error: {detail}") from exc
     except QueryError as exc:
         raise QueryParseError(f"ADQL error: {exc}") from exc
+    sql = _restore_geometry_columns(sql, geometry_columns)
     return Translation(sql=sql, tables=_tables_from_tree(translator))
 
 

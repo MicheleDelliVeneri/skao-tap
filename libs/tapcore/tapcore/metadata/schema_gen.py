@@ -43,6 +43,7 @@ SQL_TYPES = {
 }
 TAP_DATATYPES = {
     "text": ("char", "*"),
+    "spoly": ("char", "*"),
     "bigint": ("long", None),
     "double precision": ("double", None),
     "boolean": ("boolean", None),
@@ -62,6 +63,12 @@ class ColumnSpec:
     # attribute path from the model instance to the value; longer than one
     # element for columns flattened out of singular nested models
     path: tuple[str, ...] = ()
+    # set on a column the service computes from another column rather than
+    # reads from the model — the value names the source column, and the
+    # conversion is looked up by sql_type at ingestion (metadata.ingest)
+    derived_from: str | None = None
+    # index method for a CREATE INDEX on this column ("gist" for geometry)
+    index: str | None = None
 
     def __post_init__(self):
         if not self.path:
@@ -227,6 +234,27 @@ def _scalar_column(
     )
 
 
+# The footprint column the data models carry as STC-S text. Text is not
+# queryable: each such column gets a derived pgsphere companion so ADQL
+# INTERSECTS/CONTAINS work over the ingested metadata (package 7).
+REGION_SOURCE = "s_region"
+REGION_SUFFIX = "_geom"
+
+
+def _region_companion(source: ColumnSpec) -> ColumnSpec:
+    return ColumnSpec(
+        name=f"{source.name}{REGION_SUFFIX}",
+        sql_type="spoly",
+        nullable=True,
+        description=(
+            "pgsphere footprint derived from "
+            f"{source.name} at ingestion; query it with INTERSECTS/CONTAINS"
+        ),
+        derived_from=source.name,
+        index="gist",
+    )
+
+
 def _flatten(model: type[BaseModel], prefix: str, path: tuple[str, ...]) -> list[ColumnSpec]:
     """Columns for a singular nested model, prefixed with its field name."""
     columns: list[ColumnSpec] = []
@@ -245,6 +273,8 @@ def _flatten(model: type[BaseModel], prefix: str, path: tuple[str, ...]) -> list
         if column is not None:
             column.nullable = True  # the whole embedded object may be absent
             columns.append(column)
+            if fname == REGION_SOURCE and column.sql_type == "text":
+                columns.append(_region_companion(column))
     return columns
 
 
@@ -293,6 +323,8 @@ def build_tables(
                     column.nullable = False
                     column.is_key = True
                 table.columns.append(column)
+                if fname == REGION_SOURCE and column.sql_type == "text":
+                    table.columns.append(_region_companion(column))
         tables.append(table)
         for fname, child in children:
             walk(child, f"{child_prefix}{fname}", table, fname)
@@ -335,6 +367,12 @@ def ddl_statements(tables: list[TableSpec], query_role: str) -> list[str]:
             f"ALTER TABLE {table.qualified} ADD COLUMN IF NOT EXISTS {col.name} {col.sql_type}"
             for col in table.columns
             if not col.is_key
+        )
+        statements.extend(
+            f"CREATE INDEX IF NOT EXISTS {table.name}_{col.name}_{col.index}"
+            f" ON {table.qualified} USING {col.index} ({col.name})"
+            for col in table.columns
+            if col.index
         )
     statements.append(f"GRANT USAGE ON SCHEMA {schema} TO {query_role}")
     statements.append(f"GRANT SELECT ON ALL TABLES IN SCHEMA {schema} TO {query_role}")

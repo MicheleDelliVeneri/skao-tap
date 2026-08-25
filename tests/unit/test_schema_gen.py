@@ -124,3 +124,38 @@ def test_ddl_migrates_new_model_fields_into_existing_tables():
     assert all("NOT NULL" not in s and "CHECK" not in s for s in alters)
     # key columns are structural (part of the PK) and never ALTERed in
     assert not any(f"ADD COLUMN IF NOT EXISTS {products.id_column} " in s for s in alters)
+
+
+def test_s_region_gets_a_derived_geometry_companion():
+    """The footprint column is STC-S text; its pgsphere companion is what
+    ADQL INTERSECTS/CONTAINS actually query (package 7)."""
+    for table in ("data_products", "artifacts"):
+        cols = {c.name: c for c in BY_NAME[table].columns}
+        geom = cols["s_region_geom"]
+        assert geom.sql_type == "spoly"
+        assert geom.derived_from == "s_region"
+        assert geom.nullable
+        assert geom.index == "gist"
+
+
+def test_geometry_columns_get_gist_indexes():
+    ddl = ddl_statements(TABLES, "tap_reader")
+    gist = [s for s in ddl if "USING gist" in s]
+    assert (
+        "CREATE INDEX IF NOT EXISTS data_products_s_region_geom_gist"
+        " ON srcnet.data_products USING gist (s_region_geom)" in gist
+    )
+    assert (
+        "CREATE INDEX IF NOT EXISTS artifacts_s_region_geom_gist"
+        " ON srcnet.artifacts USING gist (s_region_geom)" in gist
+    )
+
+
+def test_geometry_columns_are_registered_in_tap_schema():
+    registered = {
+        (params[0], params[1])
+        for stmt, params in registration_statements(TABLES, "test")
+        if "tap_schema.columns" in stmt
+    }
+    assert ("srcnet.data_products", "s_region_geom") in registered
+    assert ("srcnet.artifacts", "s_region_geom") in registered
