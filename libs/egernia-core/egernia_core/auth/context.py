@@ -31,7 +31,7 @@ class JobViewer:
 
 #: unset means "no ownership enforcement" — the executor and unauthenticated
 #: deployments read and write the whole job store
-_VIEWER: ContextVar[JobViewer | None] = ContextVar("tapcore_job_viewer", default=None)
+_VIEWER: ContextVar[JobViewer | None] = ContextVar("egernia_core_job_viewer", default=None)
 
 
 def set_job_viewer(subject: str | None) -> None:
