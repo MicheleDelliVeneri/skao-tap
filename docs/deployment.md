@@ -13,14 +13,31 @@ from `db/init/*.sql`), `tap-api` and `tap-executor` (both installed with
 
 ## Helm (Kubernetes)
 
-A chart is provided under `deploy/helm/skao-tap`:
+A chart is provided under `deploy/helm/egernia`:
 
 ```bash
-helm upgrade --install skao-tap deploy/helm/skao-tap \
-  --namespace skao-tap --create-namespace \
+helm upgrade --install egernia deploy/helm/egernia \
+  --namespace egernia --create-namespace \
   --set tapApi.baseUrl=https://tap.example.org/tap
-helm test skao-tap -n skao-tap
+helm test egernia -n egernia
 ```
+
+!!! warning "Upgrading an install made before the rename"
+
+    The project was called `skao-tap`, and every object the chart creates is
+    named `<release>-<component>`. A release installed as `skao-tap` therefore
+    cannot be renamed in place — `helm upgrade egernia` would create a second
+    set of objects rather than adopt the first. Uninstall and reinstall:
+
+    ```bash
+    helm uninstall skao-tap -n skao-tap     # keeps PVCs unless they are deleted
+    helm upgrade --install egernia deploy/helm/egernia -n egernia --create-namespace
+    ```
+
+    The database and results PersistentVolumeClaims are named after the
+    release as well (`skao-tap-db`, `skao-tap-results`), so data that has to
+    survive must be moved: back up with the chart's own dump path (below),
+    reinstall, and restore into `egernia-db`.
 
 Key values (see `values.yaml` for the full list):
 
@@ -169,7 +186,7 @@ cooperate instead of colliding. Give each service more than one replica and
 switch the results volume to `ReadWriteMany`:
 
 ```bash
-helm upgrade skao-tap deploy/helm/skao-tap \
+helm upgrade egernia deploy/helm/egernia \
   --set tapApi.replicas=3 \
   --set tapExecutor.replicas=2 \
   --set "results.accessModes={ReadWriteMany}" \
@@ -236,7 +253,7 @@ postgres-operator), load `db/init/*.sql` into it once, and point the chart
 at it:
 
 ```bash
-helm upgrade skao-tap deploy/helm/skao-tap \
+helm upgrade egernia deploy/helm/egernia \
   --set postgresql.enabled=false \
   --set externalDatabase.url=postgresql://tap:…@tap-db-rw:5432/tap
 ```
@@ -257,7 +274,7 @@ archives of the whole database to a dedicated PVC and prunes them after
 `backup.retentionDays`:
 
 ```bash
-helm upgrade skao-tap deploy/helm/skao-tap \
+helm upgrade egernia deploy/helm/egernia \
   --set backup.enabled=true \
   --set backup.schedule="0 2 * * *" \
   --set backup.retentionDays=7 \
@@ -273,7 +290,7 @@ To restore, stop the services so nothing writes during the restore, run
 `pg_restore` from a pod with the backup PVC mounted, then scale back up:
 
 ```bash
-kubectl scale deploy skao-tap-tap-api skao-tap-tap-executor --replicas=0
+kubectl scale deploy egernia-tap-api egernia-tap-executor --replicas=0
 
 kubectl apply -f - <<'YAML'
 apiVersion: v1
@@ -289,14 +306,14 @@ spec:
       args:
         # or name a specific archive instead of the most recent one
         - |
-          archive=$(ls -t /backups/skao-tap-*.dump | head -1)
+          archive=$(ls -t /backups/egernia-*.dump | head -1)
           echo "restoring ${archive}"
           pg_restore --clean --if-exists -d "$TAP_DATABASE_URL" "${archive}"
       env:
         - name: TAP_DATABASE_URL
           valueFrom:
             secretKeyRef:
-              name: skao-tap-db      # <release>-db
+              name: egernia-db      # <release>-db
               key: TAP_DATABASE_URL
       volumeMounts:
         - name: backups
@@ -304,13 +321,13 @@ spec:
   volumes:
     - name: backups
       persistentVolumeClaim:
-        claimName: skao-tap-db-backups   # <release>-db-backups
+        claimName: egernia-db-backups   # <release>-db-backups
 YAML
 
 kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/pg-restore --timeout=10m
 kubectl logs pg-restore && kubectl delete pod pg-restore
-kubectl scale deploy skao-tap-tap-api --replicas=1
-kubectl scale deploy skao-tap-tap-executor --replicas=1
+kubectl scale deploy egernia-tap-api --replicas=1
+kubectl scale deploy egernia-tap-executor --replicas=1
 ```
 
 Exercise the restore path regularly — an unrestored backup is a hope, not a
@@ -361,7 +378,7 @@ misconfiguration.
 
 ## Configuration
 
-All services read environment variables (see `tapcore/config.py`):
+All services read environment variables (see `egernia_core/config.py`):
 
 | Variable | Default | Description |
 |---|---|---|

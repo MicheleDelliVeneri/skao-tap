@@ -4,7 +4,7 @@ import io
 import os
 
 import pytest
-from tapcore.errors import UsageError
+from egernia_core.errors import UsageError
 
 from tests.unit.test_upload import VOTABLE
 
@@ -74,7 +74,7 @@ def test_repeated_upload_parameters_accumulate(client, fake_db):
 
 
 def test_http_uri_upload_fetch(client, fake_db, monkeypatch):
-    from tap_api.queries import uploads
+    from egernia_api.queries import uploads
 
     monkeypatch.setattr(uploads, "_fetch", lambda uri: VOTABLE)
     response = client.post(
@@ -87,8 +87,8 @@ def test_http_uri_upload_fetch(client, fake_db, monkeypatch):
 def test_fetch_size_cap(monkeypatch):
     import urllib.request
 
-    from tap_api.queries import uploads
-    from tapcore.config import settings
+    from egernia_api.queries import uploads
+    from egernia_core.config import settings
 
     class Huge:
         def __enter__(self):
@@ -118,7 +118,7 @@ def test_async_upload_persisted_and_executed(client, fake_db, results_dir):
     assert fake_db.jobs[job_id]["phase"] == "QUEUED"
     assert "TAP_UPLOAD.t1" in fake_db.jobs[job_id]["query_sql"]
 
-    from tap_executor import worker
+    from egernia_executor import worker
 
     worker.execute_job(worker.claim_job())
     assert fake_db.jobs[job_id]["phase"] == "COMPLETED"
@@ -146,7 +146,7 @@ def test_async_malformed_upload_rejected_before_job_creation(client, fake_db):
 
 
 def test_executor_missing_upload_file_marks_job_error(fake_db, results_dir):
-    from tap_executor import worker
+    from egernia_executor import worker
 
     fake_db.add_job(
         phase="QUEUED",

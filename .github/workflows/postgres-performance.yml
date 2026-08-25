@@ -5,8 +5,8 @@ on:
     paths:
       - ".github/workflows/postgres-performance.yml"
       - "db/**"
-      - "libs/tapcore/tapcore/query/**"
-      - "services/tap-api/**"
+      - "libs/egernia-core/egernia_core/query/**"
+      - "services/egernia-api/**"
       - "tests/performance/**"
   schedule:
     - cron: "17 3 * * 1"
@@ -41,7 +41,7 @@ env:
   PERF_CLIENTS: ${{ github.event_name == 'pull_request' && '1 8' || github.event.inputs.clients || '1 8 16 32' }}
   TAP_DATABASE_URL: postgresql://tap:tap@127.0.0.1:5432/tap
   TAP_BASE_URL: http://127.0.0.1:8000/tap
-  TAP_RESULTS_DIR: /tmp/skao-tap-performance-results
+  TAP_RESULTS_DIR: /tmp/egernia-performance-results
   TAP_DEFAULT_MAXREC: "10000"
   TAP_SYNC_TIMEOUT: "60"
 
@@ -97,13 +97,13 @@ jobs:
 
       - name: Start instrumented PostgreSQL
         run: |
-          docker build -t skao-tap-ci/tap-db:performance db
+          docker build -t egernia-ci/tap-db:performance db
           docker run -d --name tap-db-performance \
             -e POSTGRES_USER=tap \
             -e POSTGRES_PASSWORD=tap \
             -e POSTGRES_DB=tap \
             -p 5432:5432 \
-            skao-tap-ci/tap-db:performance \
+            egernia-ci/tap-db:performance \
             -c shared_preload_libraries=pg_stat_statements \
             -c track_io_timing=on
           for _ in $(seq 1 60); do
@@ -159,7 +159,7 @@ jobs:
 
       - name: Run end-to-end TAP concurrency sweep
         run: |
-          .venv/bin/python -m uvicorn tap_api.main:app \
+          .venv/bin/python -m uvicorn egernia_api.main:app \
             --host 127.0.0.1 --port 8000 --log-level warning \
             > performance-results/tap-api.log 2>&1 &
           api_pid=$!
@@ -201,7 +201,7 @@ jobs:
           .venv/bin/py-spy record \
             --output performance-results/tap-python-flamegraph.svg \
             --format flamegraph --rate 100 --subprocesses \
-            -- .venv/bin/python -m uvicorn tap_api.main:app \
+            -- .venv/bin/python -m uvicorn egernia_api.main:app \
                --host 127.0.0.1 --port 8000 --log-level warning \
             > performance-results/tap-api-profile.log 2>&1 &
           profiler_pid=$!

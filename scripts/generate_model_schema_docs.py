@@ -8,8 +8,8 @@ It can also be run directly when the checked-in page needs refreshing.
 from collections.abc import Iterable
 from pathlib import Path
 
-from tapcore.metadata.plugins import MetadataPlugin, discovered_plugins
-from tapcore.metadata.schema_gen import TAP_DATATYPES
+from egernia_core.metadata.plugins import MetadataPlugin, discovered_plugins
+from egernia_core.metadata.schema_gen import TAP_DATATYPES
 
 OUTPUT_PATH = Path(__file__).resolve().parents[1] / "docs" / "model-schemas.md"
 

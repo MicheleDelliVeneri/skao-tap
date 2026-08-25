@@ -4,16 +4,20 @@ Follow-up work is organized in numbered packages, referenced by number in
 issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
+**No packages are open.** Everything through package 17 is delivered and
+merged; what each one settled is recorded in the findings below, and the next
+package opens at 18.
+
 ## Measured findings
 
 A running log of what the benchmark suite
-(`benchmarks/tap-performance`, see [Benchmarking](benchmarking.md)) has
+(`benchmarks/egernia-performance`, see [Benchmarking](benchmarking.md)) has
 established, newest first. Each entry is a measurement rather than an opinion,
 so it can be checked and it can go stale — the run that produced it is named.
 
 Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
-produced them remain in `benchmarks/tap-performance/results/`.
+produced them remain in `benchmarks/egernia-performance/results/`.
 
 ### 2026-08-25 — the size sweep is finished, and size almost is not the story (packages 16 and 17, delivered)
 
@@ -130,7 +134,7 @@ each is now pinned by a test that fails if it comes back:
 
 ### 2026-08-24 — overload now sheds with answers, and the ceiling is placed (package 13, delivered)
 
-The bounded-concurrency shape the package asked for exists (`tapbench
+The bounded-concurrency shape the package asked for exists (`egernia_bench
 shedding`, `make benchmark-shedding`): a closed loop *is* bounded
 concurrency, so holding it far past saturation is the sustained-overload
 point the open-loop generator could never keep still. Run
@@ -256,7 +260,7 @@ repetitions, zero errors and zero invalid measurements in either run. Q11,
 | arrow | 8.3 → **17.4** (2.09×) | 574 → **313 ms** | 2.16 MiB |
 
 Q10 (1,000 rows) moved the same direction, 1.28–1.51× across the six.
-In-process (`tapbench serialize`, no cluster in the way) the writers
+In-process (`egernia_bench serialize`, no cluster in the way) the writers
 themselves went arrow 8.01 → 0.93 µs/row, parquet 8.77 → 1.78, json
 15.44 → 5.12, votable 17.94 → 7.04, csv 17.05 → 9.19. The text output is
 byte-for-byte what it was — a differential test over every kind, its
@@ -323,7 +327,7 @@ their arrivals at the generator's in-flight cap, so both are qualified as
 measurements of their offered rate (a sustained overload is not measurable
 open-loop — a property of the scenario, recorded before). The per-scenario
 guards were initially dropped because the orchestrator ran a pre-fix
-analysis build; `tapbench reclassify` re-derived them from the stored
+analysis build; `egernia_bench reclassify` re-derived them from the stored
 artefacts, which is what it exists for. And the bottleneck verdicts read
 `UNKNOWN` on the maxed-out scenarios because the executor-CPU rule compares
 the fleet's usage against its *peak* ready count over the whole window — an

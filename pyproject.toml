@@ -1,26 +1,26 @@
 # uv workspace root (not an installable package): shared tooling config,
 # dev dependency groups, and the workspace member list.
 [project]
-name = "skao-tap"
+name = "egernia"
 version = "0.1.0"
-description = "SKAO TAP 1.1 server: microservices on PostgreSQL"
+description = "egernia: an IVOA TAP 1.1 server — microservices on PostgreSQL"
 requires-python = ">=3.14"
 dependencies = [
-    "tapcore",
-    "tap-api",
-    "tap-executor",
+    "egernia-core",
+    "egernia-api",
+    "egernia-executor",
 ]
 
 [tool.uv]
 package = false
 
 [tool.uv.workspace]
-members = ["libs/tapcore", "services/tap-api", "services/tap-executor"]
+members = ["libs/egernia-core", "services/egernia-api", "services/egernia-executor"]
 
 [tool.uv.sources]
-tapcore = { workspace = true }
-tap-api = { workspace = true }
-tap-executor = { workspace = true }
+egernia-core = { workspace = true }
+egernia-api = { workspace = true }
+egernia-executor = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -36,7 +36,7 @@ docs = [
     "mkdocs>=1.6",
     "mkdocs-material>=9.5",
 ]
-# benchmarks/tap-performance. Kept out of `dev` because it is heavier than the
+# benchmarks/egernia-performance. Kept out of `dev` because it is heavier than the
 # test suite needs and nothing in CI imports it.
 benchmark = [
     "matplotlib>=3.9",
@@ -77,7 +77,7 @@ ignore = [
 # from the uv venv, so imports are not reported missing per file
 venvPath = "."
 venv = ".venv"
-extraPaths = ["libs/tapcore", "services/tap-api", "services/tap-executor"]
+extraPaths = ["libs/egernia-core", "services/egernia-api", "services/egernia-executor"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -88,9 +88,9 @@ addopts = "-ra"
 timeout = 120
 
 [tool.coverage.run]
-source_pkgs = ["tapcore", "tap_api", "tap_executor"]
+source_pkgs = ["egernia_core", "egernia_api", "egernia_executor"]
 parallel = true
 relative_files = true
 
 [tool.coverage.paths]
-sources = ["libs/tapcore/tapcore", "services/tap-api/tap_api", "services/tap-executor/tap_executor"]
+sources = ["libs/egernia-core/egernia_core", "services/egernia-api/egernia_api", "services/egernia-executor/egernia_executor"]

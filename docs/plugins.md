@@ -72,7 +72,7 @@ package:
 
 ```python
 # my_package/plugin.py
-from tapcore.metadata.plugins import MetadataPlugin
+from egernia_core.metadata.plugins import MetadataPlugin
 
 from my_package.models import MyRootModel
 
@@ -96,16 +96,22 @@ PLUGIN = MetadataPlugin(
 
 ```toml
 # my_package/pyproject.toml
-[project.entry-points."skao_tap.models"]
+[project.entry-points."egernia.models"]
 mydomain = "my_package.plugin:PLUGIN"
 ```
+
+!!! note "The group was renamed"
+
+    It used to be `skao_tap.models`. A plugin package that still declares the
+    old group is not an error and not a warning — it is simply never
+    discovered, so update the group and reinstall.
 
 Install it alongside the services (in the image, or as an extra
 dependency) and it is discovered automatically:
 
 ```console
 $ pip install my-package
-$ TAP_MODEL_PLUGINS=all uvicorn tap_api.main:app
+$ TAP_MODEL_PLUGINS=all uvicorn egernia_api.main:app
 INFO  active metadata plugins: odp, software, mydomain
 ```
 
@@ -185,7 +191,7 @@ Unknown identifiers return HTTP 404.
 
 ## Querying across domains
 
-The runnable [`demo/srcnet_metadata_tap.ipynb`](https://github.com/MicheleDelliVeneri/skao-tap/blob/main/demo/srcnet_metadata_tap.ipynb)
+The runnable [`demo/srcnet_metadata_tap.ipynb`](https://github.com/MicheleDelliVeneri/egernia/blob/main/demo/srcnet_metadata_tap.ipynb)
 populates 100 positioned rows in `srcnet.data_products` plus
 `srcnet.software` against the Docker Compose deployment, then demonstrates
 PyVO discovery, spatial and asynchronous queries, amendment, and deletion.
@@ -210,8 +216,8 @@ which is exactly what a one-system-per-model topology gives you.
 
 | Path | Role |
 | --- | --- |
-| `libs/tapcore/tapcore/metadata/plugins.py` | The `MetadataPlugin` contract, entry-point discovery, deployment selection |
-| `libs/tapcore/tapcore/metadata/schema_gen.py` | Models → tables, constraints, TAP_SCHEMA registration, migrations |
-| `libs/tapcore/tapcore/metadata/ingest.py` | Generic ingest / fetch / list / amend |
-| `services/tap-api/tap_api/plugins/` | The built-in plugin definitions (`odp.py`, `software.py`) |
-| `services/tap-api/tap_api/endpoints/json_api.py` | Router factory mounting one endpoint set per active plugin |
+| `libs/egernia-core/egernia_core/metadata/plugins.py` | The `MetadataPlugin` contract, entry-point discovery, deployment selection |
+| `libs/egernia-core/egernia_core/metadata/schema_gen.py` | Models → tables, constraints, TAP_SCHEMA registration, migrations |
+| `libs/egernia-core/egernia_core/metadata/ingest.py` | Generic ingest / fetch / list / amend |
+| `services/egernia-api/egernia_api/plugins/` | The built-in plugin definitions (`odp.py`, `software.py`) |
+| `services/egernia-api/egernia_api/endpoints/json_api.py` | Router factory mounting one endpoint set per active plugin |

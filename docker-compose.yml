@@ -24,7 +24,7 @@ services:
   tap-api:
     build:
       context: .
-      dockerfile: services/tap-api/Dockerfile
+      dockerfile: services/egernia-api/Dockerfile
     environment:
       TAP_DATABASE_URL: postgresql://tap:tap@db:5432/tap
       TAP_BASE_URL: http://localhost:8080/tap
@@ -40,7 +40,7 @@ services:
   tap-executor:
     build:
       context: .
-      dockerfile: services/tap-executor/Dockerfile
+      dockerfile: services/egernia-executor/Dockerfile
     environment:
       TAP_DATABASE_URL: postgresql://tap:tap@db:5432/tap
       TAP_BASE_URL: http://localhost:8080/tap

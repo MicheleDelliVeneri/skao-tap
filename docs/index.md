@@ -1,4 +1,4 @@
-# skao-tap
+# egernia
 
 A draft **IVOA TAP 1.1** (Table Access Protocol) server in Python, built as
 microservices on a PostgreSQL backend.

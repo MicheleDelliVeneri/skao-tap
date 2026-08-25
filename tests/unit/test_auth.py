@@ -1,4 +1,4 @@
-"""Unit tests for token verification (tapcore.auth) and the shipped
+"""Unit tests for token verification (egernia_core.auth) and the shipped
 authorisation plugins, exercised with real RSA-signed JWTs against a stub
 IAM: the point of this layer is that a forged or stale token is rejected, so
 the signature path must be real rather than mocked out."""
@@ -8,9 +8,9 @@ import time
 import httpx
 import jwt
 import pytest
-from tapcore.auth import Principal
-from tapcore.auth.tokens import IAMTokenVerifier
-from tapcore.errors import AuthenticationError, AuthorizationError, ServiceError
+from egernia_core.auth import Principal
+from egernia_core.auth.tokens import IAMTokenVerifier
+from egernia_core.errors import AuthenticationError, AuthorizationError, ServiceError
 
 
 @pytest.fixture
@@ -134,7 +134,7 @@ def _principal(groups=(), scopes=(), subject="user-1"):
 
 
 def test_iam_groups_allows_a_configured_group():
-    from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
+    from egernia_api.auth_plugins.iam_groups import IAMGroupsPlugin
 
     plugin = IAMGroupsPlugin(roles={"metadata.delete": {"groups": ["/ska/oper"]}})
     assert plugin.authorize(_principal(groups=["/ska/oper"]), "metadata.delete", {})
@@ -142,7 +142,7 @@ def test_iam_groups_allows_a_configured_group():
 
 
 def test_iam_groups_allows_a_configured_scope():
-    from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
+    from egernia_api.auth_plugins.iam_groups import IAMGroupsPlugin
 
     plugin = IAMGroupsPlugin(roles={"metadata.ingest": {"scopes": ["sm:write"]}})
     assert plugin.authorize(_principal(scopes=["sm:write"]), "metadata.ingest", {})
@@ -151,7 +151,7 @@ def test_iam_groups_allows_a_configured_scope():
 
 def test_iam_groups_denies_unconfigured_operations():
     """An operation nobody configured must not be open by omission."""
-    from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
+    from egernia_api.auth_plugins.iam_groups import IAMGroupsPlugin
 
     plugin = IAMGroupsPlugin(roles={"metadata.ingest": {"groups": ["/ska/oper"]}})
     assert not plugin.authorize(_principal(groups=["/ska/oper"]), "metadata.delete", {})
@@ -165,7 +165,7 @@ def test_iam_groups_empty_rule_grants_nothing():
     token", so enabling auth without writing a policy left ingest, amend and
     delete open to any account at the IAM.
     """
-    from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
+    from egernia_api.auth_plugins.iam_groups import IAMGroupsPlugin
 
     plugin = IAMGroupsPlugin(roles={"metadata.amend": {}, "metadata.delete": {"groups": []}})
     assert not plugin.authorize(_principal(groups=["/ska/oper"]), "metadata.amend", {})
@@ -173,7 +173,7 @@ def test_iam_groups_empty_rule_grants_nothing():
 
 
 def test_iam_groups_any_verified_token_must_be_explicit():
-    from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
+    from egernia_api.auth_plugins.iam_groups import IAMGroupsPlugin
 
     plugin = IAMGroupsPlugin(roles={"metadata.amend": {"any_verified_token": True}})
     assert plugin.authorize(_principal(), "metadata.amend", {})
@@ -182,7 +182,7 @@ def test_iam_groups_any_verified_token_must_be_explicit():
 
 def test_iam_groups_describe_names_what_each_operation_grants():
     """The startup line must not read as reassuring for a rule granting nothing."""
-    from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
+    from egernia_api.auth_plugins.iam_groups import IAMGroupsPlugin
 
     described = IAMGroupsPlugin(
         roles={
@@ -197,14 +197,14 @@ def test_iam_groups_describe_names_what_each_operation_grants():
 
 
 def test_iam_groups_never_authorizes_anonymous():
-    from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
+    from egernia_api.auth_plugins.iam_groups import IAMGroupsPlugin
 
     plugin = IAMGroupsPlugin(roles={"metadata.amend": {}})
     assert not plugin.authorize(Principal(), "metadata.amend", {})
 
 
 def test_iam_groups_rejects_unknown_operations_and_bad_json():
-    from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
+    from egernia_api.auth_plugins.iam_groups import IAMGroupsPlugin
 
     with pytest.raises(ServiceError, match="unknown operation"):
         IAMGroupsPlugin(roles={"metadata.nope": {}})
@@ -231,7 +231,7 @@ def permissions_calls(monkeypatch):
 
 
 def test_permissions_api_sends_the_documented_contract(permissions_calls):
-    from tap_api.auth_plugins.permissions_api import PermissionsApiPlugin
+    from egernia_api.auth_plugins.permissions_api import PermissionsApiPlugin
 
     calls, _ = permissions_calls
     plugin = PermissionsApiPlugin(url="https://papi.example/api/v1", service="science-metadata")
@@ -250,7 +250,7 @@ def test_permissions_api_sends_the_documented_contract(permissions_calls):
 
 
 def test_permissions_api_denial_is_a_denial(permissions_calls):
-    from tap_api.auth_plugins.permissions_api import PermissionsApiPlugin
+    from egernia_api.auth_plugins.permissions_api import PermissionsApiPlugin
 
     _, reply = permissions_calls
     reply["json"] = {"is_authorised": False}
@@ -259,7 +259,7 @@ def test_permissions_api_denial_is_a_denial(permissions_calls):
 
 
 def test_permissions_api_outage_is_not_a_silent_allow(permissions_calls):
-    from tap_api.auth_plugins.permissions_api import PermissionsApiPlugin
+    from egernia_api.auth_plugins.permissions_api import PermissionsApiPlugin
 
     _, reply = permissions_calls
     reply["exc"] = httpx.ConnectError("boom")
@@ -269,14 +269,14 @@ def test_permissions_api_outage_is_not_a_silent_allow(permissions_calls):
 
 
 def test_permissions_api_requires_a_url(monkeypatch):
-    from tap_api.auth_plugins.permissions_api import PermissionsApiPlugin
+    from egernia_api.auth_plugins.permissions_api import PermissionsApiPlugin
 
     with pytest.raises(ServiceError, match="TAP_PERMISSIONS_API_URL"):
         PermissionsApiPlugin(url="")
 
 
 def test_permissions_api_never_calls_out_for_anonymous(permissions_calls):
-    from tap_api.auth_plugins.permissions_api import PermissionsApiPlugin
+    from egernia_api.auth_plugins.permissions_api import PermissionsApiPlugin
 
     calls, _ = permissions_calls
     plugin = PermissionsApiPlugin(url="https://papi.example/api/v1")
@@ -288,7 +288,7 @@ def test_permissions_api_never_calls_out_for_anonymous(permissions_calls):
 
 
 def test_unknown_plugin_selection_is_reported(monkeypatch, auth_settings):
-    from tapcore.auth import active_auth_plugin
+    from egernia_core.auth import active_auth_plugin
 
     auth_settings(auth_enabled=True, auth_plugin="nope")
     with pytest.raises(LookupError, match="unknown auth plugin"):
@@ -296,14 +296,14 @@ def test_unknown_plugin_selection_is_reported(monkeypatch, auth_settings):
 
 
 def test_no_plugin_when_disabled(auth_settings):
-    from tapcore.auth import active_auth_plugin
+    from egernia_core.auth import active_auth_plugin
 
     auth_settings(auth_enabled=False)
     assert active_auth_plugin() is None
 
 
 def test_both_shipped_plugins_are_discoverable():
-    from tapcore.auth import discovered_auth_plugins
+    from egernia_core.auth import discovered_auth_plugins
 
     assert {"iam-groups", "permissions-api"} <= set(discovered_auth_plugins())
 
@@ -315,7 +315,7 @@ def test_authorization_error_is_403_and_authentication_is_401():
 
 def test_missing_issuer_is_a_service_error_not_a_bare_valueerror():
     """Configuration faults must render through the service's error handler."""
-    from tapcore.errors import TAPError
+    from egernia_core.errors import TAPError
 
     with pytest.raises(ServiceError, match="TAP_IAM_ISSUER"):
         IAMTokenVerifier(issuer="", audience="x")
@@ -324,7 +324,7 @@ def test_missing_issuer_is_a_service_error_not_a_bare_valueerror():
 
 def test_roles_reject_a_string_where_a_list_belongs():
     """A bare string would iterate into characters and grant nothing, quietly."""
-    from tap_api.auth_plugins.iam_groups import IAMGroupsPlugin
+    from egernia_api.auth_plugins.iam_groups import IAMGroupsPlugin
 
     with pytest.raises(ServiceError, match="must be a list"):
         IAMGroupsPlugin(roles={"metadata.ingest": {"groups": "/ska/oper"}})
@@ -334,7 +334,7 @@ def test_roles_reject_a_string_where_a_list_belongs():
 
 def test_a_failed_plugin_resolve_is_not_cached_as_auth_off(auth_settings):
     """A misconfiguration must keep raising, never degrade into an open service."""
-    from tap_api import auth as api_auth
+    from egernia_api import auth as api_auth
 
     auth_settings(auth_enabled=True, auth_plugin="nope")
     for _ in range(2):
@@ -351,15 +351,15 @@ def test_deletion_audit_names_the_subject(caplog):
     """A cascading deletion must be traceable to a person, not just a time."""
     import logging
 
-    from tap_api.plugins.software import PLUGIN
-    from tapcore.metadata import ingest
+    from egernia_api.plugins.software import PLUGIN
+    from egernia_core.metadata import ingest
 
-    with caplog.at_level(logging.INFO, logger="tapcore"):
+    with caplog.at_level(logging.INFO, logger="egernia_core"):
         ingest.delete_document(_DeletingConn(), PLUGIN, "ska:demo:1.0.0", actor="alice")
     assert "by 'alice'" in caplog.text
 
     caplog.clear()
-    with caplog.at_level(logging.INFO, logger="tapcore"):
+    with caplog.at_level(logging.INFO, logger="egernia_core"):
         ingest.delete_document(_DeletingConn(), PLUGIN, "ska:demo:1.0.0")
     assert "by an unauthenticated caller" in caplog.text
 
@@ -367,11 +367,11 @@ def test_deletion_audit_names_the_subject(caplog):
 def test_deletion_audit_subject_cannot_forge_records(caplog):
     import logging
 
-    from tap_api.plugins.software import PLUGIN
-    from tapcore.metadata import ingest
+    from egernia_api.plugins.software import PLUGIN
+    from egernia_core.metadata import ingest
 
-    forged = "x\nINFO:tapcore:deleted everything"
-    with caplog.at_level(logging.INFO, logger="tapcore"):
+    forged = "x\nINFO:egernia_core:deleted everything"
+    with caplog.at_level(logging.INFO, logger="egernia_core"):
         ingest.delete_document(_DeletingConn(), PLUGIN, "ska:demo:1", actor=forged)
     assert len(caplog.records) == 1
     assert "\n" not in caplog.records[0].getMessage()

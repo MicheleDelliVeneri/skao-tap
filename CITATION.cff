@@ -1,13 +1,13 @@
 cff-version: 1.2.0
-title: "skao-tap: an IVOA TAP 1.1 server for the SKA Regional Centre Network"
+title: "egernia: an IVOA TAP 1.1 server for the SKA Regional Centre Network"
 message: "If you use this software in published work, please cite it."
 type: software
 authors:
   - family-names: "Delli Veneri"
     given-names: "Michele"
     affiliation: "SKA Observatory"
-repository-code: "https://github.com/MicheleDelliVeneri/skao-tap"
-url: "https://micheledelliveneri.github.io/skao-tap/"
+repository-code: "https://github.com/MicheleDelliVeneri/egernia"
+url: "https://micheledelliveneri.github.io/egernia/"
 license: MIT
 abstract: >-
   An IVOA Table Access Protocol (TAP) 1.1 server implemented in Python as two

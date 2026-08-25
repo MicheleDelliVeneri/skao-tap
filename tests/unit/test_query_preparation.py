@@ -10,9 +10,9 @@ re-read on every request.
 import contextlib
 
 import pytest
-from tap_api.queries import query as query_module
-from tapcore.errors import UsageError
-from tapcore.query.adql import touched_tables, translate
+from egernia_api.queries import query as query_module
+from egernia_core.errors import UsageError
+from egernia_core.query.adql import touched_tables, translate
 
 QUERIES = {
     "point": "SELECT source_id FROM ska.continuum_sources WHERE source_id = 5",
@@ -55,7 +55,7 @@ def test_a_join_reports_every_table():
 
 
 def test_a_syntax_error_still_raises_before_any_table_lookup():
-    from tapcore.errors import QueryParseError
+    from egernia_core.errors import QueryParseError
 
     with pytest.raises(QueryParseError, match="syntax error"):
         translate("SELEC nonsense FROM nowhere")
@@ -66,7 +66,7 @@ def test_the_table_walk_failing_does_not_fail_the_query(monkeypatch):
     permission layer is the backstop — not reject a query the translator
     accepted."""
 
-    from tapcore.query import adql
+    from egernia_core.query import adql
 
     def boom():
         raise RuntimeError("grammar moved")
@@ -185,7 +185,7 @@ def test_queueing_a_job_cannot_translate_on_the_event_loop():
     """
     import inspect
 
-    from tap_api.endpoints import json_api, uws_api
+    from egernia_api.endpoints import json_api, uws_api
 
     for module in (json_api, uws_api):
         parameter = inspect.signature(module._queue).parameters["prepared"]

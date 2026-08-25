@@ -75,10 +75,10 @@ jobs:
           sudo systemctl stop postgresql || true
           sudo apt-get update
           sudo apt-get install -y postgresql-client
-          docker build -t skao-tap-ci/tap-db:ci db
+          docker build -t egernia-ci/tap-db:ci db
           docker run -d --name tap-db-ci \
             -e POSTGRES_USER=tap -e POSTGRES_PASSWORD=tap -e POSTGRES_DB=tap \
-            -p 5432:5432 skao-tap-ci/tap-db:ci
+            -p 5432:5432 egernia-ci/tap-db:ci
           for _ in $(seq 1 60); do
             docker exec tap-db-ci pg_isready -U tap -d tap && break
             sleep 2
@@ -143,7 +143,7 @@ jobs:
       # and timings that are absent rather than guessed. No cluster involved —
       # a benchmark whose harness is wrong produces confident numbers about
       # nothing, and that failure is silent in the results.
-      - run: uv run pytest benchmarks/tap-performance/tests -q
+      - run: uv run pytest benchmarks/egernia-performance/tests -q
 
   helm:
     name: Helm chart
@@ -154,20 +154,20 @@ jobs:
           persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - name: Chart DB init SQL matches db/init
-        run: diff -ru db/init deploy/helm/skao-tap/files/db-init
-      - run: helm lint deploy/helm/skao-tap
+        run: diff -ru db/init deploy/helm/egernia/files/db-init
+      - run: helm lint deploy/helm/egernia
       - name: Template with defaults
-        run: helm template skao-tap deploy/helm/skao-tap > /dev/null
+        run: helm template egernia deploy/helm/egernia > /dev/null
       - name: Template with external database and ingress
         run: |
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set postgresql.enabled=false \
             --set externalDatabase.url=postgresql://tap:tap@db.example:5432/tap \
             --set ingress.enabled=true \
             --set ingress.host=tap.example.org > /dev/null
       - name: Template with scaling, VPA, backup and PG tuning
         run: |
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set tapApi.replicas=3 \
             --set tapExecutor.replicas=2 \
             --set results.accessModes={ReadWriteMany} \
@@ -178,61 +178,61 @@ jobs:
             | grep -qE "kind: (PodDisruptionBudget|VerticalPodAutoscaler|CronJob)"
       - name: Template with several API workers
         run: |
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set tapApi.workers=4 --set tapApi.port=9090 \
             | grep -q 'TAP_API_WORKERS: "4"'
           # the port the deployment declares has to be the port the app uses
-          helm template skao-tap deploy/helm/skao-tap --set tapApi.port=9090 \
+          helm template egernia deploy/helm/egernia --set tapApi.port=9090 \
             | grep -q 'TAP_API_PORT: "9090"'
           # and rendering those values is only useful if the pod reads them:
           # without this the ConfigMap could stop being consumed and the greps
           # above would still pass
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --show-only templates/api-deployment.yaml \
             | grep -A2 'envFrom:' | grep -q 'configMapRef'
       - name: Template with the metrics stack
         run: |
           # annotations on by default, so an existing Prometheus finds the pods
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             | grep -q 'prometheus.io/scrape: "true"'
           # and the bundled Prometheus stays out unless asked for
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             | grep -q 'kind: Role' && { echo "::error::bundled Prometheus rendered by default"; exit 1; }
-          helm template skao-tap deploy/helm/skao-tap --set prometheus.enabled=true \
-            | grep -q 'name: skao-tap-prometheus'
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia --set prometheus.enabled=true \
+            | grep -q 'name: egernia-prometheus'
+          helm template egernia deploy/helm/egernia \
             --set tracing.otlpEndpoint=http://collector:4317 \
             | grep -q 'OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4317"'
       - name: Template with horizontal autoscaling
         run: |
           # nothing rendered, and the deployments keep their own replica count
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             | grep -qE "kind: (HorizontalPodAutoscaler|ScaledObject)" \
             && { echo "::error::an autoscaler rendered by default"; exit 1; }
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapApi.enabled=true \
             | grep -q "kind: HorizontalPodAutoscaler"
           # while an autoscaler owns the count, the chart must not send one:
           # a helm upgrade would reset what the autoscaler had chosen
-          test "$(helm template skao-tap deploy/helm/skao-tap \
+          test "$(helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapApi.enabled=true \
             --show-only templates/api-deployment.yaml | grep -c 'replicas:')" = 0
           # the PDB follows minReplicas, which is the floor a drain sees
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapApi.enabled=true \
             --show-only templates/pdb.yaml | grep -q "kind: PodDisruptionBudget"
           # KEDA by default, with max() rather than sum(): every replica
           # reports the same shared queue, so sum() would scale on the replica
           # count and then feed on its own output
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set prometheus.enabled=true \
             | grep -q 'query: "max(tap_jobs{phase=\\"QUEUED\\",namespace=\\"default\\"})"'
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set prometheus.enabled=true | grep -q "kind: ScaledObject"
           # and a plain HPA for a cluster that already serves external metrics
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --show-only templates/hpa.yaml \
@@ -240,12 +240,12 @@ jobs:
           # that path is scoped by a label selector, not by `query`, so a
           # provider publishing no labels has to be able to remove it: a
           # selector matching no series is a dead autoscaler, not a strict one
-          test "$(helm template skao-tap deploy/helm/skao-tap \
+          test "$(helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --set-json 'horizontalAutoscaling.tapExecutor.externalMetricSelector={}' \
             --show-only templates/hpa.yaml | grep -c 'matchLabels')" = 0
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --set-json 'horizontalAutoscaling.tapExecutor.externalMetricSelector={"job":"tap-executor"}' \
@@ -253,13 +253,13 @@ jobs:
           # the annotation says what the provider must publish, so it has to
           # follow the selector: claiming a namespace match that the HPA is
           # not asking for sends whoever debugs this to the wrong place
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --set-json 'horizontalAutoscaling.tapExecutor.externalMetricSelector={}' \
             --show-only templates/hpa.yaml \
             | grep -q 'expected-query: "max(tap_jobs_queued)"'
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --set horizontalAutoscaling.tapExecutor.externalMetricName=tap_backlog \
@@ -268,19 +268,19 @@ jobs:
           # scale-to-zero is refused for the default query and allowed for one
           # that survives having no executors — and the activation threshold
           # is rendered only where it can do anything
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.minReplicas=0 \
             --set prometheus.enabled=true \
             --set 'horizontalAutoscaling.tapExecutor.query=max(from_the_database)' \
             --show-only templates/hpa.yaml | grep -q "activationThreshold"
-          test "$(helm template skao-tap deploy/helm/skao-tap \
+          test "$(helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set prometheus.enabled=true \
             --show-only templates/hpa.yaml | grep -c activationThreshold)" = 0
           # a live VPA sizing memory beside a CPU HPA is supported: one
           # controller per resource, which is the pattern that is not
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapApi.enabled=true \
             --set verticalAutoscaling.enabled=true \
             --set verticalAutoscaling.updateMode=Auto \
@@ -291,7 +291,7 @@ jobs:
       - name: Unworkable autoscaling configurations are refused
         run: |
           refuses() {
-            if helm template skao-tap deploy/helm/skao-tap "$@" >/dev/null 2>&1; then
+            if helm template egernia deploy/helm/egernia "$@" >/dev/null 2>&1; then
               echo "::error::chart rendered an unworkable autoscaling config: $*"
               exit 1
             fi
@@ -328,21 +328,21 @@ jobs:
           refuses "${api[@]}" --set tapApi.workers=4 \
                   --set postgresql.tuning.max_connections=100
           # and the same numbers under the limit still render
-          helm template skao-tap deploy/helm/skao-tap "${api[@]}" \
+          helm template egernia deploy/helm/egernia "${api[@]}" \
             --set tapApi.workers=4 --set postgresql.tuning.max_connections=250 \
             >/dev/null
           # recommendation-only VPA alongside a CPU HPA is supported and useful
-          helm template skao-tap deploy/helm/skao-tap "${api[@]}" \
+          helm template egernia deploy/helm/egernia "${api[@]}" \
             --set verticalAutoscaling.enabled=true >/dev/null
       - name: Template with authentication enabled
         run: |
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set auth.enabled=true \
             --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
             --set auth.iam.audience=science-metadata \
             --set 'auth.roles.metadata\.delete.groups={/ska/oper}' \
             | grep -q 'TAP_AUTH_ROLES'
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set auth.enabled=true \
             --set auth.plugin=permissions-api \
             --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
@@ -351,7 +351,7 @@ jobs:
             | grep -q 'TAP_PERMISSIONS_API_URL'
       - name: Template serving anonymous VO clients
         run: |
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set auth.enabled=true \
             --set auth.anonymousQueries=true \
             --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
@@ -360,7 +360,7 @@ jobs:
             | grep -q 'TAP_AUTH_ANONYMOUS_QUERIES: "true"'
       - name: Template with the token requirement relaxed
         run: |
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set auth.enabled=true \
             --set auth.requireToken=false \
             --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
@@ -369,7 +369,7 @@ jobs:
             | grep -q 'TAP_AUTH_REQUIRE_TOKEN: "false"'
       - name: Template with querying gated as well
         run: |
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set auth.enabled=true \
             --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
             --set auth.iam.audience=science-metadata \
@@ -379,7 +379,7 @@ jobs:
             --set 'auth.roles.jobs\.delete.groups={/ska/oper}' \
             --set 'auth.roles.query\.sync.anyVerifiedToken=true' \
             | grep -q 'TAP_AUTH_GATED_OPERATIONS: "jobs.create,jobs.mutate,jobs.delete,query.sync"'
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set auth.enabled=true \
             --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
             --set auth.iam.audience=science-metadata \
@@ -388,7 +388,7 @@ jobs:
             | grep -q 'TAP_AUTH_GATED_OPERATIONS: "none"'
       - name: Template with the VOResource record enabled
         run: |
-          helm template skao-tap deploy/helm/skao-tap \
+          helm template egernia deploy/helm/egernia \
             --set voRegistry.enabled=true \
             --set voRegistry.authorityId=skao.int \
             --set voRegistry.resourceKey=srcnet/tap \
@@ -404,7 +404,7 @@ jobs:
       - name: Incomplete VOResource configurations are refused
         run: |
           refuses() {
-            if helm template skao-tap deploy/helm/skao-tap "$@" >/dev/null 2>&1; then
+            if helm template egernia deploy/helm/egernia "$@" >/dev/null 2>&1; then
               echo "::error::chart rendered an incomplete VOResource config: $*"
               exit 1
             fi
@@ -428,7 +428,7 @@ jobs:
                   --set voRegistry.title="   "
           refuses "${complete[@]}" --set-json 'voRegistry.subjects=[" "]'
           # padding is trimmed on the way out, so it cannot reach the identifier
-          helm template skao-tap deploy/helm/skao-tap "${complete[@]}" \
+          helm template egernia deploy/helm/egernia "${complete[@]}" \
             --set 'voRegistry.subjects={radio}' \
             --set voRegistry.authorityId="skao.int " \
             | grep -q 'TAP_REGISTRY_IDENTIFIER: "ivo://skao.int/srcnet/tap"'
@@ -437,7 +437,7 @@ jobs:
       - name: Unsafe authentication configurations are refused
         run: |
           refuses() {
-            if helm template skao-tap deploy/helm/skao-tap "$@" >/dev/null 2>&1; then
+            if helm template egernia deploy/helm/egernia "$@" >/dev/null 2>&1; then
               echo "::error::chart rendered an unsafe auth config: $*"
               exit 1
             fi
@@ -487,44 +487,44 @@ jobs:
           persist-credentials: false
       - name: Build images
         run: |
-          docker build -t skao-tap-e2e/tap-api:e2e -f services/tap-api/Dockerfile .
-          docker build -t skao-tap-e2e/tap-executor:e2e -f services/tap-executor/Dockerfile .
-          docker build -t skao-tap-e2e/tap-db:e2e db
+          docker build -t egernia-e2e/tap-api:e2e -f services/egernia-api/Dockerfile .
+          docker build -t egernia-e2e/tap-executor:e2e -f services/egernia-executor/Dockerfile .
+          docker build -t egernia-e2e/tap-db:e2e db
       - name: Create kind cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
-          cluster_name: skao-tap-e2e
+          cluster_name: egernia-e2e
       - name: Load images into kind
         run: |
-          kind load docker-image skao-tap-e2e/tap-api:e2e --name skao-tap-e2e
-          kind load docker-image skao-tap-e2e/tap-executor:e2e --name skao-tap-e2e
-          kind load docker-image skao-tap-e2e/tap-db:e2e --name skao-tap-e2e
+          kind load docker-image egernia-e2e/tap-api:e2e --name egernia-e2e
+          kind load docker-image egernia-e2e/tap-executor:e2e --name egernia-e2e
+          kind load docker-image egernia-e2e/tap-db:e2e --name egernia-e2e
       - name: Install chart (in-chart PostgreSQL)
         run: |
-          helm install skao-tap deploy/helm/skao-tap \
-            --set image.registry=skao-tap-e2e \
+          helm install egernia deploy/helm/egernia \
+            --set image.registry=egernia-e2e \
             --set image.tag=e2e \
             --set image.pullPolicy=Never \
             --set horizontalAutoscaling.tapApi.enabled=true \
             --set horizontalAutoscaling.tapApi.minReplicas=1 \
             --wait --timeout 5m
       - name: Run chart tests (availability, ADQL query, UPLOAD)
-        run: helm test skao-tap --logs --timeout 5m
+        run: helm test egernia --logs --timeout 5m
       # `helm template` only proves the YAML renders. This is the API server
       # accepting it, and the HPA finding the Deployment it names — a wrong
       # scaleTargetRef renders perfectly and scales nothing.
       - name: The autoscaler attached to the deployment
         run: |
-          kubectl get hpa skao-tap-tap-api -o jsonpath='{.spec.scaleTargetRef.name}' \
-            | grep -qx skao-tap-tap-api
+          kubectl get hpa egernia-tap-api -o jsonpath='{.spec.scaleTargetRef.name}' \
+            | grep -qx egernia-tap-api
           kubectl wait --for=jsonpath='{.status.currentReplicas}'=1 \
-            hpa/skao-tap-tap-api --timeout=2m
+            hpa/egernia-tap-api --timeout=2m
       - name: Diagnostics
         if: failure()
         run: |
           kubectl get pods -A -o wide
           kubectl describe pods
-          kubectl logs -l app.kubernetes.io/instance=skao-tap --all-containers --tail=200 || true
+          kubectl logs -l app.kubernetes.io/instance=egernia --all-containers --tail=200 || true
 
   images:
     name: Build image (${{ matrix.image.name }})
@@ -537,9 +537,9 @@ jobs:
       matrix:
         image:
           - name: tap-api
-            dockerfile: services/tap-api/Dockerfile
+            dockerfile: services/egernia-api/Dockerfile
           - name: tap-executor
-            dockerfile: services/tap-executor/Dockerfile
+            dockerfile: services/egernia-executor/Dockerfile
           - name: tap-db
             dockerfile: db/Dockerfile
             context: db
@@ -554,7 +554,7 @@ jobs:
           context: ${{ matrix.image.context || '.' }}
           file: ${{ matrix.image.dockerfile }}
           push: false
-          tags: skao-tap-ci/${{ matrix.image.name }}:${{ github.sha }}
+          tags: egernia-ci/${{ matrix.image.name }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -572,9 +572,9 @@ jobs:
       matrix:
         image:
           - name: tap-api
-            dockerfile: services/tap-api/Dockerfile
+            dockerfile: services/egernia-api/Dockerfile
           - name: tap-executor
-            dockerfile: services/tap-executor/Dockerfile
+            dockerfile: services/egernia-executor/Dockerfile
           - name: tap-db
             dockerfile: db/Dockerfile
             context: db

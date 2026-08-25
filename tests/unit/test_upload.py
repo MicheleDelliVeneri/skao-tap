@@ -1,8 +1,8 @@
 """Unit tests for TAP table upload: parsing, limits, temp-table plumbing."""
 
 import pytest
-from tapcore.errors import UsageError
-from tapcore.query.upload import (
+from egernia_core.errors import UsageError
+from egernia_core.query.upload import (
     UploadedTable,
     create_upload_tables,
     parse_upload_param,
@@ -122,7 +122,7 @@ def test_rewrite_upload_refs_case_insensitive():
 
 
 def test_create_upload_tables_batches_inserts(fake_db):
-    from tapcore.db import pool
+    from egernia_core.db import pool
 
     upload = UploadedTable(
         name="t1",

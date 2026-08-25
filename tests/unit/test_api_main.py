@@ -1,4 +1,4 @@
-"""Unit tests for the app wiring in tap_api.main and the VOSI endpoints,
+"""Unit tests for the app wiring in egernia_api.main and the VOSI endpoints,
 served over a fake in-memory pool (see conftest)."""
 
 import pytest
@@ -82,7 +82,7 @@ def test_api_errors_are_json(client):
 
 
 def test_bootstrap_retries_then_succeeds(fake_db, monkeypatch):
-    from tap_api import main
+    from egernia_api import main
 
     calls = {"n": 0}
 
@@ -99,7 +99,7 @@ def test_bootstrap_retries_then_succeeds(fake_db, monkeypatch):
 
 
 def test_bootstrap_fails_after_attempts(fake_db, monkeypatch):
-    from tap_api import main
+    from egernia_api import main
 
     def broken(conn, plugin):
         raise RuntimeError("db never ready")
@@ -117,8 +117,8 @@ def test_pool_exhaustion_answers_503_with_retry_after(client, monkeypatch):
     then surfaced as a 500 — a hang followed by the wrong answer, which a
     proxy would not retry.
     """
+    from egernia_api.queries import query as query_module
     from psycopg_pool import PoolTimeout
-    from tap_api.queries import query as query_module
 
     def exhausted(*args, **kwargs):
         raise PoolTimeout("couldn't get a connection after 5.00 sec")
@@ -145,7 +145,7 @@ def test_liveness_touches_nothing_outside_the_process(client, monkeypatch):
     """A wedged process is what liveness is for, and a restart is the remedy.
     A saturated pool is neither, so this must not consult the database at all —
     verified by making any pool access explode."""
-    from tap_api import main as main_module
+    from egernia_api import main as main_module
 
     def explode():
         raise AssertionError("liveness must not touch the pool")
@@ -159,8 +159,8 @@ def test_readiness_reports_a_busy_pool_as_still_ready(client, monkeypatch):
     """A full pool is a healthy service under load. Answering "not ready" would
     take a working pod out of the Service and push its share onto pods in
     exactly the same state."""
+    from egernia_api import main as main_module
     from psycopg_pool import PoolTimeout
-    from tap_api import main as main_module
 
     def timeout() -> None:
         raise PoolTimeout("every connection is in use")
@@ -174,7 +174,7 @@ def test_readiness_reports_a_busy_pool_as_still_ready(client, monkeypatch):
 def test_readiness_reports_an_unreachable_database_as_not_ready(client, monkeypatch):
     """The case readiness exists for: this pod cannot serve, so it should stop
     being sent traffic."""
-    from tap_api import main as main_module
+    from egernia_api import main as main_module
 
     def broken() -> None:
         raise RuntimeError("could not connect to server")
@@ -188,7 +188,7 @@ def test_readiness_does_not_publish_why_it_failed(client, monkeypatch):
     """This endpoint is reachable without a token by design, and a connection
     error names the host, port and user it could not reach. The kubelet needs
     the status code; nobody needs the topology."""
-    from tap_api import main as main_module
+    from egernia_api import main as main_module
 
     def broken() -> None:
         raise RuntimeError(

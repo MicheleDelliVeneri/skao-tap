@@ -10,7 +10,7 @@ collection.
 
 import psycopg
 import pytest
-from tapcore.db import StreamedRows
+from egernia_core.db import StreamedRows
 
 
 class RecordingCursor:

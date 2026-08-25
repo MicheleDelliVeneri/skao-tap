@@ -1,0 +1,90 @@
+{{- /*
+Scheduled database backups (roadmap package 5): pg_dump custom-format
+archives of the whole database — jobs, TAP_SCHEMA and all ingested metadata
+— written to a dedicated PVC, pruned after backup.retentionDays. The dump
+runs against TAP_DATABASE_URL, so it works for the in-chart PostgreSQL and
+for an external database alike. This is a base-backup safety net; for
+point-in-time recovery (WAL archiving) run PostgreSQL under an operator such
+as CloudNativePG instead — see docs/deployment.md.
+*/}}
+{{- if .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "egernia.fullname" . }}-db-backup
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db-backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: {{ .Values.backup.deadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "egernia.labels" . | nindent 12 }}
+            app.kubernetes.io/component: db-backup
+        spec:
+          restartPolicy: Never
+          securityContext:
+            {{- toYaml .Values.postgresqlSecurityContext.pod | nindent 12 }}
+          containers:
+            - name: db-backup
+              image: "{{ .Values.postgresql.image | default (printf "%s/tap-db:%s" .Values.image.registry (include "egernia.imageTag" .)) }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                {{- toYaml .Values.postgresqlSecurityContext.container | nindent 16 }}
+              command:
+                - sh
+                - -ec
+                - |
+                  archive="/backups/egernia-$(date -u +%Y%m%dT%H%M%SZ).dump"
+                  echo "dumping to ${archive}"
+                  pg_dump --format=custom --file="${archive}.partial" "$TAP_DATABASE_URL"
+                  mv "${archive}.partial" "${archive}"
+                  echo "pruning archives older than {{ .Values.backup.retentionDays }} day(s)"
+                  find /backups -name 'egernia-*.dump' \
+                    -mtime +{{ max 0 (sub (int .Values.backup.retentionDays) 1) }} -delete
+                  find /backups -name '*.partial' -mtime +0 -delete
+                  ls -lh /backups
+              env:
+                - name: TAP_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "egernia.fullname" . }}-db
+                      key: TAP_DATABASE_URL
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ include "egernia.fullname" . }}-db-backups
+            - name: tmp
+              emptyDir: {}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "egernia.fullname" . }}-db-backups
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db-backup
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.backup.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.storage }}
+{{- end }}

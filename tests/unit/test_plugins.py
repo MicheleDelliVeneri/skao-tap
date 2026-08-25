@@ -1,12 +1,12 @@
-"""Unit tests for the metadata plugin system (tapcore.metadata.plugins) and the
+"""Unit tests for the metadata plugin system (egernia_core.metadata.plugins) and the
 built-in software discovery domain."""
 
 import datetime
 
 import pytest
-from tapcore.config import settings
-from tapcore.metadata.plugins import active_plugins, discovered_plugins
-from tapcore.metadata.schema_gen import build_tables
+from egernia_core.config import settings
+from egernia_core.metadata.plugins import active_plugins, discovered_plugins
+from egernia_core.metadata.schema_gen import build_tables
 
 SOFTWARE_PAYLOAD = {
     "uri": "ska:dsc-037-delay-ps:0.1.3",
@@ -178,7 +178,7 @@ def test_delete_is_audited(client, caplog):
     import logging
 
     client.post("/api/v1/software", json=SOFTWARE_PAYLOAD)
-    with caplog.at_level(logging.INFO, logger="tapcore"):
+    with caplog.at_level(logging.INFO, logger="egernia_core"):
         deleted = client.delete(f"/api/v1/software/{SOFTWARE_PAYLOAD['uri']}")
     assert deleted.status_code == 200
     assert f"deleted srcnet.software '{SOFTWARE_PAYLOAD['uri']}'" in caplog.text
@@ -189,15 +189,15 @@ def test_delete_audit_log_cannot_be_forged_through_the_id(caplog):
     """The id comes from the request path: no newline may reach the log."""
     import logging
 
-    from tap_api.plugins.software import PLUGIN
-    from tapcore.metadata import ingest
+    from egernia_api.plugins.software import PLUGIN
+    from egernia_core.metadata import ingest
 
     class Conn:
         def execute(self, statement, params):
             return type("Result", (), {"rowcount": 1})()
 
-    forged = "nope\nINFO:tapcore:deleted everything"
-    with caplog.at_level(logging.INFO, logger="tapcore"):
+    forged = "nope\nINFO:egernia_core:deleted everything"
+    with caplog.at_level(logging.INFO, logger="egernia_core"):
         deleted = ingest.delete_document(Conn(), PLUGIN, forged)
     assert deleted
     assert "deleted everything" in caplog.text  # only as part of the quoted id
@@ -206,7 +206,7 @@ def test_delete_audit_log_cannot_be_forged_through_the_id(caplog):
 
 
 def test_log_safe_flattens_and_caps_caller_text():
-    from tapcore.metadata.ingest import _log_safe
+    from egernia_core.metadata.ingest import _log_safe
 
     assert _log_safe("ska:demo:1.0.0") == "'ska:demo:1.0.0'"
     assert _log_safe("two\nlines\tand  spaces") == "'two lines and spaces'"
@@ -217,8 +217,8 @@ def test_legacy_tables_are_reported_until_migrated(caplog):
     """A pre-rename table still holding rows is warned about at startup."""
     import logging
 
-    from tap_api.plugins.software import PLUGIN
-    from tapcore.metadata import ingest
+    from egernia_api.plugins.software import PLUGIN
+    from egernia_core.metadata import ingest
 
     assert PLUGIN.legacy_tables == ("software.software", "software.artifacts")
 
@@ -238,21 +238,21 @@ def test_legacy_tables_are_reported_until_migrated(caplog):
         def fetchone(self):
             return self._row
 
-    with caplog.at_level(logging.WARNING, logger="tapcore"):
+    with caplog.at_level(logging.WARNING, logger="egernia_core"):
         ingest._warn_legacy_tables(Conn({"software.artifacts"}), PLUGIN)
     assert "legacy table software.artifacts still exists" in caplog.text
     assert "software.software still exists" not in caplog.text
     assert "srcnet.software" in caplog.text
 
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="tapcore"):
+    with caplog.at_level(logging.WARNING, logger="egernia_core"):
         ingest._warn_legacy_tables(Conn(set()), PLUGIN)
     assert caplog.text == ""
 
 
 def test_delete_document_targets_the_plugin_root():
-    from tap_api.plugins.software import PLUGIN
-    from tapcore.metadata import ingest
+    from egernia_api.plugins.software import PLUGIN
+    from egernia_core.metadata import ingest
 
     class Result:
         rowcount = 1
@@ -283,9 +283,9 @@ def test_ingested_datetime_roundtrip(client, fake_db):
 
 def test_colliding_table_names_are_rejected(plugin_selection, monkeypatch):
     """Two active domains must never generate the same qualified table."""
+    from egernia_core.metadata import plugins as plugins_module
+    from egernia_core.metadata.plugins import MetadataPlugin
     from ska_src_sdm import Software
-    from tapcore.metadata import plugins as plugins_module
-    from tapcore.metadata.plugins import MetadataPlugin
 
     clash = MetadataPlugin(
         name="clash",

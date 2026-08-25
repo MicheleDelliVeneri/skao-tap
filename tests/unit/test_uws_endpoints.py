@@ -1,4 +1,4 @@
-"""Unit tests for the UWS 1.1 REST resources (tap_api.endpoints.uws_api) on the fake pool."""
+"""Unit tests for the UWS 1.1 REST resources (egernia_api.endpoints.uws_api) on the fake pool."""
 
 import os
 

@@ -1,7 +1,7 @@
 # Benchmarking
 
 The numbers under [Performance](performance/index.md) come from
-`benchmarks/tap-performance` in this repository. This page is what you need to
+`benchmarks/egernia-performance` in this repository. This page is what you need to
 reproduce them or to judge whether they apply to your deployment.
 
 ## Reproducing a run
@@ -105,8 +105,8 @@ first, and when it fires the rest of that measurement describes the client.
 - **Guards mark runs invalid rather than deleting them.** Read the run's
   `invalid.json` before concluding the harness broke: the run is there, with
   the reason it cannot be trusted.
-- **`tapbench reclassify` fixes analysis mistakes without re-measuring.** The
+- **`egernia_bench reclassify` fixes analysis mistakes without re-measuring.** The
   raw measurements are kept, so a wrong bottleneck classification is corrected
   by re-running the rules, not the load.
 
-Full method, layout and wall-clock estimates: `benchmarks/tap-performance/README.md`.
+Full method, layout and wall-clock estimates: `benchmarks/egernia-performance/README.md`.

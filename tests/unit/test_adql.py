@@ -1,8 +1,8 @@
 """Unit tests for ADQL translation (queryparser-backed)."""
 
 import pytest
-from tapcore.errors import QueryParseError
-from tapcore.query.adql import adql_to_postgresql, apply_maxrec, check_language, touched_tables
+from egernia_core.errors import QueryParseError
+from egernia_core.query.adql import adql_to_postgresql, apply_maxrec, check_language, touched_tables
 
 
 def test_plain_select_translates():
@@ -106,7 +106,7 @@ def test_translation_parses_once(monkeypatch):
     """The library parses in set_query() and again in to_postgresql(),
     discarding the first tree. That doubling was half the cost of every
     request."""
-    from tapcore.query import adql as adql_module
+    from egernia_core.query import adql as adql_module
 
     calls = []
     original = adql_module._Translator._parse_sll
@@ -124,8 +124,8 @@ def test_a_query_the_fast_path_cannot_handle_falls_back(monkeypatch):
     """The fast path is an optimisation, not a replacement: anything it trips
     over has to get the library's own full-context parse and the same answer.
     Forced here rather than waiting for an ambiguous grammar to appear."""
-    from tapcore.observability import ADQL_SLOW_PARSES
-    from tapcore.query import adql as adql_module
+    from egernia_core.observability import ADQL_SLOW_PARSES
+    from egernia_core.query import adql as adql_module
 
     query = "SELECT TOP 3 ra, dec FROM ska.continuum_sources WHERE flux > 2"
     expected = adql_to_postgresql(query)
@@ -145,7 +145,7 @@ def test_an_invalid_query_is_not_counted_as_a_slow_parse():
     """The counter's stated meaning is "the fast path stopped working". An
     invalid query bails out of SLL too, and counting it would let a burst of
     bad ADQL read as a performance regression."""
-    from tapcore.observability import ADQL_SLOW_PARSES
+    from egernia_core.observability import ADQL_SLOW_PARSES
 
     before = ADQL_SLOW_PARSES._value.get()
     with pytest.raises(QueryParseError):
@@ -161,7 +161,7 @@ def test_a_syntax_error_survives_the_fast_path():
 
 
 def test_tables_come_from_the_single_parse():
-    from tapcore.query.adql import translate
+    from egernia_core.query.adql import translate
 
     result = translate(
         "SELECT o.obs_id FROM caom.observation AS o JOIN caom.plane AS p ON o.obs_id = p.obs_id"
@@ -175,7 +175,7 @@ def test_tables_come_from_the_single_parse():
 
 
 def test_geometry_column_as_intersects_argument():
-    from tapcore.query.adql import translate
+    from egernia_core.query.adql import translate
 
     result = translate(
         "SELECT obs_id FROM srcnet.data_products"
@@ -189,7 +189,7 @@ def test_geometry_column_as_intersects_argument():
 
 
 def test_geometry_column_in_either_argument_position():
-    from tapcore.query.adql import translate
+    from egernia_core.query.adql import translate
 
     first = translate(
         "SELECT 1 FROM srcnet.artifacts WHERE 1=INTERSECTS(s_region_geom, CIRCLE('ICRS',1,2,0.1))"
@@ -202,7 +202,7 @@ def test_geometry_column_in_either_argument_position():
 
 
 def test_point_in_geometry_column_via_contains():
-    from tapcore.query.adql import translate
+    from egernia_core.query.adql import translate
 
     sql = translate(
         "SELECT 1 FROM srcnet.artifacts AS a WHERE 1=CONTAINS(POINT('ICRS', 1, 2), a.s_region_geom)"
@@ -211,7 +211,7 @@ def test_point_in_geometry_column_via_contains():
 
 
 def test_two_geometry_columns_in_one_query_restore_independently():
-    from tapcore.query.adql import translate
+    from egernia_core.query.adql import translate
 
     sql = translate(
         "SELECT 1 FROM srcnet.artifacts WHERE"
@@ -223,7 +223,7 @@ def test_two_geometry_columns_in_one_query_restore_independently():
 
 
 def test_constructor_arguments_are_left_alone():
-    from tapcore.query.adql import translate
+    from egernia_core.query.adql import translate
 
     sql = translate(
         "SELECT TOP 5 obs_id FROM ivoa.obscore"
@@ -233,7 +233,7 @@ def test_constructor_arguments_are_left_alone():
 
 
 def test_predicate_names_inside_string_literals_are_not_rewritten():
-    from tapcore.query.adql import translate
+    from egernia_core.query.adql import translate
 
     sql = translate(
         "SELECT obs_id FROM ivoa.obscore WHERE obs_collection = 'INTERSECTS(trap, x)'"

@@ -9,8 +9,8 @@ has said who it is.
 import xml.etree.ElementTree as ET
 
 import pytest
-from tap_api.endpoints import vosi
-from tapcore.errors import ServiceError
+from egernia_api.endpoints import vosi
+from egernia_core.errors import ServiceError
 
 COMPLETE = {
     "registry_enabled": True,

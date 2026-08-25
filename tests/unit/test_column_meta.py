@@ -2,7 +2,7 @@
 
 from collections import namedtuple
 
-from tapcore.query.results import ColumnMeta, columns_from_cursor
+from egernia_core.query.results import ColumnMeta, columns_from_cursor
 
 Desc = namedtuple("Desc", ["name", "type_code"])
 
@@ -53,7 +53,7 @@ def test_tap_schema_metadata_conflicting_descriptions(tap_conn=None):
     also be treated as ambiguous (exercised via the pure merge logic)."""
     from unittest.mock import MagicMock
 
-    from tapcore.query.results import tap_schema_metadata
+    from egernia_core.query.results import tap_schema_metadata
 
     conn = MagicMock()
     conn.execute.return_value.fetchall.return_value = [

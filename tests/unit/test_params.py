@@ -1,10 +1,10 @@
 """Unit tests for DALI parameter handling (case-insensitive names, GET/POST)."""
 
 import pytest
+from egernia_api.queries.params import gather_params, require
+from egernia_core.errors import UsageError
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from tap_api.queries.params import gather_params, require
-from tapcore.errors import UsageError
 
 app = FastAPI()
 

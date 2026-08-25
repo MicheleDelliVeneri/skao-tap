@@ -42,7 +42,7 @@ uses, so a client written against one works against the other:
 
 ```http
 HTTP/1.1 401 Unauthorized
-WWW-Authenticate: Bearer realm="skao-tap",
+WWW-Authenticate: Bearer realm="egernia",
   ivoa_bearer error="invalid_request",
   error_description="Missing access token",
   discovery_url="https://ska-iam.stfc.ac.uk/.well-known/openid-configuration"
@@ -276,9 +276,10 @@ them with `auth.iam.groupClaims`.
 ## Choosing a plugin
 
 Authorisation is a plugin because SRCNet's answer is not everyone's. Plugins
-are discovered through the `skao_tap.auth` entry-point group — the same
+are discovered through the `egernia.auth` entry-point group — the same
 mechanism as the [metadata domains](plugins.md) — and `auth.plugin` selects
-one.
+one. The group was `skao_tap.auth` before the rename; a plugin declaring the
+old one is silently not discovered rather than reported.
 
 ### `iam-groups` (default)
 
@@ -371,7 +372,7 @@ Two deliberate differences from DMAPI's usage:
 ### Writing your own
 
 ```python
-from tapcore.auth import AuthPlugin
+from egernia_core.auth import AuthPlugin
 
 
 class MyPolicy(AuthPlugin):
@@ -383,7 +384,7 @@ class MyPolicy(AuthPlugin):
 ```
 
 ```toml
-[project.entry-points."skao_tap.auth"]
+[project.entry-points."egernia.auth"]
 my-policy = "my_package.policy:MyPolicy"
 ```
 
@@ -453,7 +454,7 @@ its own job unauthenticated and get `403`.
 Deletions name the subject responsible:
 
 ```
-INFO tapcore deleted srcnet.software 'ska:demo:1.0.0' by 'a4f1…' (cascading to 1 descendant table(s))
+INFO egernia_core deleted srcnet.software 'ska:demo:1.0.0' by 'a4f1…' (cascading to 1 descendant table(s))
 ```
 
 ## Not covered yet

@@ -15,9 +15,9 @@ import pytest
 # an error on a plain `pytest` run. Skip the module instead.
 pytest.importorskip("pytest_benchmark", reason="benchmarks need pytest-benchmark")
 
+from egernia_core.query.adql import adql_to_postgresql, touched_tables, translate
+from egernia_core.query.results import ColumnMeta, RowLimiter, stream
 from queryparser.adql import ADQLQueryTranslator
-from tapcore.query.adql import adql_to_postgresql, touched_tables, translate
-from tapcore.query.results import ColumnMeta, RowLimiter, stream
 
 CONE_SEARCH = (
     "SELECT source_id, ra, dec, flux FROM ska.continuum_sources "

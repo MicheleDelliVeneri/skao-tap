@@ -1,4 +1,4 @@
-# Benchmark suite entry points (benchmarks/tap-performance).
+# Benchmark suite entry points (benchmarks/egernia-performance).
 #
 # Every target is resumable: pass RESUME=<results-dir-name> to continue an
 # interrupted run instead of starting a new one. Nothing here ever overwrites
@@ -22,8 +22,8 @@
 
 SHELL := /bin/bash
 PYTHON ?= $(CURDIR)/.venv/bin/python
-BENCH_DIR := $(CURDIR)/benchmarks/tap-performance
-BENCH := cd $(BENCH_DIR) && PYTHONPATH=$(BENCH_DIR):$(CURDIR) $(PYTHON) -m tapbench
+BENCH_DIR := $(CURDIR)/benchmarks/egernia-performance
+BENCH := cd $(BENCH_DIR) && PYTHONPATH=$(BENCH_DIR):$(CURDIR) $(PYTHON) -m egernia_bench
 RESUME_ARG := $(if $(RESUME),--resume $(RESUME),)
 NO_BUILD_ARG := $(if $(NO_BUILD),--no-build,)
 
