@@ -47,7 +47,7 @@ matter involving SKAO staff or facilities.
 
 Instances of abusive, harassing or otherwise unacceptable behaviour may be
 reported to the project maintainers through
-[GitHub](https://github.com/MicheleDelliVeneri/egernia) — open a private
+[GitHub](https://github.com/ska-telescope/egernia) — open a private
 security advisory if the report should not be public, or contact the
 maintainers directly. All complaints will be reviewed and investigated
 promptly and fairly, and the privacy and security of the reporter will be
