@@ -128,7 +128,7 @@ class FakeDB:
         self.result_error: Exception | None = None
         # VOSI /tables metadata
         self.schemas = [("ska", "SKA continuum catalogues")]
-        self.schema_tables = [("ska", "ska.continuum_sources", "table", "continuum sources")]
+        self.schema_tables = [("ska", "ska.continuum_sources", "table", "continuum sources", None)]
         self.schema_columns = [
             (
                 "ska.continuum_sources",
@@ -138,8 +138,20 @@ class FakeDB:
                 "source identifier",
                 None,
                 "meta.id",
+                None,
+                None,
             ),
-            ("ska.continuum_sources", "ra", "double", None, "right ascension", "deg", "pos.eq.ra"),
+            (
+                "ska.continuum_sources",
+                "ra",
+                "double",
+                None,
+                "right ascension",
+                "deg",
+                "pos.eq.ra",
+                None,
+                None,
+            ),
         ]
         # /api/v1/tables aggregate
         self.json_tables = [
@@ -147,6 +159,7 @@ class FakeDB:
                 "ska",
                 "ska.continuum_sources",
                 "continuum sources",
+                None,
                 [{"name": "source_id", "datatype": "long"}],
             ),
         ]
@@ -188,6 +201,11 @@ class FakeDB:
 
         if head.startswith("SELECT PG_BACKEND_PID"):
             return FakeResult([(4242,)])
+
+        if head.startswith("SELECT QUOTE_LITERAL"):
+            # the obscore bootstrap quotes its view fingerprint server-side
+            value = str(params[0]).replace("'", "''")
+            return FakeResult([(f"'{value}'",)])
 
         if "pg_cancel_backend" in text:
             self.cancelled.append(params[0])

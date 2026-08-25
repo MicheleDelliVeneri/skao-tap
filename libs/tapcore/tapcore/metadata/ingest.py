@@ -52,6 +52,8 @@ def ensure_schema(conn, plugin: MetadataPlugin) -> None:
         conn.execute(statement)
     for statement, params in registration_statements(tables, plugin.description):
         conn.execute(statement, params)
+    if plugin.post_ensure is not None:
+        plugin.post_ensure(conn)
     log.info("%s schema ensured (%d tables)", plugin.sql_schema, len(tables))
     _warn_legacy_tables(conn, plugin)
 

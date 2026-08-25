@@ -21,6 +21,7 @@ list activates a subset (down to one system per model).
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cache
 from importlib.metadata import entry_points
@@ -54,6 +55,11 @@ class MetadataPlugin:
     # qualified tables this domain used before a rename; startup warns while
     # they still exist, because the API neither reads nor deletes them
     legacy_tables: tuple[str, ...] = ()
+    # invoked by ingest.ensure_schema() after this plugin's tables and
+    # TAP_SCHEMA registration are ensured — same connection, same
+    # transaction, advisory lock still held. This is where a domain builds
+    # what its tables imply: the odp plugin derives the ivoa.obscore view.
+    post_ensure: Callable[..., None] | None = None
 
     @property
     def tables(self) -> list[TableSpec]:

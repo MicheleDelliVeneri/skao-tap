@@ -336,12 +336,23 @@ async def sync(request: Request):
 
 @app.get("/tap/examples")
 async def examples():
-    body = """<!DOCTYPE html>
+    obscore_example = ""
+    if vosi.obscore_active():
+        obscore_example = """<div typeof="example" id="obscore-cone" resource="#obscore-cone">
+  <h2 property="name">ObsCore: data products overlapping a cone</h2>
+  <pre property="query">
+SELECT obs_publisher_did, dataproduct_type, access_url
+FROM ivoa.obscore
+WHERE 1 = INTERSECTS(s_region_geom, CIRCLE('ICRS', 150.0, -30.0, 0.5))
+  </pre>
+</div>
+"""
+    body = f"""<!DOCTYPE html>
 <html vocab="http://www.ivoa.net/rdf/examples#">
 <head><title>TAP examples</title></head>
 <body>
 <h1>Service-provided examples (DALI)</h1>
-<div typeof="example" id="cone" resource="#cone">
+{obscore_example}<div typeof="example" id="cone" resource="#cone">
   <h2 property="name">Cone search on the continuum catalogue</h2>
   <pre property="query">
 SELECT source_id, source_name, ra, dec, flux_int

@@ -12,6 +12,9 @@ from xml.sax.saxutils import escape, quoteattr
 from tapcore.config import settings
 from tapcore.db import connection as db_connection
 from tapcore.errors import NotFoundError, ServiceError
+from tapcore.metadata.plugins import active_plugins
+
+from ..plugins import obscore
 
 
 def availability_xml() -> str:
@@ -32,6 +35,23 @@ def availability_xml() -> str:
     )
 
 
+def obscore_active() -> bool:
+    """Whether this deployment publishes ivoa.obscore.
+
+    Keyed off the active plugins — the same condition under which the odp
+    bootstrap creates the view — so the REC's rule that the data model may
+    only be declared once the table exists holds structurally.
+    """
+    return any(plugin.name == "odp" for plugin in active_plugins())
+
+
+def _data_model_elements() -> str:
+    if not obscore_active():
+        return ""
+    ivoid = obscore.DATAMODEL_IVOID
+    return f'    <dataModel ivo-id="{ivoid}">ObsCore-1.1</dataModel>\n'
+
+
 def _capability_elements() -> str:
     """The <capability> elements, indented two spaces, with no wrapper."""
     base = settings.base_url
@@ -39,7 +59,7 @@ def _capability_elements() -> str:
     <interface xsi:type="vod:ParamHTTP" role="std" version="1.1">
       <accessURL use="base">{base}</accessURL>
     </interface>
-    <language>
+{_data_model_elements()}    <language>
       <name>ADQL</name>
       <version ivo-id="ivo://ivoa.net/std/ADQL#v2.0">2.0</version>
       <description>ADQL 2.0 translated to PostgreSQL/pg_sphere</description>
@@ -226,12 +246,12 @@ def tables_xml() -> str:
             "SELECT schema_name, description FROM tap_schema.schemas ORDER BY schema_index"
         ).fetchall()
         tables = conn.execute(
-            "SELECT schema_name, table_name, table_type, description"
+            "SELECT schema_name, table_name, table_type, description, utype"
             " FROM tap_schema.tables ORDER BY table_index"
         ).fetchall()
         columns = conn.execute(
-            "SELECT table_name, column_name, datatype, arraysize, description, unit, ucd"
-            " FROM tap_schema.columns ORDER BY column_index"
+            "SELECT table_name, column_name, datatype, arraysize, description, unit, ucd,"
+            " utype, xtype FROM tap_schema.columns ORDER BY column_index"
         ).fetchall()
 
     cols_by_table: dict[str, list] = {}
@@ -255,14 +275,26 @@ def tables_xml() -> str:
         parts.append(f"    <name>{escape(schema_name)}</name>")
         if schema_desc:
             parts.append(f"    <description>{escape(schema_desc)}</description>")
-        for _, table_name, table_type, table_desc in tables_by_schema.get(schema_name, []):
+        for _, table_name, table_type, table_desc, table_utype in tables_by_schema.get(
+            schema_name, []
+        ):
             parts.append(f'    <table type="{escape(table_type or "table")}">')
             parts.append(f"      <name>{escape(table_name)}</name>")
             if table_desc:
                 parts.append(f"      <description>{escape(table_desc)}</description>")
-            for _, col_name, datatype, arraysize, col_desc, unit, ucd in cols_by_table.get(
-                table_name, []
-            ):
+            if table_utype:
+                parts.append(f"      <utype>{escape(table_utype)}</utype>")
+            for (
+                _,
+                col_name,
+                datatype,
+                arraysize,
+                col_desc,
+                unit,
+                ucd,
+                utype,
+                xtype,
+            ) in cols_by_table.get(table_name, []):
                 parts.append("      <column>")
                 parts.append(f"        <name>{escape(col_name)}</name>")
                 if col_desc:
@@ -271,9 +303,12 @@ def tables_xml() -> str:
                     parts.append(f"        <unit>{escape(unit)}</unit>")
                 if ucd:
                     parts.append(f"        <ucd>{escape(ucd)}</ucd>")
+                if utype:
+                    parts.append(f"        <utype>{escape(utype)}</utype>")
                 arr = f' arraysize="{escape(arraysize)}"' if arraysize else ""
+                ext = f' extendedType="{escape(xtype)}"' if xtype else ""
                 parts.append(
-                    f'        <dataType xsi:type="vod:VOTableType"{arr}>'
+                    f'        <dataType xsi:type="vod:VOTableType"{arr}{ext}>'
                     f"{escape(datatype)}</dataType>"
                 )
                 parts.append("      </column>")
