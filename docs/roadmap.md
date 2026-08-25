@@ -4,7 +4,7 @@ Follow-up work is organized in numbered packages, referenced by number in
 issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
-**Packages 19 through 21 are open.** Everything through package 18 is
+**Packages 19 through 22 are open.** Everything through package 18 is
 delivered and merged; what each one settled is recorded in the findings
 below.
 
@@ -559,10 +559,75 @@ Work: settle the parser question before writing any grammar — fork
 queryparser's grammar to 2.1, or replace the parse with a maintained
 alternative — and only then the feature surface, the sentinel's removal, and
 the declared version. Note that the parse is also the subject of package 18's
-profile, so the two packages share evidence: a replacement parser has to hold
-the fast path's 1.2 ms as well as accept more syntax.
+profile, so the two packages share evidence — and the budget is larger than
+this section used to claim. It said a replacement parser has to hold "the fast
+path's 1.2 ms"; package 18 measured translation at **3.19 ms, 30.9% of a
+request and the largest named subsystem in the service**, with the in-process
+micro-benchmarks agreeing at 2.57 ms for a cone search and 2.86 ms for a join.
+So a replacement has 3 ms to beat rather than 1.2 ms to hold — more room than
+the old figure suggested, and a bigger prize if it wins.
 
 **Resolution is shown by** `/capabilities` declaring 2.1 truthfully; the
 sentinel substitution deleted because the grammar accepts a geometry column
 directly; a conformance test per added construct; and no regression in the
 translation hot-path benchmark.
+
+## Package 22 — A text column in a geometry predicate
+
+`s_region` is the ObsCore standard's footprint column and it holds STC-S
+*text*. The queryable companion is `s_region_geom`, a pgsphere `spoly` the
+ingest pipeline derives at ingestion (package 7), and it is non-standard by
+construction — `std = 0` in TAP_SCHEMA. So the column every ObsCore tutorial,
+every VO client and every worked example names is the one that cannot be
+queried spatially, and the one that can is the one nobody has heard of.
+
+That would be a documentation problem if the service refused the standard
+spelling clearly. It does not. The sentinel substitution in
+`egernia_core.query.adql` puts *any* bare identifier found in an
+`INTERSECTS`/`CONTAINS` argument slot behind a geometry literal and swaps the
+column name back into the SQL, without consulting the column's type — because
+`translate()` is deliberately pure and has no TAP_SCHEMA to consult. The result
+translates happily and then dies in PostgreSQL:
+
+```
+1 = INTERSECTS(s_region, CIRCLE('ICRS', 150.0, -30.0, 0.5))
+  -> s_region && scircle(spoint(RADIANS(150.0), RADIANS(-30.0)), RADIANS(0.5))
+  -> ERROR: operator does not exist: text && scircle
+```
+
+Verified against pgsphere. What a client receives is a DALI error document
+carrying a PostgreSQL operator name — a server-fault shape for what is a usage
+error, naming neither the column at fault nor the one to use instead. The first
+spatial query a new user writes is the one that produces it.
+
+Work: give `Translation` the identifiers the substitution actually used —
+`_hide_geometry_columns` already collects exactly that list and throws it away —
+and have `prepare_query` reject a non-geometry column among them with a message
+naming `s_region_geom`. The type lookup belongs there rather than in
+`translate()`: that path already reads TAP_SCHEMA for the publication check and
+for column metadata, both cached, while the translator is the hot path package
+18 profiled and must stay free of I/O.
+
+One decision to take rather than default: **do not silently rewrite `s_region`
+to `s_region_geom`.** Answering a different query than the one asked is worse
+than refusing clearly, and the two are not equivalent — the companion is
+nullable, so a row whose STC-S failed to convert at ingestion is present under
+one column and absent under the other. A rewrite would quietly drop those rows
+from every result.
+
+Not in scope, and worth stating so the boundary is clear: the ADQL region
+algebra — `UNION`, `INTERSECTION`, `AREA`, `CENTROID`, `DISTANCE`, `COORD1` —
+is rejected by the grammar outright (`QueryParseError`, not a translation
+fault), and belongs to package 21. Nor is this work wasted by package 21
+deleting the sentinel: a grammar that accepts a geometry column directly still
+has to refuse a *text* one, so the check survives the sentinel's removal and
+only changes where it gets its list of candidate columns from.
+
+**Resolution is shown by** the standard spelling answered with a usage error
+that names `s_region_geom`, at the right HTTP status for a client error rather
+than a server fault; a test per predicate and argument order (`INTERSECTS` and
+`CONTAINS`, column first and column second); the same refusal for any other
+text column reached the same way, not a special case for `s_region`; and the
+translation hot-path benchmark unmoved, since the check costs a set lookup over
+a handful of names against an already-cached table.
+
