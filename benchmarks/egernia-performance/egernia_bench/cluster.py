@@ -464,6 +464,40 @@ def configure_api(
         overrides["tapApi.resources.limits.memory"] = memory_limit
     install_chart(overrides)
     verify_workers(workers)
+    verify_api_limits(cpu=cpu_limit_cores, memory=memory_limit)
+
+
+def verify_api_limits(*, cpu: float | str | None, memory: str | None) -> None:
+    """The deployed tap-api limits are what this call meant to deploy.
+
+    Read back from the Deployment rather than assumed from a successful
+    upgrade, and asserted on the *revert* as much as on the probe: the limit
+    probe raises CPU and memory through overrides, and the family that runs
+    after this one would silently inherit them — an executor-cost measurement
+    against a differently-sized API, with nothing in its results saying so.
+    None means "whatever the suite values file says", read from the file so
+    the expectation moves with it.
+    """
+    import yaml
+
+    if cpu is None or memory is None:
+        values = yaml.safe_load((SUITE / "config/chart-values.yaml").read_text())
+        file_limits = ((values.get("tapApi") or {}).get("resources") or {}).get("limits") or {}
+        cpu = file_limits.get("cpu") if cpu is None else cpu
+        memory = file_limits.get("memory") if memory is None else memory
+    deployed = json.loads(
+        kubectl(
+            "get",
+            "deploy",
+            f"{RELEASE}-tap-api",
+            "-o",
+            "jsonpath={.spec.template.spec.containers[0].resources.limits}",
+        )
+    )
+    expected = {"cpu": str(cpu), "memory": str(memory)}
+    actual = {key: str(deployed.get(key)) for key in expected}
+    if actual != expected:
+        raise RuntimeError(f"tap-api limits are {actual}, expected {expected}")
 
 
 def verify_workers(expected: int, timeout_s: float = 120.0) -> None:
