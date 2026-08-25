@@ -411,6 +411,14 @@ def set_limit_concurrency(value: int) -> None:
     stays the single authority on what is deployed — and because a helm
     upgrade resets every override the previous upgrade set, the caller must
     re-apply replica counts afterwards.
+
+    That reset is total, not just of replicas: this upgrade carries one
+    `--set`, so it also discards the `horizontalAutoscaling.*=false` flags
+    `set_autoscaling()` applied before the shedding loop. It is only harmless
+    because config/chart-values.yaml has both autoscalers off anyway — flip
+    that file and the second rung of the shedding ladder would silently run
+    against an autoscaling fleet. Anything a caller needs to survive a flip
+    belongs in the suite values file, or must be re-applied after every one.
     """
     install_chart({"tapApi.limitConcurrency": str(value)})
 

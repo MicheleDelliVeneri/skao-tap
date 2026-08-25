@@ -19,6 +19,15 @@ tapApi:
   # pod that also scales internally would make "throughput per replica" mean
   # two different things at once.
   workers: 1
+  # Uncapped, deliberately, against the chart's default of 64: with one
+  # worker per pod that default is a 64-connection ceiling on every family,
+  # and the concurrency sweep climbs to 128 — a rung at or above the cap
+  # would measure the cap rather than the service, and be published as
+  # capacity. Nothing already published is affected: the sweep saturates at
+  # 4-8 clients and breaks out long before rung 64. The shedding family is
+  # the one place the ceiling is the subject, and it sets it per measurement
+  # through `set_limit_concurrency`.
+  limitConcurrency: 0
   resources:
     requests: {cpu: 1, memory: 512Mi}
     limits: {cpu: 2, memory: 1Gi}

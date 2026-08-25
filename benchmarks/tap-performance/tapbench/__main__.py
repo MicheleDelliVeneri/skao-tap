@@ -331,7 +331,8 @@ def cmd_shedding(args) -> int:
 
     Prints the reduction the package asked for — per held concurrency, how
     much of the shed load was answered (503) and how much was dropped at the
-    socket (ReadError) — with and without `tapApi.limitConcurrency`.
+    transport (see runner.TRANSPORT_DROP_ERRORS) — with and without
+    `tapApi.limitConcurrency`.
     """
     cfg = runner.load_config()
     run = runs_mod.new_run("shedding", args.resume)
@@ -346,7 +347,7 @@ def cmd_shedding(args) -> int:
         print(
             f"{row['key']:32} {row['requests']:7d} requests  "
             f"{row['rps']:7.1f} rps  503={row['refused_503']:<7d} "
-            f"ReadError={row['reset_readerror']:<7d} other={row['other_errors']}"
+            f"drops={row['transport_drops']:<7d} other={row['other_errors']}"
         )
     return 0
 

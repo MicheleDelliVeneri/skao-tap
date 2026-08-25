@@ -63,6 +63,23 @@ _MEMORY_UNITS = {
     "T": 10**12,
 }
 
+# The error classes (load/runner.py records `type(exc).__name__`) that mean
+# the connection died without the application answering. Package 13's claim
+# is "shed with 503s, not drops", and counting only ReadError made that claim
+# about one of the four ways the same reset arrives: which one a client sees
+# depends on where in the exchange the socket went — ConnectError before the
+# handshake completes, ConnectionResetError when the kernel resets a queued
+# connection, ReadError mid-response, RemoteProtocolError when the peer
+# vanishes leaving a truncated HTTP frame. A timeout is NOT here: it means
+# the server held the connection and was too slow, which is a different
+# failure and stays visible in other_errors.
+TRANSPORT_DROP_ERRORS = (
+    "ConnectError",
+    "ConnectionResetError",
+    "ReadError",
+    "RemoteProtocolError",
+)
+
 
 def load_config() -> dict:
     return {
@@ -1025,23 +1042,28 @@ def shedding(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
                         results.append(result)
                     time.sleep(settle_s)
     finally:
-        # hand the next family the chart's defaults back
-        cluster.set_limit_concurrency(0)
+        # Hand the next family the SUITE's values back, not a hardcoded 0:
+        # the chart's own default is 64 now, so a `--set limitConcurrency=0`
+        # here would be this family choosing the next one's ceiling. An
+        # override-free upgrade drops every `--set` the flips applied and
+        # re-reads config/chart-values.yaml, which is where the suite's
+        # uncapped ceiling and both disabled autoscalers actually live.
+        cluster.install_chart()
         cluster.scale("tap-api", 1)
     return results
 
 
 def shedding_summary(results: list[dict]) -> list[dict]:
     """The shedding ladder reduced to the numbers the package asked for:
-    per held concurrency, how much of the shed load was an answer (503)
-    and how much was a socket drop (ReadError and friends)."""
+    per held concurrency, how much of the shed load was an answer (503) and
+    how much was a drop at the transport (TRANSPORT_DROP_ERRORS)."""
     rows: list[dict] = []
     for result in results:
         if result.get("kind") != "shedding":
             continue
         http = result["http"]
         errors = dict(http.get("errors_by_type") or {})
-        resets = int(errors.pop("ReadError", 0))
+        drops = sum(int(errors.pop(name, 0)) for name in TRANSPORT_DROP_ERRORS)
         # errors_by_type repeats HTTP statuses as digit keys; the statuses
         # column already carries those, so "other" is transport errors only
         errors = {k: v for k, v in errors.items() if not str(k).isdigit()}
@@ -1054,7 +1076,7 @@ def shedding_summary(results: list[dict]) -> list[dict]:
                 "requests": int(http.get("requests", 0)),
                 "rps": float(http.get("rps", 0.0)),
                 "refused_503": statuses.get("503", 0),
-                "reset_readerror": resets,
+                "transport_drops": drops,
                 "other_errors": {k: v for k, v in errors.items() if v},
             }
         )

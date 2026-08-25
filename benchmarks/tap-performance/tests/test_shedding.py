@@ -88,8 +88,31 @@ def test_summary_separates_answers_from_drops():
     ]
     open512 = next(r for r in rows if r["key"] == "shed-D1-n1-open-c512")
     assert open512["refused_503"] == 1200
-    assert open512["reset_readerror"] == 800
+    assert open512["transport_drops"] == 800
     assert open512["other_errors"] == {}
     limited = next(r for r in rows if r["key"].startswith("shed-D1-n1-limit"))
-    assert limited["reset_readerror"] == 0
+    assert limited["transport_drops"] == 0
     assert limited["other_errors"] == {"ReadTimeout": 3}
+
+
+def test_every_transport_drop_counts_but_a_timeout_does_not():
+    """A reset arrives as one of four exception classes depending on where in
+    the exchange the socket died, so counting only ReadError understates the
+    drops the package's "zero drops" claim is about. A ReadTimeout is not a
+    drop: the connection was held and the answer was late."""
+    by_type = dict.fromkeys(runner.TRANSPORT_DROP_ERRORS, 7) | {"ReadTimeout": 5}
+    rows = runner.shedding_summary(
+        [_fake("shed-D1-n1-open-c2048", 1, 2048, 9000, {"503": 10}, by_type)]
+    )
+    assert rows[0]["transport_drops"] == 7 * len(runner.TRANSPORT_DROP_ERRORS)
+    assert rows[0]["other_errors"] == {"ReadTimeout": 5}
+    assert "ConnectError" in runner.TRANSPORT_DROP_ERRORS
+    assert not any("Timeout" in name for name in runner.TRANSPORT_DROP_ERRORS)
+
+
+def test_a_connect_error_alone_is_a_drop():
+    rows = runner.shedding_summary(
+        [_fake("shed-D1-n2-open-c1024", 2, 1024, 5000, {}, {"ConnectError": 42})]
+    )
+    assert rows[0]["transport_drops"] == 42
+    assert rows[0]["other_errors"] == {}
