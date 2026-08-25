@@ -32,11 +32,26 @@ tapApi:
   # arrival bursts; it does not add capacity, only queueing.
   backlog: 2048
   # -- Concurrent connections one worker process accepts before answering
-  # 503 immediately (uvicorn --limit-concurrency, per worker). 0 means
-  # unlimited — the default, and then overload past the accept queue sheds
-  # with resets. Set it to make the service refuse what it cannot serve:
-  # a 503 tells a client to back off, a reset tells it nothing.
-  limitConcurrency: 0
+  # 503 immediately (uvicorn --limit-concurrency, per worker). 0 disables
+  # the ceiling, and then overload sheds with resets instead of answers.
+  # The default of 64 is measured (benchmark run 20260824T210726Z-9b2bfb85):
+  # well above a worker's concurrent load at capacity (a replica saturates
+  # at 4-8 clients) and below the ~128-512 held connections where an
+  # uncapped worker starts resetting. At 2,048 held connections against two
+  # capped replicas every refusal was a 503 and goodput was 4.5x the
+  # uncapped run's; past ~512 connections per worker no application ceiling
+  # helps — bound the connection count upstream (replicas, an ingress).
+  #
+  # It is a budget of CONNECTIONS, not of in-flight work, and it is shared
+  # with connections that cost no CPU at all: a `/tap/async` client
+  # long-polling with WAIT holds one for up to `config.waitMaxSeconds` (60 by
+  # default), and a client dragging a large result body down a slow link
+  # holds one for as long as the download takes. Neither is load, and both
+  # count against the 64. A deployment fronting many long-polling clients on
+  # few workers can therefore shed 503s while the workers are idle — raise
+  # the ceiling (or add workers/replicas) rather than reading the 503s as
+  # capacity reached.
+  limitConcurrency: 64
   # -- Externally visible base URL, written into capabilities and result
   # links. Leave empty to default to the in-cluster service URL.
   baseUrl: ""

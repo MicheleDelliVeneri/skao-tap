@@ -15,6 +15,46 @@ Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/tap-performance/results/`.
 
+### 2026-08-24 — overload now sheds with answers, and the ceiling is placed (package 13, delivered)
+
+The bounded-concurrency shape the package asked for exists (`tapbench
+shedding`, `make benchmark-shedding`): a closed loop *is* bounded
+concurrency, so holding it far past saturation is the sustained-overload
+point the open-loop generator could never keep still. Run
+`20260824T210726Z-9b2bfb85`, D1, normal mix, held for 45 s per rung:
+
+| held connections | 1 replica, uncapped | 1 replica, limit 64 | 2 replicas, uncapped | 2 replicas, limit 64 |
+| --- | --- | --- | --- | --- |
+| 32 | all served, 93 rps | all served, 92 rps | all served, 181 rps | all served, 179 rps |
+| 128 | 389 × 503, 0 resets | 241 × 503, 0 resets | 223 × 503, 0 resets | 210 × 503, 0 resets |
+| 512 | 502 × 503, **36 resets** | 501 × 503, **32 resets** | 511 × 503, 0 resets | 5,358 × 503, 0 resets, 49 rps |
+| 2,048 | collapse: 0 × 503, 69 resets, 2,026 timeouts | same collapse | 64 resets, 2,031 timeouts | **7,876 × 503, 0 resets, 74 rps** |
+
+Three facts worth keeping:
+
+- **The onset is placed.** An uncapped worker starts resetting connections
+  between 128 and 512 held (2.4% of requests at 512), and collapses
+  entirely around 2,048 — the accept backlog — where *nothing* is answered:
+  no 503s, just client timeouts at the 120 s mark. The earlier
+  fixed-scaling resets were this, reached through the open loop's in-flight
+  growth.
+- **The ceiling works — through the fleet, not the single worker.**
+  `tapApi.limitConcurrency: 64` is now the chart default: above a worker's
+  concurrent load at capacity (a replica saturates at 4–8 clients), below
+  the onset. Two capped replicas held 2,048 connections with every refusal
+  a 503, zero resets, and 4.5× the uncapped run's goodput — refusing early
+  protects the pool for the requests that are admitted.
+- **Past ~512 connections per worker, no application ceiling helps.** The
+  single-replica collapse is identical with and without the cap: the event
+  loop drowns in accepted sockets before `limit_concurrency` can answer
+  anything. That regime belongs to whatever bounds connections upstream —
+  replicas behind a Service, or an ingress — and the values file now says
+  so instead of implying a knob would save it.
+
+The verification pass the package defined — the same held load, refused
+with 503s instead of dropped — is the two-replica column, and it holds at
+both overload rungs.
+
 ### 2026-08-24 — the aggregate was paying for the cursor, not the aggregate (package 11, delivered)
 
 Q13 (`GROUP BY` over the whole ObsCore table) was never the price of the
@@ -276,37 +316,6 @@ four concurrent clients on D1 to eight on D2. So replicas and `tapApi.workers`
 remain the throughput lever — and each worker is now worth roughly 200
 requests/s rather than 20.
 
-## Package 7 — Queryable region footprints (`s_region`)
-
-Unblocked: `ska-src-mm-notification` 0.1.8 is released and ships the STC-S
-validator this depends on, so the work can start. **First step is the version
-bump** — `services/tap-api/pyproject.toml` still pins `>=0.1.7`, so nothing
-sees the validator until that becomes `>=0.1.8` and `uv.lock` is refreshed.
-
-The notification model carries `s_region` (STC-S/pgsphere-style strings,
-e.g. `CIRCLE 3.5867 -30.4 0.25`) on data products and artifacts, but the
-generated schema stores it as plain text — so ObsCore-style footprint
-queries (`INTERSECTS(s_region, CIRCLE('ICRS', ...))`) do not work on the
-ingested metadata.
-
-- **Parse at ingestion**: convert the STC-S string into a companion
-  pgsphere geometry column (`s_region_geom spoly`; circles converted to
-  polygon approximations), register it in TAP_SCHEMA, and index it with
-  GiST so ADQL `INTERSECTS`/`CONTAINS` over footprints are fast.
-- **Take the 0.1.8 validator** *(upstream, done — needs the pin bump)*: the
-  region type mismatch is fixed. `0.1.7` declared `s_region: str | None`
-  with no format validation, so any string (e.g. `"NOT A REGION"`) validated,
-  unlike the numeric fields with their Ge/Le constraints. `0.1.8` adds
-  `models/regions.py` with `validate_s_region()` — the `CIRCLE`, `POLYGON`
-  and `POSITION` STC-S subset in ICRS with coordinate-range checks — wired
-  as a model validator on `BaseNotificationModel`, so malformed regions are
-  now rejected at the producer, before they reach any archive.
-- **Reject malformed regions at the API boundary**: keep validating region
-  syntax at the ingestion endpoint as defence in depth, since a producer can
-  always be running an older model package than the service.
-- **Amendments follow**: `PATCH` updates to `s_region` re-derive the
-  geometry column.
-
 ## Package 12 — ObsCore 1.1 compliance (`ivoa.obscore` view)
 
 The service is not ObsCore 1.1 compliant today, and the gap was measured
@@ -400,39 +409,6 @@ bootstrap so it exists exactly when its source tables do:
 - **Extras** — an ObsCore cone-search entry in `/tap/examples` gated on the
   same flag, and a `docs/obscore.md` recording the column mapping and the
   DID scheme.
-## Package 13 — Honest overload shedding
-
-The fixed-scaling family (run `20260824T014320Z-a5058118-fixed-scaling`)
-found that wherever the connection pool tips over, a large fraction of the
-shed load is dropped at the socket rather than refused with an answer:
-
-| measurement | requests | 503 | ReadError | ReadTimeout |
-| --- | --- | --- | --- | --- |
-| 1 replica, 1×C1 | 4,194 | 1,330 | 893 | 586 |
-| 2 replicas, 2×C1 | 15,211 | 2,594 | 11,968 | 540 |
-| 4 replicas, 6×C1 | 12,421 | 7,294 | 4,012 | 753 |
-
-The 503s are the pool-timeout path working as designed; the `ReadError`s are
-not — a reset is indistinguishable from a crash to the client that receives
-it, and cannot be retried safely. First hypothesis is the listen socket's
-accept queue overflowing before the application sees the connection. The
-knobs exist (`tapApi.backlog`, `tapApi.limitConcurrency` — uvicorn answers
-503 past a per-worker connection ceiling); what is missing is the onset:
-every measurement showing resets abandoned most of its arrivals at the
-generator's in-flight cap, so the offered rate at which resets begin is
-unknown, and the ceiling cannot be placed.
-
-Work: a bounded-concurrency load shape in the harness (the open-loop
-generator cannot hold a sustained-overload point); a run held just past pool
-saturation to establish where resets start; then a default or documented
-`limitConcurrency` placed above a worker's normal concurrent load and below
-the reset onset.
-
-**Resolution is shown by** a bounded-concurrency fixed-scaling run held just
-past pool saturation, on one and on two replicas: the reset onset rate is
-recorded, and with `limitConcurrency` set the same held load sheds with
-`ReadError` at ~0 while 503s carry the refusals.
-
 ## Package 14 — Measure replica scaling
 
 Run `20260824T014320Z-a5058118-fixed-scaling`: seventeen of 24 measurements

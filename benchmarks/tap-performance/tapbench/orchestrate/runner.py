@@ -63,6 +63,23 @@ _MEMORY_UNITS = {
     "T": 10**12,
 }
 
+# The error classes (load/runner.py records `type(exc).__name__`) that mean
+# the connection died without the application answering. Package 13's claim
+# is "shed with 503s, not drops", and counting only ReadError made that claim
+# about one of the four ways the same reset arrives: which one a client sees
+# depends on where in the exchange the socket went — ConnectError before the
+# handshake completes, ConnectionResetError when the kernel resets a queued
+# connection, ReadError mid-response, RemoteProtocolError when the peer
+# vanishes leaving a truncated HTTP frame. A timeout is NOT here: it means
+# the server held the connection and was too slow, which is a different
+# failure and stays visible in other_errors.
+TRANSPORT_DROP_ERRORS = (
+    "ConnectError",
+    "ConnectionResetError",
+    "ReadError",
+    "RemoteProtocolError",
+)
+
 
 def load_config() -> dict:
     return {
@@ -971,6 +988,100 @@ def stress_classes(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
         if result:
             results.append(result)
     return results
+
+
+def shedding(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
+    """Package 13: hold a bounded-concurrency overload and watch how the
+    excess is refused.
+
+    A closed loop *is* bounded concurrency — each of its N clients has
+    exactly one request outstanding — so holding N far past saturation is
+    the sustained-overload point the open-loop generator cannot keep still
+    (it either abandons arrivals at its in-flight cap or grows without
+    bound). The ladder climbs through the accept backlog (2,048 by default)
+    because the first hypothesis for the resets is the listen queue
+    overflowing before the application ever sees the connection.
+
+    Two passes per replica count: the ceiling off, to find where resets
+    begin; then `tapApi.limitConcurrency` set to the configured value, to
+    show the same held load being refused with 503s instead of dropped at
+    the socket. The flip goes through the chart (a helm upgrade), which
+    resets the replica count, so the scale call follows every flip.
+    """
+    plan = cfg["scenarios"]["shedding"]
+    mix = cfg["scenarios"]["query_mix"]["normal"]
+    settle_s = cfg["scenarios"]["timing"]["settle_seconds"]
+    results: list[dict] = []
+    cluster.set_autoscaling(api=False, executor=False)
+    try:
+        for limited, limit in ((False, 0), (True, int(plan["limit_concurrency"]))):
+            cluster.set_limit_concurrency(limit)
+            for replicas in plan["replicas"]:
+                cluster.scale("tap-api", replicas)
+                for concurrency in plan["held_concurrency"]:
+                    label = f"limit{limit}" if limited else "open"
+                    key = f"shed-{dataset}-n{replicas}-{label}-c{concurrency}"
+                    # A fresh workload per measurement: every point on the
+                    # ladder replays the same request sequence, so the error
+                    # mix is attributable to the held concurrency alone.
+                    workload = load_mod.Workload(entries, mix, seed=9000 + replicas)
+                    result = measure(
+                        run,
+                        cfg,
+                        key=key,
+                        kind="shedding",
+                        dataset=dataset,
+                        workload=workload,
+                        mode="closed",
+                        concurrency=concurrency,
+                        replicas=replicas,
+                        warmup_s=plan["warmup_seconds"],
+                        measure_s=plan["measure_seconds"],
+                    )
+                    if result:
+                        results.append(result)
+                    time.sleep(settle_s)
+    finally:
+        # Hand the next family the SUITE's values back, not a hardcoded 0:
+        # the chart's own default is 64 now, so a `--set limitConcurrency=0`
+        # here would be this family choosing the next one's ceiling. An
+        # override-free upgrade drops every `--set` the flips applied and
+        # re-reads config/chart-values.yaml, which is where the suite's
+        # uncapped ceiling and both disabled autoscalers actually live.
+        cluster.install_chart()
+        cluster.scale("tap-api", 1)
+    return results
+
+
+def shedding_summary(results: list[dict]) -> list[dict]:
+    """The shedding ladder reduced to the numbers the package asked for:
+    per held concurrency, how much of the shed load was an answer (503) and
+    how much was a drop at the transport (TRANSPORT_DROP_ERRORS)."""
+    rows: list[dict] = []
+    for result in results:
+        if result.get("kind") != "shedding":
+            continue
+        http = result["http"]
+        errors = dict(http.get("errors_by_type") or {})
+        drops = sum(int(errors.pop(name, 0)) for name in TRANSPORT_DROP_ERRORS)
+        # errors_by_type repeats HTTP statuses as digit keys; the statuses
+        # column already carries those, so "other" is transport errors only
+        errors = {k: v for k, v in errors.items() if not str(k).isdigit()}
+        statuses = {str(k): int(v) for k, v in (http.get("errors_by_status") or {}).items()}
+        rows.append(
+            {
+                "key": result["key"],
+                "replicas": result.get("replicas"),
+                "held_concurrency": result.get("concurrency"),
+                "requests": int(http.get("requests", 0)),
+                "rps": float(http.get("rps", 0.0)),
+                "refused_503": statuses.get("503", 0),
+                "transport_drops": drops,
+                "other_errors": {k: v for k, v in errors.items() if v},
+            }
+        )
+    rows.sort(key=lambda r: (r["key"].split("-c")[0], r["held_concurrency"] or 0))
+    return rows
 
 
 def result_formats(run, cfg: dict, dataset: str, entries: list) -> list[dict]:

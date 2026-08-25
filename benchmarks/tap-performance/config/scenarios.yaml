@@ -77,6 +77,24 @@ result_formats:
   measure_seconds: 60
   repetitions: 3
 
+# Package 13: where does shed load stop being an answer? A closed loop is
+# bounded concurrency by construction — each client has exactly one request
+# outstanding — so holding it far past saturation is the sustained-overload
+# point the open-loop generator cannot keep still. The ladder brackets the
+# accept backlog (uvicorn --backlog, 2,048 by default): the first hypothesis
+# for the socket drops is the listen queue overflowing before the
+# application sees the connection. limit_concurrency is the ceiling the
+# verification pass sets — above a worker's normal concurrent load (D1
+# saturates a replica at 4-8 clients) and, if the open pass is right, below
+# where the resets begin.
+shedding:
+  dataset: D1
+  replicas: [1, 2]
+  held_concurrency: [32, 128, 512, 2048]
+  limit_concurrency: 64
+  warmup_seconds: 5
+  measure_seconds: 45
+
 # The p95 the scale-out clock stops at (T8). Not a service guarantee — a
 # fixed line to measure recovery against, so "recovered" is a number and not
 # a judgement.

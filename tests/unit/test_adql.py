@@ -167,3 +167,75 @@ def test_tables_come_from_the_single_parse():
         "SELECT o.obs_id FROM caom.observation AS o JOIN caom.plane AS p ON o.obs_id = p.obs_id"
     )
     assert result.tables == frozenset({"caom.observation", "caom.plane"})
+
+
+# ---------------------------------------------------------------------------
+# Geometry-typed columns as INTERSECTS/CONTAINS arguments (package 7)
+# ---------------------------------------------------------------------------
+
+
+def test_geometry_column_as_intersects_argument():
+    from tapcore.query.adql import translate
+
+    result = translate(
+        "SELECT obs_id FROM srcnet.data_products"
+        " WHERE 1=INTERSECTS(s_region_geom, CIRCLE('ICRS', 10.5, -30.2, 0.5))"
+    )
+    assert (
+        "s_region_geom && scircle(spoint(RADIANS(10.5), RADIANS(-30.2)), RADIANS(0.5))"
+        in result.sql
+    )
+    assert result.tables == frozenset({"srcnet.data_products"})
+
+
+def test_geometry_column_in_either_argument_position():
+    from tapcore.query.adql import translate
+
+    first = translate(
+        "SELECT 1 FROM srcnet.artifacts WHERE 1=INTERSECTS(s_region_geom, CIRCLE('ICRS',1,2,0.1))"
+    ).sql
+    second = translate(
+        "SELECT 1 FROM srcnet.artifacts WHERE 1=INTERSECTS(CIRCLE('ICRS',1,2,0.1), s_region_geom)"
+    ).sql
+    assert "s_region_geom &&" in first
+    assert "&& s_region_geom" in second
+
+
+def test_point_in_geometry_column_via_contains():
+    from tapcore.query.adql import translate
+
+    sql = translate(
+        "SELECT 1 FROM srcnet.artifacts AS a WHERE 1=CONTAINS(POINT('ICRS', 1, 2), a.s_region_geom)"
+    ).sql
+    assert "spoint(RADIANS(1.0), RADIANS(2.0)) @ a.s_region_geom" in sql
+
+
+def test_two_geometry_columns_in_one_query_restore_independently():
+    from tapcore.query.adql import translate
+
+    sql = translate(
+        "SELECT 1 FROM srcnet.artifacts WHERE"
+        " 1=INTERSECTS(s_region_geom, POLYGON('ICRS', 1,2, 3,4, 5,6))"
+        " AND 1=CONTAINS(POINT('ICRS', 5, 6), s_region_geom)"
+    ).sql
+    assert sql.count("s_region_geom") == 2
+    assert "654321" not in sql  # no sentinel leaked
+
+
+def test_constructor_arguments_are_left_alone():
+    from tapcore.query.adql import translate
+
+    sql = translate(
+        "SELECT TOP 5 obs_id FROM ivoa.obscore"
+        " WHERE 1=CONTAINS(POINT('ICRS', s_ra, s_dec), CIRCLE('ICRS', 10.5, -30.2, 0.5))"
+    ).sql
+    assert "@ scircle" in sql and "654321" not in sql
+
+
+def test_predicate_names_inside_string_literals_are_not_rewritten():
+    from tapcore.query.adql import translate
+
+    sql = translate(
+        "SELECT obs_id FROM ivoa.obscore WHERE obs_collection = 'INTERSECTS(trap, x)'"
+    ).sql
+    assert "'INTERSECTS(trap, x)'" in sql

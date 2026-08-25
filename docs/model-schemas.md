@@ -75,10 +75,10 @@ Primary key: `project_id, obs_id, sbd_id, eb_id, product_id`
 | `sbd_id` | `sbd_id` | `text` | `char[*]` | no | yes | — | — |
 | `eb_id` | `eb_id` | `text` | `char[*]` | no | yes | — | — |
 | `product_id` | `product_id` | `text` | `char[*]` | no | yes | — | Unique identifier for the data product |
+| `data_product_origin` | `data_product_origin` | `text` | `char[*]` | yes | no | data_product_origin IN ('ODP', 'ADP') | Origin of the data product: ODP (Observatory Data Product) or ADP (Advanced Data Product) |
 | `o_ucd` | `o_ucd` | `text` | `char[*]` | no | no | — | Unified Content Descriptor for the observable (e.g., phot.flux.density;em.radio) |
 | `dataproduct_type` | `dataproduct_type` | `text` | `char[*]` | no | no | dataproduct_type IN ('image', 'cube', 'spectrum', 'visibility', 'sed', 'timeseries', 'table') | Type of data product |
 | `calib_level` | `calib_level` | `bigint` | `long` | no | no | calib_level >= 0; calib_level <= 3 | Calibration level (0=raw, 1=calibrated, 2=science-ready, 3=analysis) |
-| `data_product_origin` | `data_product_origin` | `text` | `char[*]` | yes | no | data_product_origin IN ('ODP', 'ADP') | Origin of the data product: ODP (Observatory Data Product) or ADP (Advanced Data Product) |
 | `target_name` | `target_name` | `text` | `char[*]` | yes | no | — | Name of the observed target |
 | `is_calibrator` | `is_calibrator` | `boolean` | `boolean` | yes | no | — | Whether this target is a calibrator |
 | `calibrator_type` | `calibrator_type` | `text` | `char[*]` | yes | no | calibrator_type IN ('flux', 'bandpass', 'phase', 'polarization', 'delay') | Type of calibrator if is_calibrator is true |
@@ -86,7 +86,8 @@ Primary key: `project_id, obs_id, sbd_id, eb_id, product_id`
 | `s_ra` | `s_ra` | `double precision` | `double` | yes | no | s_ra >= 0.0; s_ra <= 360.0 | Right ascension of product center in degrees (computed from artifacts) |
 | `s_dec` | `s_dec` | `double precision` | `double` | yes | no | s_dec >= -90.0; s_dec <= 90.0 | Declination of product center in degrees (computed from artifacts) |
 | `s_fov` | `s_fov` | `double precision` | `double` | yes | no | s_fov > 0.0; s_fov <= 10.0 | Field of view diameter in degrees (computed from artifacts, must be > 0) |
-| `s_region` | `s_region` | `text` | `char[*]` | yes | no | — | Spatial region description (computed from artifacts) |
+| `s_region` | `s_region` | `text` | `char[*]` | yes | no | — | Spatial region as STC-S in ICRS frame, degrees (computed from artifacts) |
+| `s_region_geom` | `derived from s_region` | `spoly` | `char[*]` | yes | no | — | pgsphere footprint derived from s_region at ingestion; query it with INTERSECTS/CONTAINS |
 | `em_wlen` | `em_wlen` | `double precision` | `double` | yes | no | em_wlen >= 0.0 | Representative wavelength in meters (computed from artifacts) |
 | `em_min` | `em_min` | `double precision` | `double` | yes | no | em_min >= 0.0195; em_min <= 6.0 | Minimum wavelength in meters (computed from artifacts) |
 | `em_max` | `em_max` | `double precision` | `double` | yes | no | em_max >= 0.0195; em_max <= 6.0 | Maximum wavelength in meters (computed from artifacts) |
@@ -131,7 +132,8 @@ Primary key: `project_id, obs_id, sbd_id, eb_id, product_id, artifact_id`
 | `s_ra` | `s_ra` | `double precision` | `double` | yes | no | s_ra >= 0.0; s_ra <= 360.0 | Right ascension of artifact center in degrees |
 | `s_dec` | `s_dec` | `double precision` | `double` | yes | no | s_dec >= -90.0; s_dec <= 90.0 | Declination of artifact center in degrees |
 | `s_fov` | `s_fov` | `double precision` | `double` | yes | no | s_fov > 0.0; s_fov <= 10.0 | Field of view diameter in degrees (must be > 0) |
-| `s_region` | `s_region` | `text` | `char[*]` | yes | no | — | Spatial region description (pgsphere format or STC-S in ICRS frame) |
+| `s_region` | `s_region` | `text` | `char[*]` | yes | no | — | STC-S region in ICRS frame, degrees: CIRCLE\|POLYGON\|POSITION (e.g. 'CIRCLE 3.5867 -30.4 0.25') |
+| `s_region_geom` | `derived from s_region` | `spoly` | `char[*]` | yes | no | — | pgsphere footprint derived from s_region at ingestion; query it with INTERSECTS/CONTAINS |
 | `em_wlen` | `em_wlen` | `double precision` | `double` | yes | no | em_wlen >= 0.0 | Representative wavelength in meters |
 | `em_min` | `em_min` | `double precision` | `double` | yes | no | em_min >= 0.0195; em_min <= 6.0 | Minimum wavelength in meters (SKA range: 0.0195m to 6m) |
 | `em_max` | `em_max` | `double precision` | `double` | yes | no | em_max >= 0.0195; em_max <= 6.0 | Maximum wavelength in meters (SKA range: 0.0195m to 6m) |

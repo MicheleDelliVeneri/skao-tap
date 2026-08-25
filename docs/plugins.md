@@ -142,6 +142,39 @@ corresponding pydantic field. Key columns cannot be changed, and the
 update is always scoped to the given root document. Re-`POST`ing a full
 document remains the way to amend everything at once.
 
+## Querying footprints (`s_region`)
+
+Data products and artifacts carry their sky footprint as an STC-S string —
+`CIRCLE`, `POLYGON` or `POSITION`, ICRS frame, degrees — validated at the
+producer by the data-model package. Text is not queryable, so at ingestion
+the service derives a pgsphere geometry into a companion column,
+`s_region_geom`, indexes it with GiST, and registers it in TAP_SCHEMA. ADQL
+`INTERSECTS` and `CONTAINS` accept it wherever a region goes:
+
+```sql
+-- everything overlapping a half-degree cone
+SELECT product_id, s_region
+FROM srcnet.data_products
+WHERE 1 = INTERSECTS(s_region_geom, CIRCLE('ICRS', 150.0, -30.0, 0.5))
+
+-- everything whose footprint covers a position
+SELECT product_id
+FROM srcnet.data_products
+WHERE 1 = CONTAINS(POINT('ICRS', 150.1, -30.1), s_region_geom)
+```
+
+The conversion is shape-faithful: a `POLYGON`'s vertices are used verbatim,
+a `CIRCLE` becomes a 32-vertex inscribed polygon (area within 0.7%), and a
+`POSITION` becomes a 0.1-arcsecond-wide octagon so point footprints answer
+overlap queries as points — small enough to stay within SKA astrometry, and
+wide enough that its adjacent vertices sit ~186x clear of pgsphere's 1e-9 rad
+coordinate epsilon, which the half-milliarcsecond polygon this started with
+did not. Amending `s_region` through `PATCH` re-derives the geometry in the
+same update, and a string that is not a valid region is
+refused with a 400 — at ingestion by the model's validator, at amendment by
+the service. The derived column never appears in fetched documents; it
+exists for ADQL.
+
 ## Deleting ingested metadata
 
 `DELETE /api/v1/<mount>/{root_id}` removes the root document. Every generated

@@ -136,6 +136,7 @@ def finalise(
         "headline": headline,
         "replica_capacity": runner.replica_capacities(results, slo_p95_s),
         "format_comparison": runner.format_comparison(results),
+        "shedding": runner.shedding_summary(results),
         "plan_flags": {
             name: {"count": count, "explanation": _plan_explanation(name)}
             for name, count in (plan_flags or {}).items()
@@ -325,6 +326,32 @@ def cmd_stress(args) -> int:
     return 0
 
 
+def cmd_shedding(args) -> int:
+    """Package 13: hold a bounded-concurrency overload, watch the refusals.
+
+    Prints the reduction the package asked for — per held concurrency, how
+    much of the shed load was answered (503) and how much was dropped at the
+    transport (see runner.TRANSPORT_DROP_ERRORS) — with and without
+    `tapApi.limitConcurrency`.
+    """
+    cfg = runner.load_config()
+    run = runs_mod.new_run("shedding", args.resume)
+    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    dataset = args.dataset or cfg["scenarios"]["shedding"]["dataset"]
+    datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
+    entries = build_corpus(cfg, datasets)
+    run.write_json("corpus.json", [e.as_dict() for e in entries])
+    results = runner.shedding(run, cfg, dataset, entries)
+    finalise(run, cfg, results, datasets, digests, corpus_entries=entries)
+    for row in runner.shedding_summary(results):
+        print(
+            f"{row['key']:32} {row['requests']:7d} requests  "
+            f"{row['rps']:7.1f} rps  503={row['refused_503']:<7d} "
+            f"drops={row['transport_drops']:<7d} other={row['other_errors']}"
+        )
+    return 0
+
+
 def cmd_serialize(args) -> int:
     """The writers on their own: no cluster, no database, no HTTP."""
     payload = serialize_mod.report(
@@ -455,6 +482,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = add("result-formats", cmd_result_formats, help="every result writer over the same rows")
     sub.add_argument("--dataset")
     sub = add("stress", cmd_stress, help="just the stress classes (Q09, Q11, Q13, Q14)")
+    sub.add_argument("--dataset")
+    sub = add("shedding", cmd_shedding, help="held overload: 503s versus socket drops")
     sub.add_argument("--dataset")
     sub = add("keda", cmd_keda, help="autoscaling scenarios K1-K7")
     sub.add_argument("--dataset")

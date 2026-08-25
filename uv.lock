@@ -1802,7 +1802,7 @@ dependencies = [
 
 [[package]]
 name = "ska-src-mm-notification"
-version = "0.1.7"
+version = "0.1.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "astropy" },
@@ -1810,9 +1810,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f7/6c/f79c2df167fd1f0f29ea083612cb956d8f3f07184ef7b60e09a3c132cfa1/ska_src_mm_notification-0.1.7.tar.gz", hash = "sha256:3e263963f3da033883b2ddb4801af88d1256d2dfcd1c25dac39d8b3e4cc93cf9", size = 38576, upload-time = "2026-08-22T09:31:56.659Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/68/7a/0e7c546c20b33bb728b9e30d2064cf91119116c575e326f4c44d1950c27c/ska_src_mm_notification-0.1.8.tar.gz", hash = "sha256:1f5fc82d90032a24c0f9d05e748a7c674c99ca60691213bf88baa48984fab43f", size = 41707, upload-time = "2026-08-24T10:54:56.561Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/d5/7f77b4457b68de5f8fa91c1481183cc2e08de0ca46450faaae2021f91356/ska_src_mm_notification-0.1.7-py3-none-any.whl", hash = "sha256:701a9e808657006834a14f5e93dc067f9bd8f35e9bd688e2eb727841ef6b80fc", size = 48276, upload-time = "2026-08-22T09:31:55.629Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/80/693a7695db735666a341fceb7f07ef6e9c5515995d1f3e61e5b4a61da42f/ska_src_mm_notification-0.1.8-py3-none-any.whl", hash = "sha256:81915519d0933634cb47dbf9d54f6e85f1b077796413f7be390e4dbab37194f6", size = 51792, upload-time = "2026-08-24T10:54:55.587Z" },
 ]
 
 [[package]]
@@ -1927,7 +1927,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "ska-src-mm-notification", specifier = ">=0.1.7" },
+    { name = "ska-src-mm-notification", specifier = ">=0.1.8" },
     { name = "ska-src-sdm", git = "https://gitlab.com/ska-telescope/src/src-mm/ska-src-mm-software-data-model.git?rev=cfb341ec307ce35f463065455b11317dc1a0ead9" },
     { name = "tapcore", editable = "libs/tapcore" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },

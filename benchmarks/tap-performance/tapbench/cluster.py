@@ -404,6 +404,25 @@ def set_autoscaling(*, api: bool, executor: bool, api_max: int = 8, executor_max
     )
 
 
+def set_limit_concurrency(value: int) -> None:
+    """Set uvicorn's per-worker connection ceiling on tap-api; 0 clears it.
+
+    Goes through the chart rather than `kubectl set env` so the values file
+    stays the single authority on what is deployed — and because a helm
+    upgrade resets every override the previous upgrade set, the caller must
+    re-apply replica counts afterwards.
+
+    That reset is total, not just of replicas: this upgrade carries one
+    `--set`, so it also discards the `horizontalAutoscaling.*=false` flags
+    `set_autoscaling()` applied before the shedding loop. It is only harmless
+    because config/chart-values.yaml has both autoscalers off anyway — flip
+    that file and the second rung of the shedding ladder would silently run
+    against an autoscaling fleet. Anything a caller needs to survive a flip
+    belongs in the suite values file, or must be re-applied after every one.
+    """
+    install_chart({"tapApi.limitConcurrency": str(value)})
+
+
 def scale(component: str, replicas: int) -> None:
     """Fix a component's replica count, for the no-autoscaler runs."""
     kubectl("scale", f"deploy/{RELEASE}-{component}", f"--replicas={replicas}")

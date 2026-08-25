@@ -1,5 +1,6 @@
 """Unit tests for the /api/v1 JSON facade (tap_api.endpoints.json_api) on the fake pool."""
 
+import json
 import os
 
 from ska_src_mm_notification.models.schemas.srcnet_ingestion import SRC_INGESTION_EXAMPLE
@@ -225,3 +226,80 @@ def test_amend_validates_against_the_model(client):
 def test_amend_unknown_project_is_404(client):
     response = _amend(client, "ghost", table="data_products", values={"beam_pa": 1.0})
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Region footprints: the derived pgsphere column (package 7)
+# ---------------------------------------------------------------------------
+
+
+def _stored_product(fake_db):
+    (row,) = fake_db.srcnet["srcnet.data_products"].values()
+    return row
+
+
+def test_ingest_derives_the_geometry_from_s_region(client, fake_db):
+    client.post("/api/v1/notifications", json=SRC_INGESTION_EXAMPLE)
+    row = _stored_product(fake_db)
+    assert row["s_region"] == "CIRCLE 3.5867 -30.4000 0.25"
+    geom = row["s_region_geom"]
+    assert geom.startswith("{(") and geom.endswith("d)}")
+    assert geom.count("),(") == 31  # a 32-gon approximating the circle
+
+
+def test_fetched_documents_do_not_carry_the_derived_column(client, fake_db):
+    client.post("/api/v1/notifications", json=SRC_INGESTION_EXAMPLE)
+    project_id = SRC_INGESTION_EXAMPLE["project_id"]
+    document = client.get(f"/api/v1/notifications/{project_id}").json()
+    product = document["observations"][0]["scheduling_blocks"][0]["execution_blocks"][0][
+        "data_products"
+    ][0]
+    assert product["s_region"] == "CIRCLE 3.5867 -30.4000 0.25"
+    assert "s_region_geom" not in product
+
+
+def test_amending_s_region_rederives_the_geometry(client, fake_db):
+    client.post("/api/v1/notifications", json=SRC_INGESTION_EXAMPLE)
+    before = _stored_product(fake_db)["s_region_geom"]
+    response = _amend(
+        client,
+        SRC_INGESTION_EXAMPLE["project_id"],
+        table="data_products",
+        values={"s_region": "CIRCLE 200.0 45.0 1.0"},
+    )
+    assert response.status_code == 200, response.text
+    row = _stored_product(fake_db)
+    assert row["s_region"] == "CIRCLE 200.0 45.0 1.0"
+    assert row["s_region_geom"] != before
+
+
+def test_amending_the_derived_column_directly_is_refused(client, fake_db):
+    client.post("/api/v1/notifications", json=SRC_INGESTION_EXAMPLE)
+    response = _amend(
+        client,
+        SRC_INGESTION_EXAMPLE["project_id"],
+        table="data_products",
+        values={"s_region_geom": "{(1d,2d),(3d,4d),(5d,6d)}"},
+    )
+    assert response.status_code == 400
+    assert "derived from s_region" in response.text
+
+
+def test_amending_s_region_with_garbage_is_refused(client, fake_db):
+    client.post("/api/v1/notifications", json=SRC_INGESTION_EXAMPLE)
+    response = _amend(
+        client,
+        SRC_INGESTION_EXAMPLE["project_id"],
+        table="data_products",
+        values={"s_region": "NOT A REGION"},
+    )
+    assert response.status_code == 400
+
+
+def test_ingesting_a_malformed_region_is_rejected_by_the_model(client):
+    bad = json.loads(json.dumps(SRC_INGESTION_EXAMPLE))
+    bad["observations"][0]["scheduling_blocks"][0]["execution_blocks"][0]["data_products"][0][
+        "s_region"
+    ] = "CIRCLE 400.0 20.0 1.0"  # RA out of range: 0.1.8's validator rejects it
+    response = client.post("/api/v1/notifications", json=bad)
+    assert response.status_code == 422
