@@ -4,9 +4,11 @@ Follow-up work is organized in numbered packages, referenced by number in
 issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
-**Packages 19 through 22 are open.** Everything through package 18 is
-delivered and merged; what each one settled is recorded in the findings
-below.
+**Packages 19, 20, 21 and 22 are open.** Everything through package 18 is
+delivered and merged; what each one settled is recorded in the findings below.
+Listed rather than given as a range, because packages are delivered out of
+order and a range silently misstates the set the moment one in the middle
+lands.
 
 ## Measured findings
 
@@ -618,10 +620,12 @@ from every result.
 Not in scope, and worth stating so the boundary is clear: the ADQL region
 algebra — `UNION`, `INTERSECTION`, `AREA`, `CENTROID`, `DISTANCE`, `COORD1` —
 is rejected by the grammar outright (`QueryParseError`, not a translation
-fault), and belongs to package 21. Nor is this work wasted by package 21
-deleting the sentinel: a grammar that accepts a geometry column directly still
-has to refuse a *text* one, so the check survives the sentinel's removal and
-only changes where it gets its list of candidate columns from.
+fault), and belongs to the ADQL 2.1 work (package 21). Nor is this work wasted
+when the sentinel substitution is deleted, as that work deletes it: a grammar
+that accepts a geometry column directly still has to refuse a *text* one, so
+the check survives the sentinel's removal and only changes where it gets its
+list of candidate columns from. This section is therefore written to stand
+whether package 21 is open or delivered.
 
 **Resolution is shown by** the standard spelling answered with a usage error
 that names `s_region_geom`, at the right HTTP status for a client error rather
