@@ -50,7 +50,8 @@ egernia_bench/
   runs.py       run directories, provenance, resumability
   dataset/      schema, server-side generator, size-driven growth
   load/         closed-loop and open-loop generation, per-request samples
-  collect/      Prometheus, PostgreSQL statistics, Kubernetes, validity guards
+  collect/      Prometheus, PostgreSQL statistics, Kubernetes, guards,
+                py-spy profiles, the OIDC stub issuer
   analyze/      statistics, KEDA timings, bottleneck rules, plots, HTML
   orchestrate/  what runs in what order
 results/        one directory per run (git-ignored)
@@ -204,6 +205,120 @@ Both hold everything but the format still: the same query class, the same
 corpus entries in the same order, so the rows found and fetched are identical
 and the difference between two measurements is the writer.
 
+## Per-request CPU, and what a token costs
+
+```
+egernia_bench profile            where one worker's per-request CPU goes, and a token's cost
+```
+
+Every scaling recommendation this suite produces rests on `TAP_CPU_BOUND`, and
+for a long time the only cause that classification named was ADQL translation
+— 41 ms of a ~50 ms request when the ceiling was first attributed. The fast
+path took translation to 1.2 ms and nothing re-attributed what remained, so
+"the API is CPU-bound" became a claim with 1.2 ms of evidence behind roughly
+10 ms of cost.
+
+This family answers it, at `replicas: 1, workers: 1` throughout so that "per
+request" and "per worker" are the same statement. Six rungs at one
+concurrency, chosen by the same short ladder that finds every published
+single-replica figure:
+
+| rung | what it is |
+| --- | --- |
+| `base` | unauthenticated, unprofiled — the reference |
+| `gil` | the same load, py-spy holding to GIL-owning stacks |
+| `all` | the same load again, every non-idle thread sampled |
+| `authverify` | every request carries a token the service verifies; nothing gated |
+| `authgil` | the authenticated rung, profiled |
+| `authgated` | the same, with the whole query surface enforced |
+| `noauth` | authentication off again |
+
+**Two profiler passes, because a worker has two exhaustible resources.**
+`--gil` samples only stacks holding the interpreter lock, which is the resource
+a single worker's throughput ceiling is *made of*. Sampling every non-idle
+thread adds the work done with the lock released — libpq on the socket, the
+writers' C extensions, the threadpool handoff — which is CPU the ceiling does
+not contain. The two are compared as distributions (`share_off_gil`): a
+subsystem larger among on-CPU samples than among GIL-holding ones is doing
+work the ceiling does not contain.
+
+**The split comes from the samples; the total comes from the cgroup.** py-spy
+says where the time goes, not how much of it there is. The denominator is
+Prometheus' CPU accounting for the same window over the requests that window
+served. Every per-subsystem millisecond figure is the product of the two, and
+neither alone.
+
+This is not fastidiousness. In nonblocking mode py-spy reached ~41 Hz of the
+100 it was asked for, so a pass's sample count is *not* a duration: read as
+interpreter-lock occupancy per request it would be out by a factor of two and a
+half. `profiled_occupancy_ms_per_request` is
+therefore `None` whenever the sampler missed its rate, with
+`occupancy_unavailable_reason` saying so and `achieved_sample_rate_hz` beside
+it. What the shares still support is the split; the total is what the cgroup is
+for.
+
+**A sample is attributed to the innermost frame that names a subsystem.** Leaf
+self-time is the wrong unit on its own — half of a serialiser's cost is stdlib
+`csv`, half of the translator's is `re` — so a leaf table says the hot function
+is `re.match` and names nothing anybody can act on. Rolling stdlib leaves up to
+the nearest named caller answers the question actually being asked: which
+*part of the request* the time belongs to. The share matching no rule is
+reported as a residual rather than folded into a bucket.
+
+**Sampling is nonblocking, and that is a measurement rather than a
+preference.** py-spy's default is to pause the process while it walks the
+stacks. Against a saturated `tap-api` worker that cost **74% of its
+throughput** — 95.5 rps unprofiled, 24.9 rps profiled at 100 Hz — and then got
+the pod killed: a worker stalled that hard cannot answer `/health/live` inside
+its one-second timeout, so the kubelet restarted a process that was busy rather
+than broken. Dropping to 5 Hz still cost 45%, because the expense is per
+attach (~100 ms of stall) and not per sample. Nonblocking cost 0.9% of throughput
+and buys torn stacks instead: py-spy discards the reads it can detect as
+inconsistent (kept as the profile's `error_fraction`) and misattributes the
+ones it cannot. Three of 24,400 samples in the published pass arrived with a
+frame name that was not even valid UTF-8, which is the visible floor of that
+bias rather than its measure — those are counted too. `--blocking` takes the
+accurate reading from a process that can survive it.
+
+The cost is measured either way. The profiled window is compared against the
+unprofiled rung before it, at the same concurrency on the same pod, and a
+profile costing more than `max_overhead_fraction` of throughput is marked
+invalid on the measurement as well as on the run — so the report leaves the
+attribution out rather than publishing a breakdown of a worker its own profiler
+slowed down. That guard is what produced the numbers above:
+`20260825T155319Z-44a69b9c-profile` is the run where it fired.
+
+**Authentication is real, not simulated.** `collect/oidc.py` generates a
+2,048-bit RSA keypair for the run, publishes its public half as a JWKS behind
+an in-cluster Service with a discovery document naming itself as the issuer,
+and mints RS256 tokens on the host. The service does everything it would do
+against an INDIGO IAM: discovery, `kid` lookup, signature, issuer, expiry,
+audience — there is no verified-token cache in it, deliberately, so every
+request pays a full verification. What is missing is only the IAM's own
+latency, paid once per JWKS lifetime rather than per request. The private key
+is generated in the process and discarded with it; nothing is committed.
+
+Two failures this family refuses rather than reports:
+
+- **A rung whose pods do not carry its policy.** Configuration reaches these
+  pods through a ConfigMap, which a container reads once at startup, so a
+  `helm upgrade` changing only ConfigMap data is a successful upgrade no
+  running pod has read. The chart hashes the ConfigMap into both pod templates
+  so such a change is a rollout; every rung then reads `/api/v1/auth` — the
+  service's own statement of what it enforces — and refuses to measure if it
+  disagrees. An "authenticated" rung served by pods with authentication off
+  measures the unauthenticated service twice and reports the difference as
+  zero.
+- **A gated rung nobody is allowed to use.** The token's group is the group
+  `config/auth-values.yaml` grants every gated operation to, so the
+  authorisation decision succeeds. A rung where every request is denied
+  measures the 403 path.
+
+The authenticated rungs are bracketed by two unauthenticated ones (`base`
+before, `noauth` after) and the comparison is against their mean: two helm
+upgrades and a pod restart separate them, and drift over a run would otherwise
+be indistinguishable from the cost of a token.
+
 ## Autoscaling
 
 The scenarios drive **`/tap/async`**, not `/tap/sync`. The repository's
@@ -269,6 +384,7 @@ Roughly, on the reference machine:
 | D4 | 45–90 min |
 | concurrency sweep, one dataset | 20–60 min depending on where it saturates |
 | result formats, 2 classes x 6 formats x 3 reps | ~50 min |
+| `profile` (ladder, six rungs, three 10-min passes, two chart upgrades) | ~65 min |
 | `serialize` (no cluster) | 15 s |
 | fixed replica scaling | ~2 h for 4 counts x 6 rates |
 | KEDA K1–K7 | ~1.5 h |

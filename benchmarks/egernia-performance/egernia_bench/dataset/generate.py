@@ -255,6 +255,22 @@ def highest_observation(conn) -> int:
 
 
 def apply_schema(conn) -> None:
+    # On a fresh cluster the API boots before any dataset exists, and its
+    # ObsCore plugin installs ivoa.obscore as a view over the (empty) ODP
+    # tables. The suite publishes its synthetic table under that name — the
+    # service's bootstrap explicitly leaves a non-view obscore alone for
+    # exactly this case — but CREATE TABLE IF NOT EXISTS skips over a view
+    # silently, and the index DDL then fails on it. So the view is dropped
+    # rather than skipped over; only a view, because a table under that name
+    # is the suite's own data and must survive a resume.
+    existing = conn.execute(
+        "SELECT c.relkind FROM pg_class c"
+        " JOIN pg_namespace n ON n.oid = c.relnamespace"
+        " WHERE n.nspname = 'ivoa' AND c.relname = 'obscore'"
+    ).fetchone()
+    if existing and existing[0] == "v":
+        log.info("ivoa.obscore exists as the service's view; replacing it with the dataset table")
+        conn.execute("DROP VIEW ivoa.obscore")
     for name in ("generate.sql", "schema.sql"):
         conn.execute((HERE / name).read_text())
     conn.execute(SPATIAL_INDEX)

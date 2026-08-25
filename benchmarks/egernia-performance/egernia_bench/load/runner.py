@@ -290,7 +290,7 @@ async def _issue_async(
     )
 
 
-def _client(concurrency: int, timeout_s: float) -> httpx.AsyncClient:
+def _client(concurrency: int, timeout_s: float, token: str | None = None) -> httpx.AsyncClient:
     # Connection limits above the offered concurrency, and keep-alive on: a
     # generator that reconnects per request measures TCP setup, and one that
     # queues internally on a small pool measures its own pool.
@@ -299,7 +299,16 @@ def _client(concurrency: int, timeout_s: float) -> httpx.AsyncClient:
         max_keepalive_connections=max(concurrency * 2, 64),
         keepalive_expiry=60.0,
     )
-    return httpx.AsyncClient(limits=limits, timeout=httpx.Timeout(timeout_s), http2=False)
+    # One bearer token for the whole rung, on the client rather than per
+    # request. That is what a client does, and it is not a shortcut: the
+    # service caches signing keys but never principals, so every request still
+    # pays a full RS256 verification. Absent (the default) means the request
+    # carries no Authorization header at all, which is what every other family
+    # measures.
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    return httpx.AsyncClient(
+        limits=limits, timeout=httpx.Timeout(timeout_s), http2=False, headers=headers
+    )
 
 
 async def closed_loop(
@@ -312,6 +321,7 @@ async def closed_loop(
     mode: str = "sync",
     response_format: str = "csv",
     timeout_s: float = 120.0,
+    token: str | None = None,
 ) -> tuple[Recorder, float]:
     """N clients, each issuing the next request as soon as the last finishes.
 
@@ -326,7 +336,7 @@ async def closed_loop(
     warm = Recorder()  # discarded: it exists to fill caches and pools
     stop = asyncio.Event()
 
-    async with _client(concurrency, timeout_s) as client:
+    async with _client(concurrency, timeout_s, token) as client:
         watcher = asyncio.create_task(recorder.watch_self(stop))
 
         async def worker(target: Recorder, until: float) -> None:
@@ -398,6 +408,7 @@ def _closed_loop_share(payload: dict) -> tuple[list, list, float]:
             mode=payload["mode"],
             response_format=payload["response_format"],
             timeout_s=payload["timeout_s"],
+            token=payload["token"],
         )
     )
     return recorder.samples, recorder.cpu_samples, elapsed
@@ -417,6 +428,7 @@ def closed_loop_sharded(
     mode: str = "sync",
     response_format: str = "csv",
     timeout_s: float = 120.0,
+    token: str | None = None,
 ) -> tuple[Recorder, float]:
     """A closed loop split across processes, so the generator scales.
 
@@ -446,6 +458,7 @@ def closed_loop_sharded(
             "mode": mode,
             "response_format": response_format,
             "timeout_s": timeout_s,
+            "token": token,
         }
         for index, share in enumerate(shares)
         if share > 0
@@ -503,6 +516,7 @@ async def open_loop(
     timeout_s: float = 600.0,
     arrival_seed: int = 90210,
     max_in_flight: int = 4096,
+    token: str | None = None,
 ) -> tuple[Recorder, list[dict]]:
     """Arrivals at a schedule, whether or not the service keeps up.
 
@@ -528,7 +542,7 @@ async def open_loop(
     # and a socket waiting for a slot is not busy, so the CPU guard cannot see
     # it. These are ceilings rather than allocations: httpx opens what it needs,
     # so a generous one costs nothing and removes a silent limiter.
-    async with _client(min(max_in_flight, 8192), timeout_s) as client:
+    async with _client(min(max_in_flight, 8192), timeout_s, token) as client:
         watcher = asyncio.create_task(recorder.watch_self(stop))
         # A fixed seed, not hash("arrivals"): str hashing is randomised per
         # process, so that would have made the arrival pattern differ between

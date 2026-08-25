@@ -10,11 +10,47 @@ The suite currently measures:
 - ADQL geometry translation;
 - ADQL translation plus referenced-table inspection;
 - VOTable serialization of 1,000 typed rows;
-- JSON serialization of 1,000 typed rows.
+- JSON serialization of 1,000 typed rows;
+- a whole `/tap/sync` request, per query class and over the normal mix.
 
 These tests intentionally exclude PostgreSQL, network traffic, and disk I/O.
 That makes their benchmark JSON useful for comparisons between runs. Database
 and full-service capacity are covered by the PostgreSQL performance workflow.
+
+## The whole-request benchmarks
+
+The first four measure functions. Everything else a request pays for — DALI
+parameter parsing, the published-table check, format negotiation, the streamed
+response, the observability instrumentation — used to be invisible to this
+suite, which is how the service's CPU ceiling kept an attribution to ADQL
+translation for months after the fast path took translation from 41 ms to
+1.2 ms.
+
+`test_benchmark_sync_request_*` drives the real ASGI application the way
+uvicorn does: a scope, a `receive` that hands over the form body, a `send`
+that collects the response. Two things are deliberately absent, and both are
+named subsystems in the cluster profile
+(`benchmarks/egernia-performance`, `make benchmark-profile`), so the gap
+between this figure and a measured per-request CPU is attributable rather than
+mysterious:
+
+- **PostgreSQL, and libpq with it.** The connection is stubbed and its rows are
+  built once at import, so psycopg's per-request row conversion is excluded
+  rather than imitated. A Python re-implementation of a C conversion would be a
+  fabricated cost, and a wrong one.
+- **uvicorn, h11 and the socket.** The application is called directly, so the
+  HTTP parse and the write are absent.
+
+Row counts and shapes per class are the ones a D1 saturation window actually
+measured — the mean successful response divided by that class's row width — not
+the `TOP` clause. A cone search with `TOP 500` returns around 233 rows, and
+sizing the writers by the limit would make every cone class several times its
+measured weight. `test_benchmark_sync_request_normal_mix` draws one request per
+iteration from the mix in `config/scenarios.yaml`'s proportions, so its **mean**
+is the mix-weighted per-request cost: at `replicas: 1, workers: 1` the service
+serves one request at a time, so the reciprocal of that mean is comparable to a
+measured single-worker saturation throughput. The comparison is a sanity check
+on the benchmark's scale, not a service-level objective.
 
 ## Run locally
 

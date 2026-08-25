@@ -4,7 +4,7 @@ Follow-up work is organized in numbered packages, referenced by number in
 issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
-**Packages 18 through 21 are open.** Everything through package 17 is
+**Packages 19 through 21 are open.** Everything through package 18 is
 delivered and merged; what each one settled is recorded in the findings
 below.
 
@@ -18,6 +18,100 @@ so it can be checked and it can go stale — the run that produced it is named.
 Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/egernia-performance/results/`.
+
+### 2026-08-25 — the API's per-request CPU, named (package 18, delivered)
+
+One profile run (`20260825T163627Z-034d69ba`), one worker, `tapApi.replicas: 1`
+and `tapApi.workers: 1` throughout, ten rungs at the knee of a short ladder
+(c=4 at 100.6 rps and p95 61 ms; c=8 bought 133 ms of p95 for no more
+throughput). py-spy attached to the pod from the host — nothing added to the
+image — 24,593 GIL-held samples over ten minutes, each attributed to the
+innermost frame that names a subsystem so stdlib time rolls up to the part of
+the request that spent it. **99.1% of samples reach a named subsystem, and
+75.3% of the request is the application's own work** rather than the server,
+the router or the event loop:
+
+| subsystem | ms/request | share |
+| --- | --- | --- |
+| ADQL translation | 3.19 | 30.9% |
+| result writers | 2.29 | 22.1% |
+| psycopg and row conversion | 1.61 | 15.6% |
+| event loop | 0.95 | 9.2% |
+| threadpool handoff | 0.81 | 7.8% |
+| ASGI routing and dependencies | 0.58 | 5.6% |
+| query preparation | 0.32 | 3.1% |
+| observability | 0.23 | 2.2% |
+| HTTP server | 0.14 | 1.4% |
+| everything else named | 0.20 | 2.0% |
+| unattributed | 0.10 | 0.9% |
+
+The split is the profile's; the 10.55 ms it is applied to is the pod's own CPU
+accounting divided by the requests that window served. Neither number can
+produce the other, and a sampling profiler must never be a source of throughput
+figures.
+
+- **This package's own premise was wrong: translation never stopped being the
+  largest cost.** It opened by noting the fast path took ADQL translation from
+  41 ms to 1.2 ms and asking where the remaining ~88% went. Translation is
+  3.19 ms — 30.9% of the request, still the biggest named subsystem — and the
+  in-process micro-benchmarks agree independently: 2.57 ms for the cone search
+  that dominates the mix, 2.86 ms for a join. Two methods about 20% apart, both
+  around 2.5x the published figure. The 35x the fast path bought is real (the
+  old two-pass shape still measures 256 ms in `tests/benchmarks`), but 1.2 ms
+  described something narrower than a whole request's translation and was read
+  as though it described all of it.
+- **The busiest single frame in the service is the CSV writer.** `stream_dsv`
+  alone is 20.8% of GIL-held time, and the writers together are 22.1% — second
+  only to translation — on a mix whose mean response is around 124 rows. This
+  is the first time the writers have been visible *behind an HTTP request*
+  rather than measured alone by `benchmark-serialize`.
+- **Authentication is the cheap part, and it had never been measured.** With
+  every request carrying a token the service verifies against a real in-cluster
+  JWKS — RS256, 2,048-bit, keys cached for the configured five minutes, no
+  principal cache anywhere — throughput fell 3.1% (98.1 to 95.1 rps) for
+  +0.48 ms of CPU per request, and token verification shows up in the
+  authenticated profile at 3.0% of GIL-held time, of which the signature check
+  itself is 0.8%. Enforcing the whole query surface on top costs 6.2% and
+  +0.94 ms. Both rungs ran at 0.00% errors, so these are the costs of
+  verification and of an authorisation decision that succeeds — not of refusing
+  traffic.
+- **Read those percentages beside the drift, not instead of it.** The two
+  unauthenticated rungs bracketing the authenticated ones measured 96.2 and
+  100.0 rps: a 3.9% spread within one run, the same size as the effect being
+  measured. The honest statement is "a few percent, inside a drift of the same
+  order", and it is only available because the family brackets.
+- **The end-to-end hot-path benchmark reconciles to 5%.**
+  `test_benchmark_sync_request_normal_mix` drives the real ASGI app over the mix
+  and reports 8.20 ms per request against the 10.55 ms measured here — 22% low,
+  just outside the 20% this package asked for. It is outside it for two reasons
+  the profile names and prices: the benchmark has no libpq (psycopg, 1.61 ms)
+  and no uvicorn or h11 (0.14 ms). Adding those back gives 9.95 ms against
+  10.55 — 5.3%. Both are reported: the raw figure is what CI regresses against,
+  the reconciled one is what says the benchmark measures the right thing.
+- **What the profiler cost.** py-spy's default blocking mode took 74% of this
+  service's throughput (95.5 to 24.9 rps) and then stalled the worker past its
+  one-second liveness timeout, so the kubelet restarted a process that was busy
+  rather than broken — the same failure mode the probes were split to prevent,
+  arriving from a new direction. At 5 Hz it still cost 45%, because the expense
+  is roughly 100 ms per attach rather than per sample. Sampling is nonblocking
+  as a result: 0.9% of throughput, paid for in torn stacks — three of 24,593
+  samples arrived with a frame name that was not valid UTF-8 and 193 arrived
+  with no stack at all, both counted into the residual rather than dropped from
+  the denominator. The run where blocking mode fired both guards is kept as
+  `20260825T155319Z-44a69b9c-profile`.
+- **One thing the family does not deliver.** The all-threads pass was meant to
+  separate CPU spent with the GIL released. It does not: py-spy counts a thread
+  blocked in `epoll` as non-idle, so 84% of that pass is the event loop waiting.
+  It is published as a distribution of thread activity, and the attribution
+  rests on the GIL pass against the cgroup total.
+- **A provenance caveat about this run.** Its directory name and
+  `environment.json` record commit `034d69b` on branch
+  `feat/repoint-references-to-ska-telescope`, because a concurrent session
+  checked that branch out in the shared working tree while the run was in
+  flight. The code measured was this package's working tree throughout, which
+  `dirty: true` records; the branch and SHA describe what git happened to have
+  checked out, not what ran. A run's provenance is only as good as its
+  worktree's exclusivity, which is now a thing to know about this suite.
 
 ### 2026-08-25 — the size sweep is finished, and size almost is not the story (packages 16 and 17, delivered)
 
@@ -384,46 +478,13 @@ cache hit ratios, per-class latencies.
 After the translation fix the normal mix remains `TAP_CPU_BOUND` on D1 (2 GiB)
 and D2 (10 GiB) alike: PostgreSQL sits near idle for it. Saturation moved from
 four concurrent clients on D1 to eight on D2. So replicas and `tapApi.workers`
-remain the throughput lever — and each worker is now worth roughly 200
-requests/s rather than 20.
+remain the throughput lever.
 
-## Package 18 — Name the API's per-request CPU
-
-Every scaling recommendation on this page rests on `TAP_CPU_BOUND`, and the
-only cause it ever named is gone. ADQL translation was 41 ms of a ~50 ms
-request when the API's ceiling was first attributed; the fast path took it to
-1.2 ms (35x, `e38ed30`), and nothing has re-attributed what remains. One
-uvicorn worker is one GIL-bound thread, so the newest single-replica runs put
-the budget at roughly 10 ms of CPU per request — 98.0 rps at saturation on D1
-(`20260825T005436Z-b450b0a9`) and 98.9 rps at C1
-(`20260824T235130Z-ccbcb41a`), both at `tapApi.replicas: 1`,
-`tapApi.workers: 1` — of which translation is now 1.2 ms. About 88% of the
-ceiling is unaccounted for, and two published figures already disagree about
-it: the 2026-08-23 finding above says a worker is worth "roughly 200
-requests/s", where these runs measure half that.
-
-The per-request profile is also missing the one cost production always pays.
-No benchmark enables authentication — `benchmarks/egernia-performance/config/chart-values.yaml`
-configures no OIDC issuer — so every capacity figure on this page is an
-unauthenticated figure, while a deployment that gates its endpoints verifies a
-token on exactly this CPU-bound path.
-
-Work: profile a saturated `tap-api` worker under the closed-loop normal mix
-(`py-spy` against the worker process, the tool
-[Python performance](python-performance.md) already prescribes for the
-micro-benchmarks) and attribute the 10 ms to named frames — request parsing
-and parameter validation, psycopg row conversion, the result writers at small
-row counts, observability instrumentation, and the translation that is now a
-twelfth of it. `tests/benchmarks/test_hot_paths.py` measures translation and
-two serializers but never a whole request, so a regression anywhere else is
-currently invisible; whatever the profile names belongs there as a hot path.
-
-**Resolution is shown by** a profile of the saturated worker in which named
-frames account for at least 80% of a request's CPU, published as a finding
-here; a hot-path benchmark covering the request path end to end whose
-per-request total agrees with the measured saturation throughput within 20%;
-and one measured rung with authentication enabled, so the cost of verifying a
-token on this path is a number rather than an assumption.
+**Corrected 2026-08-25:** this finding also said each worker was "now worth
+roughly 200 requests/s rather than 20". It is worth roughly 100 — 96 to 100 rps
+across the ten rungs of `20260825T163627Z-034d69ba`, and 98.9 rps at C1 in
+`20260824T235130Z-ccbcb41a` before that. The 200 was never measured on a
+single-replica rung; it is withdrawn, and the rest of the finding stands.
 
 ## Package 19 — Workers against replicas, on one host
 

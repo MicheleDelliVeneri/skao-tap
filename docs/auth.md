@@ -265,6 +265,31 @@ without `aud` validation a token minted for any other client of the same
 issuer would be accepted here as its bearer's credential. Accepting that is
 possible but has to be asked for: `auth.iam.allowAnyAudience: true`.
 
+### What verification costs
+
+Measured, on one worker at saturation, against the same rung with
+authentication off (`20260825T163627Z-034d69ba`; see
+[Performance](performance/index.md)):
+
+| | requests/s | CPU per request | cost |
+| --- | --- | --- | --- |
+| no token | 98.1 | 10.51 ms | — |
+| every token verified, nothing gated | 95.1 | 10.99 ms | 3.1% of throughput |
+| …and the whole query surface gated | 92.0 | 11.45 ms | 6.2% of throughput |
+
+So enabling authentication costs a few percent of throughput, and gating the
+query operations on top of it costs a few more. In the profile of that
+authenticated worker, token verification is 3.0% of the interpreter's time and
+the RSA signature check itself is 0.8% — the rest is the bearer header, the JWT
+claim checks, and the threadpool hop that keeps them off the event loop.
+
+Two caveats worth carrying. The run-to-run drift over that measurement was
+3.9%, which is the same size as the effect, so "a few percent" is the honest
+resolution rather than the second decimal place. And this is the cost of
+verification, not of the IAM: discovery and JWKS are fetched once per
+`auth.iam.jwksCacheSeconds`, so a deployment whose IAM is slow or far away pays
+that separately, on one request in every cache window.
+
 Group membership is read from `groups` and `wlcg.groups` by default, and
 normalised to a leading slash, so `/ska/oper` and `ska/oper` in
 configuration mean the same thing. `entitlements` and
