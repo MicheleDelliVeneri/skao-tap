@@ -523,6 +523,28 @@ def _port_accepts(host: str = "127.0.0.1", port: int = 55433) -> bool:
         return probe.connect_ex((host, port)) == 0
 
 
+def _database_answers(timeout_s: float) -> bool:
+    """A real handshake through the forward, not just an accepting socket.
+
+    An accepting socket is not a serving database: a forwarder terminated by
+    a previous benchmark process keeps accepting for a moment while it dies,
+    and a run that adopted the port in that window opened its generation
+    connection into a proxy with no backend — "server closed the connection
+    unexpectedly", after helm had reported every pod ready.
+    """
+    import psycopg
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with psycopg.connect(database_dsn(), connect_timeout=5) as conn:
+                conn.execute("SELECT 1")
+            return True
+        except psycopg.OperationalError:
+            time.sleep(1.0)
+    return False
+
+
 def port_forward_database(timeout_s: float = 60.0) -> subprocess.Popen:
     """Ensure the database is reachable on the host, once per process.
 
@@ -545,10 +567,20 @@ def port_forward_database(timeout_s: float = 60.0) -> subprocess.Popen:
     if _port_accepts():
         # Something already forwards this port — another benchmark process, or
         # a forward this process started and lost track of. Spawning a second
-        # one would leave a doomed kubectl that cannot bind, so the open port
-        # is taken at face value.
-        log.debug("database port already forwarded by another process")
-        return subprocess.Popen(["true"])
+        # one would leave a doomed kubectl that cannot bind — but adopting the
+        # port is only safe once the database answers through it: a forwarder
+        # a finished process just terminated keeps accepting while it dies.
+        if _database_answers(10.0):
+            log.debug("database port already forwarded by another process")
+            return subprocess.Popen(["true"])
+        log.info("port 55433 accepts but the database does not answer; waiting for it to free")
+        deadline = time.monotonic() + timeout_s
+        while _port_accepts() and time.monotonic() < deadline:
+            time.sleep(1.0)
+        if _port_accepts():
+            raise RuntimeError(
+                "port 55433 is held by a forward the database does not answer through"
+            )
     _forward = subprocess.Popen(
         [
             "kubectl",
@@ -564,7 +596,9 @@ def port_forward_database(timeout_s: float = 60.0) -> subprocess.Popen:
     atexit.register(close_database_forward)
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        if _port_accepts():
+        # The handshake, not just the open port: our own fresh forward can
+        # also front a database that is still starting.
+        if _port_accepts() and _database_answers(min(10.0, deadline - time.monotonic())):
             log.debug("database port-forward ready")
             return _forward
         if _forward.poll() is not None:
