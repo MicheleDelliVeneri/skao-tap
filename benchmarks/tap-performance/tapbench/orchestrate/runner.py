@@ -142,6 +142,7 @@ def limits(cfg: dict) -> dict:
     exec_cpu = _quantity(dig(LIMITS_FROM_VALUES["tap_executor_cpu_limit_cores"]), 2.0)
     pg_cpu = _quantity(dig(LIMITS_FROM_VALUES["postgres_cpu_limit_cores"]), 4.0)
     pool = int((values.get("config") or {}).get("dbPoolMax") or 8)
+    pool_timeout = float((values.get("config") or {}).get("dbPoolTimeoutSeconds") or 5.0)
     workers = int((values.get("tapApi") or {}).get("workers") or 1)
     # The CPU ceiling that matters for the API is not the pod's limit: ADQL
     # translation is pure-Python and holds the GIL, so one uvicorn worker
@@ -160,6 +161,9 @@ def limits(cfg: dict) -> dict:
         "tap_executor_pod_cpu_limit_cores": exec_cpu,
         "postgres_cpu_limit_cores": pg_cpu,
         "db_pool_max_total": pool,
+        # what a pool wait is graded against: a wait can never legitimately
+        # exceed this, so a longer one is a measurement artefact
+        "db_pool_timeout_s": pool_timeout,
         # Read from the chart rather than restated here. These were constants
         # matching the values file at the time it was written, which is a
         # constant that goes wrong silently: MEMORY_BOUND is judged against

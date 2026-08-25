@@ -391,3 +391,21 @@ def test_the_request_id_does_not_outlive_the_request(client):
     """Work after the response must not be attributed to it."""
     client.get("/tap/availability", headers={obs.REQUEST_ID_HEADER: "scoped-id"})
     assert obs.request_id() is None
+
+
+def test_pool_wait_buckets_bracket_the_timeout(auth_settings):
+    """A timed-out acquire waits fractionally longer than the timeout; the
+    edge pair (t, 1.2t] pins it there instead of letting quantile
+    interpolation read the middle of a wide bucket (a 5 s timeout was
+    reported as a 9.7 s p95)."""
+    from tapcore.observability import _pool_wait_buckets
+
+    buckets = _pool_wait_buckets()
+    assert buckets == tuple(sorted(buckets))
+    timeout = 5.0  # the default
+    assert timeout in buckets
+    assert round(timeout * 1.2, 3) in buckets
+
+    auth_settings(db_pool_timeout_s=2.5)
+    rederived = _pool_wait_buckets()
+    assert 2.5 in rederived and 3.0 in rederived

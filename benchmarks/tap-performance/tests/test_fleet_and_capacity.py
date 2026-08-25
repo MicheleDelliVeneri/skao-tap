@@ -10,6 +10,8 @@ rather than a missing one. These pin the corrections.
 import pathlib
 import sys
 
+import pytest
+
 SUITE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SUITE))
 
@@ -483,3 +485,132 @@ def test_the_bracket_uses_the_configured_signal_count_not_a_hardcoded_two():
         )
         == 3
     )
+
+
+# ---------------------------------------------------------------------------
+# The three recorded misreadings (package 15)
+# ---------------------------------------------------------------------------
+
+
+def test_pool_confidence_grades_against_the_timeout():
+    """The bug this pins: min(1.0, wait) made any wait over one second full
+    confidence, so the class outranked everything wherever the pool waited
+    at all. A 0.5 s wait against a 5 s timeout is a tenth of a case."""
+    rows = _rows(
+        ("tap_db_connections_in_use", [2.0] * 50),
+        ("tap_pool_wait_p95", [0.5] * 50),
+        ("api_replicas_ready", [1.0] * 50),
+    )
+    verdicts = {v.classification: v for v in _classify(rows)}
+    pool = verdicts["CONNECTION_POOL_BOUND"]
+    assert pool.confidence == 0.1
+    assert pool.evidence["pool_timeout_s"] == 5.0
+
+
+def test_a_wait_at_the_timeout_is_still_full_confidence():
+    rows = _rows(
+        ("tap_db_connections_in_use", [8.0] * 50),
+        ("tap_pool_wait_p95", [5.0] * 50),
+        ("api_replicas_ready", [1.0] * 50),
+    )
+    verdicts = {v.classification: v for v in _classify(rows)}
+    assert verdicts["CONNECTION_POOL_BOUND"].confidence == 1.0
+
+
+def test_a_ramping_fleet_is_judged_against_the_pods_ready_at_each_sample():
+    """The bug this pins: the executor ceiling was the *peak* ready count
+    times one core across the whole window, so a fleet pinned at 2, then 4,
+    then 8 cores — pinned the entire time — read UNKNOWN against an 8-core
+    ceiling it only reached at the end."""
+    cpu = [1.9] * 40 + [7.9] * 10
+    ready = [2.0] * 40 + [8.0] * 10
+    rows = _rows(
+        ("tap_executor_cpu_cores", cpu),
+        ("executor_replicas_ready", ready),
+    )
+    limits = {**LIMITS, "tap_executor_cpu_limit_cores": 1.0}
+    verdicts = {
+        v.classification: v
+        for v in bottleneck.classify(
+            metrics_rows=rows,
+            summary={"window_seconds": 60.0, "requests": 100, "error_fraction": 0.0},
+            pg_summary={"cache_hit_ratio": 1.0},
+            recorder_cpu_peak=0.05,
+            limits=limits,
+        )
+    }
+    pinned = verdicts["EXECUTOR_CPU_BOUND"]
+    assert pinned.evidence["fraction_of_window_above_90pct_limit"] == 1.0
+
+    # and the old reading, for contrast: against the peak-sized ceiling only
+    # the final third is hot, which is below the rule's threshold
+    peak_limit = 8.0
+    old_hot = sum(1 for v in cpu if v > 0.9 * peak_limit) / len(cpu)
+    assert old_hot < 0.25
+
+
+def test_a_fleet_scaling_mid_window_does_not_overstate_the_ceiling_mid_ramp():
+    """Mid-ramp, usage at the then-fleet's ceiling counts as hot even though
+    the window's eventual peak fleet is larger."""
+    at = bottleneck.aligned_fleet(
+        _rows(("executor_replicas_ready", [1.0] * 10 + [4.0] * 10)),
+        __import__("numpy").asarray([0.0, 5.0, 12.0, 19.0]),
+        "executor_replicas_ready",
+    )
+    assert list(at) == [1.0, 1.0, 4.0, 4.0]
+
+
+def test_a_ramping_fleet_still_reads_as_serialization_bound():
+    """The gate for SERIALIZATION_BOUND is 60% of the API's ceiling, which
+    makes it the most sensitive of the three to an overstated one: against the
+    peak fleet a run that spent its window formatting bytes reads as only a
+    fifth busy, misses the 0.25 threshold, and is filed as UNKNOWN."""
+    cpu = [1.5] * 40 + [6.0] * 10
+    ready = [2.0] * 40 + [8.0] * 10
+    rows = _rows(
+        ("tap_api_cpu_cores", cpu),
+        ("api_replicas_ready", ready),
+        ("postgres_cpu_cores", [0.5] * 50),
+    )
+    verdicts = {
+        v.classification: v
+        for v in bottleneck.classify(
+            metrics_rows=rows,
+            summary={
+                "window_seconds": 60.0,
+                "requests": 1000,
+                "error_fraction": 0.0,
+                "response_bytes_total": 500_000_000.0,
+                "response_throughput_bytes_per_s": 8.3e6,
+            },
+            pg_summary={"cache_hit_ratio": 1.0},
+            recorder_cpu_peak=0.05,
+            limits=LIMITS,
+        )
+    }
+    # busy against the fleet that was ready at each sample, the whole window
+    assert verdicts["SERIALIZATION_BOUND"].evidence["api_busy_fraction"] == 1.0
+    # neither pod was near its own ceiling, so this is not the CPU class
+    assert "TAP_CPU_BOUND" not in verdicts
+
+    # and the old reading, for contrast: against the peak-sized ceiling only
+    # the final fifth is busy, which is below the rule's threshold
+    peak_limit = LIMITS["tap_api_cpu_limit_cores"] * 8.0
+    old_busy = sum(1 for v in cpu if v > 0.60 * peak_limit) / len(cpu)
+    assert old_busy < 0.25
+
+
+def test_an_untimed_metrics_row_is_refused_rather_than_silently_partial():
+    """The timed path is only fallen back on when it is *empty*, so a metric
+    whose rows were partly timestamped would judge the window on whichever
+    subset carried a `t` and report it as the whole. Every row from a
+    measurement is timestamped — Prometheus.collect() writes `t` on all of
+    them and the metrics Parquet has it as a column — so a row without one is
+    a caller bug, and it says so instead of computing a plausible number."""
+    rows = _rows(("tap_api_cpu_cores", [0.5] * 10), ("api_replicas_ready", [1.0] * 10))
+    del rows[3]["t"]
+    with pytest.raises(ValueError, match="tap_api_cpu_cores: 1 of 10 rows carry no 't'"):
+        _classify(rows)
+
+    # fully timestamped, the same rows classify normally
+    assert _classify(_rows(("tap_api_cpu_cores", [0.5] * 10), ("api_replicas_ready", [1.0] * 10)))

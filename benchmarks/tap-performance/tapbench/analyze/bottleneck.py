@@ -62,6 +62,55 @@ def fleet_replicas(metrics_rows: list[dict], metric: str = "api_replicas_ready")
     return max(float(finite.max()), 1.0) if finite.size else 1.0
 
 
+def _timed_series(rows: list[dict], metric: str) -> tuple[np.ndarray, np.ndarray]:
+    """A metric as (t, value), asserting that every row of it is timestamped.
+
+    The callers fall back to the untimed `_series` only when this comes back
+    empty, so PARTIAL coverage would silently judge `hot` and `api_busy` over
+    whichever fraction of the window happened to carry a `t` — a verdict
+    computed on a subset and reported as the window's, which is the same
+    species of confident-wrong answer as the peak-fleet ceiling was.
+    Asserted rather than tolerated because `t` is not optional in the real
+    data: Prometheus.collect() writes it on every row it builds, the metrics
+    Parquet has it as a column (so Prometheus.write() raises without it), and
+    both re-analysis paths rebuild rows from that column. A row without one
+    therefore cannot come from a measurement — it is a caller bug, and
+    dropping it quietly would hide it behind a plausible number.
+    """
+    of_metric = [r for r in rows if r["metric"] == metric]
+    timed = [r for r in of_metric if "t" in r]
+    if len(timed) != len(of_metric):
+        raise ValueError(
+            f"{metric}: {len(of_metric) - len(timed)} of {len(of_metric)} rows carry no 't'; "
+            "every metrics row is timestamped by construction"
+        )
+    if not timed:
+        return np.empty(0), np.empty(0)
+    t, v = zip(*sorted((r["t"], r["value"]) for r in timed), strict=True)
+    return np.asarray(t, dtype=float), np.asarray(v, dtype=float)
+
+
+def aligned_fleet(rows: list[dict], at: np.ndarray, metric: str) -> np.ndarray:
+    """The ready replica count *at each sample time*, stepwise, never below one.
+
+    The peak count over the whole window is the wrong ceiling for a fleet
+    that ramps: mid-ramp the ceiling is overstated (the pods that will exist
+    are counted before they do), and a fleet pinned at its maximum for only
+    part of the window classifies as UNKNOWN because the usage never reaches
+    a peak-sized ceiling. Each CPU sample is judged against the fleet that
+    was ready when it was taken.
+    """
+    ready_t, ready_v = _timed_series(rows, metric)
+    if not ready_t.size or not at.size:
+        return np.full(at.shape, fleet_replicas(rows, metric))
+    # step-previous: the count that was ready at (or last before) each sample;
+    # samples before the first ready reading take the first one
+    index = np.clip(np.searchsorted(ready_t, at, side="right") - 1, 0, ready_t.size - 1)
+    values = ready_v[index]
+    values[~np.isfinite(values)] = 1.0
+    return np.maximum(values, 1.0)
+
+
 def classify(
     *,
     metrics_rows: list[dict],
@@ -102,6 +151,19 @@ def classify(
     exec_limit = limits.get("tap_executor_cpu_limit_cores", 1.0) * executors
     pg_limit = limits.get("postgres_cpu_limit_cores", 4.0)
     pool_limit = limits.get("db_pool_max_total", 8) * limits.get("tap_api_workers", 1) * serving
+    pool_timeout = float(limits.get("db_pool_timeout_s", 5.0))
+    # CPU ceilings, per sample: a fleet that ramps mid-window must be judged
+    # against the pods that were ready when each sample was taken, not the
+    # window's peak — mid-ramp the peak overstates the ceiling, and a fleet
+    # pinned for only part of the window would read UNKNOWN against it.
+    api_t, api_cpu_timed = _timed_series(metrics_rows, "tap_api_cpu_cores")
+    exec_t, exec_cpu_timed = _timed_series(metrics_rows, "tap_executor_cpu_cores")
+    api_limit_series = limits.get("tap_api_cpu_limit_cores", 2.0) * aligned_fleet(
+        metrics_rows, api_t, "api_replicas_ready"
+    )
+    exec_limit_series = limits.get("tap_executor_cpu_limit_cores", 1.0) * aligned_fleet(
+        metrics_rows, exec_t, "executor_replicas_ready"
+    )
 
     # -- the client first ---------------------------------------------------
     if recorder_cpu_peak > 0.80:
@@ -119,7 +181,11 @@ def classify(
 
     # -- TAP CPU ------------------------------------------------------------
     if api_cpu.size:
-        hot = _fraction_above(api_cpu, 0.90 * api_limit)
+        hot = (
+            float((api_cpu_timed > 0.90 * api_limit_series).mean())
+            if api_cpu_timed.size
+            else _fraction_above(api_cpu, 0.90 * api_limit)
+        )
         throttled = float(api_throttle.mean()) if api_throttle.size else 0.0
         if hot > 0.25 or throttled > 0.05:
             verdicts.append(
@@ -149,7 +215,11 @@ def classify(
     # having nothing busy. The API and the database were idle; the executors
     # were pinned.
     if exec_cpu.size:
-        hot = _fraction_above(exec_cpu, 0.90 * exec_limit)
+        hot = (
+            float((exec_cpu_timed > 0.90 * exec_limit_series).mean())
+            if exec_cpu_timed.size
+            else _fraction_above(exec_cpu, 0.90 * exec_limit)
+        )
         throttled = float(exec_throttle.mean()) if exec_throttle.size else 0.0
         if hot > 0.25 or throttled > 0.05:
             verdicts.append(
@@ -229,10 +299,19 @@ def classify(
             verdicts.append(
                 Verdict(
                     "CONNECTION_POOL_BOUND",
-                    max(saturated, min(1.0, waiting)),
+                    # graded against the timeout, not saturated by any wait
+                    # over a second: a 0.5 s wait against a 5 s timeout is a
+                    # tenth of a case, not a certainty that outranks
+                    # everything else wherever the pool waited at all
+                    max(saturated, min(1.0, waiting / pool_timeout)),
                     {
                         "fraction_of_window_pool_full": saturated,
+                        # a wait can never legitimately exceed the timeout; a
+                        # reading past ~1.2x of it is quantile interpolation
+                        # from a histogram without an edge at the timeout
+                        # (fixed in the service image alongside this)
                         "peak_pool_wait_p95_s": waiting,
+                        "pool_timeout_s": pool_timeout,
                         "requests_refused_503": refused,
                         "pool_max_total": pool_limit,
                         "api_replicas_serving": serving,
@@ -275,7 +354,16 @@ def classify(
     # cost is in producing bytes, not in finding rows.
     throughput = summary.get("response_throughput_bytes_per_s") or 0.0
     mean_bytes = (summary.get("response_bytes_total") or 0.0) / max(summary.get("requests") or 1, 1)
-    api_busy = _fraction_above(api_cpu, 0.60 * api_limit) if api_cpu.size else 0.0
+    # Time-aligned like the two `hot` gates above, and for the same reason:
+    # this one is a *lower* bar (60% of the ceiling) which makes it the more
+    # sensitive to an overstated one. On a ramping fleet the peak-fleet ceiling
+    # reads api_busy low, the 0.25 threshold is missed, and a run whose time
+    # went into formatting bytes is filed as something else or as UNKNOWN.
+    api_busy = (
+        float((api_cpu_timed > 0.60 * api_limit_series).mean())
+        if api_cpu_timed.size
+        else _fraction_above(api_cpu, 0.60 * api_limit)
+    )
     pg_quiet = _fraction_above(pg_cpu, 0.60 * pg_limit) < 0.1 if pg_cpu.size else False
     if mean_bytes > 200_000 and api_busy > 0.25 and pg_quiet:
         verdicts.append(

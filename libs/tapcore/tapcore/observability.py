@@ -35,13 +35,30 @@ REQUEST_ID_HEADER = "X-Request-ID"
 
 # -- metrics ----------------------------------------------------------------
 
+
+def _pool_wait_buckets() -> tuple[float, ...]:
+    """Histogram edges with a boundary at the pool timeout — and just past it.
+
+    A timed-out acquire waits fractionally *longer* than the timeout, so
+    without an edge there it lands in whatever wide bucket contains the
+    timeout and quantile interpolation reads it as the bucket's middle: a
+    5 s timeout was reported as a 9.7 s p95, an impossible wait that then
+    outranked every other bottleneck verdict. The edge pair (t, 1.2t]
+    pins those observations to within 20% of the truth whatever the
+    configured timeout is.
+    """
+    timeout = float(settings.db_pool_timeout_s)
+    edges = {0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0}
+    edges.add(round(timeout, 3))
+    edges.add(round(timeout * 1.2, 3))
+    return tuple(sorted(edges))
+
+
 DB_POOL_WAIT = Histogram(
     "tap_db_pool_wait_seconds",
     "Time spent waiting for a database connection from the pool.",
     registry=REGISTRY,
-    # sub-millisecond when the pool is healthy; the tail is what matters, so
-    # the buckets reach past the pool timeout
-    buckets=(0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0),
+    buckets=_pool_wait_buckets(),
 )
 
 DB_POOL_EXHAUSTED = Counter(
