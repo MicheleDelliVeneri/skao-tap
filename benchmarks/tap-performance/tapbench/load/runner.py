@@ -17,9 +17,11 @@ came from.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import dataclasses
 import logging
 import math
+import multiprocessing
 import os
 import time
 import typing
@@ -92,10 +94,19 @@ class Recorder:
 
     @property
     def generator_cpu_peak(self) -> float:
-        """Peak generator CPU as a fraction of one core's worth per core."""
+        """Peak generator CPU as a fraction of ONE core.
+
+        The generator is a single asyncio event loop: one core is its whole
+        budget, and one core is what it must be judged against. This used to
+        divide by the host's core count — on a 30-core host a loop pinned at
+        exactly 100% of its core read as "3%", the guard stayed green, and a
+        replica sweep's upper rungs quietly measured the generator (the
+        docstring above promised otherwise). psutil reports percent of one
+        core, so the fraction is the reading itself.
+        """
         if not self.cpu_samples:
             return 0.0
-        return max(s[1] for s in self.cpu_samples) / self._cpu_count
+        return max(s[1] for s in self.cpu_samples)
 
 
 class Workload:
@@ -364,6 +375,107 @@ async def closed_loop(
             overrun,
         )
     return recorder, measured_elapsed
+
+
+def _closed_loop_share(payload: dict) -> tuple[list, list, float]:
+    """One process's share of a sharded closed loop (runs in a child).
+
+    Rebuilds its own workload from the picklable ingredients — each share
+    gets a distinct seed, so the shares draw different query streams and
+    their union is one workload rather than N copies of the same one.
+    """
+    if payload["query_class"] is not None:
+        workload = SingleClass(payload["entries"], payload["query_class"], seed=payload["seed"])
+    else:
+        workload = Workload(payload["entries"], payload["mix"], seed=payload["seed"])
+    recorder, elapsed = asyncio.run(
+        closed_loop(
+            payload["base_url"],
+            workload,
+            payload["concurrency"],
+            payload["warmup_s"],
+            payload["measure_s"],
+            mode=payload["mode"],
+            response_format=payload["response_format"],
+            timeout_s=payload["timeout_s"],
+        )
+    )
+    return recorder.samples, recorder.cpu_samples, elapsed
+
+
+def closed_loop_sharded(
+    base_url: str,
+    *,
+    entries: list,
+    mix: dict | None,
+    query_class: str | None,
+    seed: int,
+    concurrency: int,
+    warmup_s: float,
+    measure_s: float,
+    processes: int,
+    mode: str = "sync",
+    response_format: str = "csv",
+    timeout_s: float = 120.0,
+) -> tuple[Recorder, float]:
+    """A closed loop split across processes, so the generator scales.
+
+    One asyncio event loop tops out around one core — roughly 400 requests
+    a second of this workload — and a replica fleet worth measuring serves
+    more than that. A pinned loop is the worst kind of wrong: the throughput
+    curve flattens exactly as a saturated server's would, which is how an
+    eight-replica sweep measured its own client. Each process runs the plain
+    closed loop with an equal share of the held concurrency; the merged
+    recorder's ``generator_cpu_peak`` is the busiest single process against
+    its one-core budget, which is what the headroom guard judges.
+    """
+    processes = max(1, min(processes, concurrency))
+    shares = [concurrency // processes] * processes
+    for i in range(concurrency % processes):
+        shares[i] += 1
+    payloads = [
+        {
+            "base_url": base_url,
+            "entries": entries,
+            "mix": mix,
+            "query_class": query_class,
+            "seed": seed + 100 * index,
+            "concurrency": share,
+            "warmup_s": warmup_s,
+            "measure_s": measure_s,
+            "mode": mode,
+            "response_format": response_format,
+            "timeout_s": timeout_s,
+        }
+        for index, share in enumerate(shares)
+        if share > 0
+    ]
+    merged = Recorder()
+    elapsed = float(measure_s)
+    if len(payloads) == 1:
+        samples, cpu, elapsed = _closed_loop_share(payloads[0])
+        merged.samples.extend(samples)
+        merged.cpu_samples.extend(cpu)
+        return merged, elapsed
+    # fork, not spawn: the children re-enter this module with the parent's
+    # imports already made, and no asyncio loop is running in the parent at
+    # this point, so there is nothing unsafe to inherit
+    ctx = multiprocessing.get_context("fork")
+    with concurrent.futures.ProcessPoolExecutor(len(payloads), mp_context=ctx) as pool:
+        for samples, cpu, share_elapsed in pool.map(_closed_loop_share, payloads):
+            merged.samples.extend(samples)
+            merged.cpu_samples.extend(cpu)
+            elapsed = max(elapsed, share_elapsed)
+    log.info(
+        "sharded closed loop c=%d over %d processes: %d requests, %.1f rps, "
+        "busiest process at %.0f%% of one core",
+        concurrency,
+        len(payloads),
+        len(merged.samples),
+        len(merged.samples) / elapsed if elapsed else 0.0,
+        100 * merged.generator_cpu_peak,
+    )
+    return merged, elapsed
 
 
 @dataclasses.dataclass

@@ -114,7 +114,8 @@ def finalise(
         }
     slo_p95_s = cfg["scenarios"]["slo"]["p95_seconds"]
     c1 = runner.sustainable_capacity(results, slo_p95_s)
-    headline.update(runner.capacity_headline(results, slo_p95_s))
+    signals_required = runner.saturation_signals_required(cfg)
+    headline.update(runner.capacity_headline(results, slo_p95_s, signals_required))
 
     invalid_path = run.path / "invalid.json"
     summary = {
@@ -134,7 +135,7 @@ def finalise(
         "bottleneck_tally": tally,
         "by_query_class": pooled,
         "headline": headline,
-        "replica_capacity": runner.replica_capacities(results, slo_p95_s),
+        "replica_capacity": runner.replica_capacities(results, slo_p95_s, signals_required),
         "format_comparison": runner.format_comparison(results),
         "shedding": runner.shedding_summary(results),
         "plan_flags": {
@@ -326,6 +327,31 @@ def cmd_stress(args) -> int:
     return 0
 
 
+def cmd_replicas(args) -> int:
+    """Package 14: a bracketed capacity per replica count.
+
+    The efficiency column only populates from ceilings, and the open-loop
+    rungs never measured any: this is the bounded-concurrency shape that
+    does.
+    """
+    cfg = runner.load_config()
+    run = runs_mod.new_run("replica-sweep", args.resume)
+    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    dataset = args.dataset or "D1"
+    datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
+    entries = build_corpus(cfg, datasets)
+    run.write_json("corpus.json", [e.as_dict() for e in entries])
+    results = runner.replica_sweep(run, cfg, dataset, entries)
+    finalise(run, cfg, results, datasets, digests, corpus_entries=entries)
+    slo = cfg["scenarios"]["slo"]["p95_seconds"]
+    for row in runner.replica_capacities(results, slo, runner.saturation_signals_required(cfg)):
+        print(
+            f"n={row['replicas']}: {row['rps']:.1f} rps"
+            f" ({'ceiling' if row['bracketed'] else 'open-ended'}, {row['key']})"
+        )
+    return 0
+
+
 def cmd_shedding(args) -> int:
     """Package 13: hold a bounded-concurrency overload, watch the refusals.
 
@@ -484,6 +510,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = add("stress", cmd_stress, help="just the stress classes (Q09, Q11, Q13, Q14)")
     sub.add_argument("--dataset")
     sub = add("shedding", cmd_shedding, help="held overload: 503s versus socket drops")
+    sub.add_argument("--dataset")
+    sub = add("replicas", cmd_replicas, help="a bracketed capacity per replica count")
     sub.add_argument("--dataset")
     sub = add("keda", cmd_keda, help="autoscaling scenarios K1-K7")
     sub.add_argument("--dataset")

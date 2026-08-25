@@ -80,6 +80,25 @@ TRANSPORT_DROP_ERRORS = (
     "RemoteProtocolError",
 )
 
+# Fallback for the analysis functions when no config is in hand (a test, a
+# re-analysis of a summary written before the field existed). It mirrors
+# config/scenarios.yaml's concurrency_sweep.saturation_signals_required, and
+# the only reason it is not read from there is that these functions take
+# `results`, not `cfg`. Every production caller passes the configured value.
+SATURATION_SIGNALS_REQUIRED_DEFAULT = 2
+
+
+def saturation_signals_required(cfg: dict) -> int:
+    """How many agreeing signals the sweep stopped climbing on.
+
+    The same number decides where the ladder stopped and whether the analysis
+    calls the stop a ceiling. Raise it in the config and only the ladder would
+    have moved: the analysis would keep calling two signals a measured ceiling
+    for a sweep that climbed straight past them.
+    """
+    sweep = (cfg.get("scenarios") or {}).get("concurrency_sweep") or {}
+    return int(sweep.get("saturation_signals_required") or SATURATION_SIGNALS_REQUIRED_DEFAULT)
+
 
 def load_config() -> dict:
     return {
@@ -237,6 +256,8 @@ def measure(
     measure_s: float | None = None,
     request_mode: str = "sync",
     response_format: str = "csv",
+    generator_processes: int = 1,
+    workload_ingredients: dict | None = None,
 ) -> dict | None:
     """Run one load window and record everything about it."""
     if run.done(key):
@@ -293,6 +314,21 @@ def measure(
                     )
                 )
                 measured_elapsed = time.time() - started
+            elif generator_processes > 1:
+                # sharded across processes: one asyncio loop tops out around
+                # one core, and the fleet under test serves more than that
+                assert workload_ingredients is not None
+                recorder, measured_elapsed = load_mod.closed_loop_sharded(
+                    BASE_URL,
+                    concurrency=concurrency or 1,
+                    warmup_s=warmup_s,
+                    measure_s=measure_s,
+                    processes=generator_processes,
+                    mode=request_mode,
+                    response_format=response_format,
+                    **workload_ingredients,
+                )
+                timeline = []
             else:
                 recorder, measured_elapsed = asyncio.run(
                     load_mod.closed_loop(
@@ -437,7 +473,20 @@ def measure(
 
 
 def concurrency_sweep(
-    run, cfg: dict, dataset: str, entries: list, *, quick: bool = False
+    run,
+    cfg: dict,
+    dataset: str,
+    entries: list,
+    *,
+    quick: bool = False,
+    replicas: int = 1,
+    kind: str = "concurrency",
+    key_prefix: str = "conc",
+    refine_saturation: bool = True,
+    repetitions: int | None = None,
+    warmup_s: float | None = None,
+    measure_s: float | None = None,
+    generator_processes: int = 1,
 ) -> list[dict]:
     """Climb the concurrency ladder until saturation, then stop.
 
@@ -445,6 +494,11 @@ def concurrency_sweep(
     routinely noise — a p95 can multiply on a page-cache miss, and throughput
     can plateau for one level and then climb again — and a sweep that stops on
     noise reports a ceiling that is not there.
+
+    The default arguments are the single-replica C1 sweep; the replica-scaling
+    family reuses the same ladder and stop rule per replica count with its own
+    ``kind``, shorter windows, and without the long saturation re-measure
+    (that ceremony exists for C1, the number everything else is a multiple of).
     """
     sweep = cfg["scenarios"]["concurrency_sweep"]
     timing = cfg["scenarios"]["timing"]
@@ -456,24 +510,36 @@ def concurrency_sweep(
     levels = sweep["levels"][:3] if quick else sweep["levels"]
     for concurrency in levels:
         saturated_here = False
-        repetitions = 1 if quick else timing["repetitions"]
+        reps = repetitions if repetitions is not None else (1 if quick else timing["repetitions"])
         measured: list[dict] = []
-        for repetition in range(repetitions):
+        for repetition in range(reps):
             workload = load_mod.Workload(entries, mix, seed=1000 + repetition)
-            key = f"conc-{dataset}-c{concurrency}-r{repetition}"
+            key = f"{key_prefix}-{dataset}-c{concurrency}-r{repetition}"
+            ingredients = {
+                "entries": entries,
+                "mix": mix,
+                "query_class": None,
+                "seed": 1000 + repetition,
+            }
             result = measure(
                 run,
                 cfg,
                 key=key,
-                kind="concurrency",
+                kind=kind,
                 dataset=dataset,
                 workload=workload,
                 mode="closed",
                 concurrency=concurrency,
-                replicas=1,
+                replicas=replicas,
                 repetition=repetition,
-                warmup_s=10 if quick else timing["warmup_seconds"],
-                measure_s=20 if quick else timing["measure_seconds"],
+                warmup_s=warmup_s
+                if warmup_s is not None
+                else (10 if quick else timing["warmup_seconds"]),
+                measure_s=measure_s
+                if measure_s is not None
+                else (20 if quick else timing["measure_seconds"]),
+                generator_processes=generator_processes,
+                workload_ingredients=ingredients,
             )
             if result:
                 measured.append(result)
@@ -504,6 +570,8 @@ def concurrency_sweep(
         if signals["count"] >= sweep["saturation_signals_required"]:
             saturated_here = True
 
+        if saturated_here and not refine_saturation:
+            break
         if saturated_here and not quick:
             # A saturation point earns the longer, more repeated measurement:
             # this is the number that becomes C1 and that every KEDA scenario
@@ -560,7 +628,12 @@ def _within_slo(result: dict, slo_p95_s: float) -> bool:
 
 
 def bracketed_capacity(
-    results: list[dict], *, kind: str, replicas: int, slo_p95_s: float
+    results: list[dict],
+    *,
+    kind: str,
+    replicas: int,
+    slo_p95_s: float,
+    signals_required: int = SATURATION_SIGNALS_REQUIRED_DEFAULT,
 ) -> dict | None:
     """The most a replica count sustains, and whether that is its ceiling.
 
@@ -574,30 +647,62 @@ def bracketed_capacity(
     replicas 231 rps, both met in full with a p95 under 60 ms, and the ratio
     would have been published as 25% scaling efficiency at eight replicas —
     a claim about a ceiling neither point came near.
+
+    `signals_required` must be the same number the sweep climbed under
+    (config/scenarios.yaml, concurrency_sweep.saturation_signals_required):
+    read it from the config wherever there is a config to read. The default
+    is only for callers that have none, and a copy of it here that drifted
+    from the ladder's would report a bracket for a ladder that never stopped.
     """
     at = [r for r in results if r.get("kind") == kind and r.get("replicas") == replicas]
     met = [r for r in at if _within_slo(r, slo_p95_s)]
     if not met:
         return None
     best = max(met, key=lambda r: r["http"]["successful_rps"])
-    offered = best.get("offered_rps") or 0.0
+
+    def rung(r: dict) -> float:
+        # open-loop rungs are offered rates; closed-loop rungs are held
+        # concurrency — either way, "higher" means "more demand"
+        return r.get("offered_rps") or float(r.get("concurrency") or 0.0)
+
+    offered = rung(best)
     # A higher rung that the service failed, rather than one the generator
     # failed to offer: an invalid point brackets nothing.
     above = [
         r
         for r in at
-        if (r.get("offered_rps") or 0.0) > offered
-        and not r.get("invalid")
-        and not _within_slo(r, slo_p95_s)
+        if rung(r) > offered and not r.get("invalid") and not _within_slo(r, slo_p95_s)
     ]
+    # A closed-loop sweep brackets by construction when it saturated: the
+    # plateau is a measured ceiling even though no rung failed the SLO — a
+    # CPU-bound service under a closed loop degrades in latency, not errors,
+    # and can sit far inside a 2 s SLO at its throughput ceiling.
+    #
+    # The evidence has to be the TOP rung's, not any() over the ladder. any()
+    # says "some rung somewhere saturated", which is not the claim published:
+    # a low rung tripping two signals under a top rung still climbing is a
+    # ladder that found no ceiling, and calling it a bracket puts its ratio in
+    # the efficiency headline. The two coincide today only because
+    # refine_saturation=False breaks the sweep on the first saturated rung, so
+    # the saturated rung IS the last one measured.
+    #
+    # Any point at that rung, not the top rung's first point: a rung is
+    # `repetitions` measurements and concurrency_sweep() attaches the signals
+    # to the median one only.
+    ladder = [r for r in at if not r.get("invalid")]
+    top_rung = max((rung(r) for r in ladder), default=None)
+    saturated = any(
+        (r.get("saturation") or {}).get("count", 0) >= signals_required
+        for r in ladder
+        if rung(r) == top_rung
+    )
     return {
         "rps": best["http"]["successful_rps"],
         "offered_rps": offered,
         "key": best["key"],
-        "bracketed": bool(above),
-        "next_rung_measured": bool(
-            [r for r in at if (r.get("offered_rps") or 0.0) > offered and not r.get("invalid")]
-        ),
+        "bracketed": bool(above) or saturated,
+        "saturated": saturated,
+        "next_rung_measured": bool([r for r in at if rung(r) > offered and not r.get("invalid")]),
     }
 
 
@@ -689,7 +794,11 @@ def _lateness_from_samples(run_dir, key: str) -> dict:
     }
 
 
-def replica_capacities(results: list[dict], slo_p95_s: float) -> list[dict]:
+def replica_capacities(
+    results: list[dict],
+    slo_p95_s: float,
+    signals_required: int = SATURATION_SIGNALS_REQUIRED_DEFAULT,
+) -> list[dict]:
     """Per replica count: the highest rate met, and whether it is a ceiling.
 
     Written into the summary so the report renders what the analysis decided
@@ -701,18 +810,39 @@ def replica_capacities(results: list[dict], slo_p95_s: float) -> list[dict]:
         {
             r["replicas"]
             for r in results
-            if r.get("kind") == "fixed_replicas" and r.get("replicas") is not None
+            if r.get("kind") in ("fixed_replicas", "replica_sweep")
+            and r.get("replicas") is not None
         }
     )
     out = []
     for n in counts:
-        found = bracketed_capacity(results, kind="fixed_replicas", replicas=n, slo_p95_s=slo_p95_s)
-        if found:
-            out.append({"replicas": n, **found})
+        candidates = [
+            (kind, found)
+            for kind in ("replica_sweep", "fixed_replicas")
+            if (
+                found := bracketed_capacity(
+                    results,
+                    kind=kind,
+                    replicas=n,
+                    slo_p95_s=slo_p95_s,
+                    signals_required=signals_required,
+                )
+            )
+        ]
+        if not candidates:
+            continue
+        # a bracketed capacity beats an open-ended one; among equals, the
+        # higher measured throughput
+        kind, found = max(candidates, key=lambda kc: (kc[1]["bracketed"], kc[1]["rps"]))
+        out.append({"replicas": n, "kind": kind, **found})
     return out
 
 
-def capacity_headline(results: list[dict], slo_p95_s: float) -> dict:
+def capacity_headline(
+    results: list[dict],
+    slo_p95_s: float,
+    signals_required: int = SATURATION_SIGNALS_REQUIRED_DEFAULT,
+) -> dict:
     """C1 and replica scaling efficiency, each qualified by what bracketed it.
 
     Only a ratio of two ceilings is an efficiency, and only a rate the service
@@ -728,7 +858,13 @@ def capacity_headline(results: list[dict], slo_p95_s: float) -> dict:
         # never failed. A concurrency sweep is bracketed by construction — it
         # stops when two saturation signals agree — so its C1 needs no caveat,
         # and attaching one would be its own false statement.
-        at_one = bracketed_capacity(results, kind="fixed_replicas", replicas=1, slo_p95_s=slo_p95_s)
+        at_one = bracketed_capacity(
+            results,
+            kind="fixed_replicas",
+            replicas=1,
+            slo_p95_s=slo_p95_s,
+            signals_required=signals_required,
+        )
         qualifier = (
             " — a lower bound, since no valid higher rate failed"
             if at_one and not at_one["bracketed"]
@@ -739,17 +875,34 @@ def capacity_headline(results: list[dict], slo_p95_s: float) -> dict:
             "evidence": "highest successful rps over valid measurements with p95 within "
             f"the {slo_p95_s}s SLO and errors under 1%{qualifier}",
         }
-    for kind, label, top_n in (("fixed_replicas", "replica scaling efficiency at 8", 8),):
-        one = bracketed_capacity(results, kind=kind, replicas=1, slo_p95_s=slo_p95_s)
-        top = bracketed_capacity(results, kind=kind, replicas=top_n, slo_p95_s=slo_p95_s)
+    for kind, label, top_n in (
+        ("replica_sweep", "replica scaling efficiency at 8", 8),
+        ("fixed_replicas", "replica scaling efficiency at 8", 8),
+    ):
+        if label in out and out[label].get("value") is not None:
+            continue
+        one = bracketed_capacity(
+            results, kind=kind, replicas=1, slo_p95_s=slo_p95_s, signals_required=signals_required
+        )
+        top = bracketed_capacity(
+            results,
+            kind=kind,
+            replicas=top_n,
+            slo_p95_s=slo_p95_s,
+            signals_required=signals_required,
+        )
         if not (one and top):
             continue
         if one["bracketed"] and top["bracketed"] and one["rps"]:
+            how = (
+                "each a saturated closed-loop sweep's plateau"
+                if kind == "replica_sweep"
+                else "each the last rate met before a measured failure"
+            )
             out[label] = {
                 "value": round(top["rps"] / (top_n * one["rps"]), 3),
                 "evidence": f"{top['rps']:.1f} rps on {_pods(top_n)} against "
-                f"{one['rps']:.1f} on one, each the last rate met before a "
-                "measured failure",
+                f"{one['rps']:.1f} on one, {how}",
             }
             continue
         open_ended = [
@@ -766,6 +919,44 @@ def capacity_headline(results: list[dict], slo_p95_s: float) -> dict:
             "marked invalid.",
         }
     return out
+
+
+def replica_sweep(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
+    """Package 14: a bounded-concurrency sweep at each replica count.
+
+    The open-loop fixed-scaling family kept failing to bracket anything —
+    seventeen of its 24 measurements were generator-capped, because offering
+    a rate at or past capacity open-loop grows the in-flight count without
+    bound. A closed loop cannot be capped that way, and its two-signal stop
+    rule *is* the bracket: a count whose sweep saturated has a measured
+    ceiling (the plateau), not just the largest rate anybody offered.
+
+    Same ladder, same workload seeds at every count, so two counts differ in
+    replicas and nothing else.
+    """
+    plan = cfg["scenarios"]["replica_sweep"]
+    results: list[dict] = []
+    cluster.set_autoscaling(api=False, executor=False)
+    try:
+        for replicas in plan["replicas"]:
+            cluster.scale("tap-api", replicas)
+            results += concurrency_sweep(
+                run,
+                cfg,
+                dataset,
+                entries,
+                replicas=replicas,
+                kind="replica_sweep",
+                key_prefix=f"rsweep-n{replicas}",
+                refine_saturation=False,
+                repetitions=plan["repetitions"],
+                warmup_s=plan["warmup_seconds"],
+                measure_s=plan["measure_seconds"],
+                generator_processes=int(plan.get("generator_processes", 1)),
+            )
+    finally:
+        cluster.scale("tap-api", 1)
+    return results
 
 
 def fixed_replica_scaling(run, cfg: dict, dataset: str, entries: list, c1: float) -> list[dict]:
@@ -1360,9 +1551,10 @@ def reclassify(run_dir, cfg: dict) -> dict:
     entries = summary.get("runs") or []
     slo_p95_s = cfg["scenarios"]["slo"]["p95_seconds"]
     headline = summary.get("headline") or {}
-    headline.update(capacity_headline(entries, slo_p95_s))
+    signals_required = saturation_signals_required(cfg)
+    headline.update(capacity_headline(entries, slo_p95_s, signals_required))
     summary["headline"] = headline
-    summary["replica_capacity"] = replica_capacities(entries, slo_p95_s)
+    summary["replica_capacity"] = replica_capacities(entries, slo_p95_s, signals_required)
     summary["sustainable_capacity_c1"] = sustainable_capacity(entries, slo_p95_s)
     summary["reanalysed_at"] = _time.time()
     summary_path.write_text(

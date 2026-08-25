@@ -364,3 +364,122 @@ def test_the_executor_ceiling_is_one_core_a_pod_not_its_cgroup():
     )
     assert resolved["tap_executor_cpu_limit_cores"] == 1.0
     assert resolved["tap_executor_pod_cpu_limit_cores"] == 2.0
+
+
+# ---------------------------------------------------------------------------
+# The closed-loop replica sweep (package 14)
+# ---------------------------------------------------------------------------
+
+
+def _sweep_point(replicas, concurrency, rps, *, p95=0.06, saturation_count=0):
+    point = {
+        "key": f"rsweep-n{replicas}-c{concurrency}-r0",
+        "kind": "replica_sweep",
+        "replicas": replicas,
+        "concurrency": concurrency,
+        "invalid": False,
+        "http": {
+            "successful_rps": rps,
+            "error_fraction": 0.0,
+            "latency": {"p95_s": p95},
+        },
+    }
+    if saturation_count:
+        point["saturation"] = {"count": saturation_count}
+    return point
+
+
+def test_a_saturated_sweep_is_a_bracket_without_any_slo_failure():
+    """A CPU-bound service under a closed loop degrades in latency, not
+    errors: at its throughput ceiling it can sit far inside a 2 s SLO, so
+    the plateau — two saturation signals — is the ceiling's evidence."""
+    results = [
+        _sweep_point(1, 4, 180.0),
+        _sweep_point(1, 8, 205.0),
+        _sweep_point(1, 16, 207.0, p95=0.12, saturation_count=2),
+    ]
+    at_one = runner.bracketed_capacity(results, kind="replica_sweep", replicas=1, slo_p95_s=2.0)
+    assert at_one["bracketed"]
+    assert at_one["saturated"]
+    assert at_one["rps"] == 207.0
+
+
+def test_an_unsaturated_sweep_stays_open_ended():
+    results = [_sweep_point(2, 4, 300.0), _sweep_point(2, 8, 390.0)]
+    at_two = runner.bracketed_capacity(results, kind="replica_sweep", replicas=2, slo_p95_s=2.0)
+    assert not at_two["bracketed"]
+
+
+def test_the_efficiency_headline_populates_from_saturated_sweeps():
+    results = [
+        _sweep_point(1, 8, 205.0),
+        _sweep_point(1, 16, 207.0, saturation_count=2),
+        _sweep_point(8, 64, 1245.0),
+        _sweep_point(8, 128, 1260.0, saturation_count=2),
+    ]
+    headline = runner.capacity_headline(results, 2.0)
+    entry = headline["replica scaling efficiency at 8"]
+    assert entry["value"] == round(1260.0 / (8 * 207.0), 3)
+    assert "saturated closed-loop sweep" in entry["evidence"]
+
+
+def test_replica_capacities_prefer_the_bracketed_kind():
+    """An open-ended open-loop point must not shadow a sweep that measured
+    the ceiling for the same count."""
+    results = [
+        _point(1, 500.0, 499.0),  # fixed_replicas: served in full, no bracket
+        _sweep_point(1, 16, 207.0, saturation_count=2),
+    ]
+    rows = runner.replica_capacities(results, 2.0)
+    (row,) = rows
+    assert row["kind"] == "replica_sweep"
+    assert row["bracketed"]
+    assert row["rps"] == 207.0
+
+
+def test_a_saturated_low_rung_under_a_climbing_top_rung_is_no_bracket():
+    """The evidence for a ceiling has to come from where the ladder stopped.
+    Two signals at c8 with c16 still gaining throughput is a ladder that
+    never found a plateau — an any()-over-the-ladder test would have called
+    it bracketed and published the ratio as a scaling efficiency."""
+    results = [
+        _sweep_point(1, 4, 180.0),
+        _sweep_point(1, 8, 205.0, saturation_count=2),
+        _sweep_point(1, 16, 260.0),
+    ]
+    at_one = runner.bracketed_capacity(results, kind="replica_sweep", replicas=1, slo_p95_s=2.0)
+    assert not at_one["saturated"]
+    assert not at_one["bracketed"]
+
+
+def test_the_top_rung_saturates_on_whichever_repetition_carries_the_signals():
+    """A rung is `repetitions` measurements and only the median one gets the
+    saturation block, so the bracket cannot depend on which of them is seen
+    first."""
+    results = [
+        _sweep_point(1, 8, 205.0),
+        _sweep_point(1, 16, 207.0),
+        _sweep_point(1, 16, 206.0, saturation_count=2),
+    ]
+    at_one = runner.bracketed_capacity(results, kind="replica_sweep", replicas=1, slo_p95_s=2.0)
+    assert at_one["saturated"]
+    assert at_one["bracketed"]
+
+
+def test_the_bracket_uses_the_configured_signal_count_not_a_hardcoded_two():
+    """Raise concurrency_sweep.saturation_signals_required and the ladder
+    climbs past two agreeing signals — an analyzer still stopping at two
+    would report a bracketed ceiling for a sweep that never saturated."""
+    results = [_sweep_point(1, 8, 205.0), _sweep_point(1, 16, 207.0, saturation_count=2)]
+    kwargs = {"kind": "replica_sweep", "replicas": 1, "slo_p95_s": 2.0}
+    assert runner.bracketed_capacity(results, **kwargs, signals_required=2)["bracketed"]
+    assert not runner.bracketed_capacity(results, **kwargs, signals_required=3)["bracketed"]
+    # and the configured value is what the production paths read
+    assert runner.saturation_signals_required(runner.load_config()) == 2
+    assert runner.saturation_signals_required({"scenarios": {"concurrency_sweep": {}}}) == 2
+    assert (
+        runner.saturation_signals_required(
+            {"scenarios": {"concurrency_sweep": {"saturation_signals_required": 3}}}
+        )
+        == 3
+    )

@@ -113,7 +113,11 @@ def _replica_table(summary: dict) -> str:
     column says why, rather than dividing two rates nobody's limit produced.
     """
     capacities = summary.get("replica_capacity") or []
-    by_key = {r["key"]: r for r in summary.get("runs", []) if r.get("kind") == "fixed_replicas"}
+    by_key = {
+        r["key"]: r
+        for r in summary.get("runs", [])
+        if r.get("kind") in ("fixed_replicas", "replica_sweep")
+    }
     if not capacities or not by_key:
         return ""
     baseline = next((c for c in capacities if c["replicas"] == 1), None)
