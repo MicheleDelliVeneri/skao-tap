@@ -168,6 +168,19 @@ slows down exactly as much as the service does. `t_offered` is recorded
 alongside `t_start`, so the generator's own lateness is measurable rather than
 absorbed into the service's latency.
 
+**Which replica answered is recorded per request**, from the `X-Served-By`
+header the service sets for exactly that purpose. It matters because a
+closed-loop client holds keep-alive connections, so kube-proxy assigns each
+client to a pod once per *connection* rather than per request: at low
+concurrency against several replicas the assignment is a coin flip that then
+persists for the whole window, and two clients that land on the same pod
+measure one pod. Observed as 177.6 rps against 98.1 rps on two repetitions of
+identical work at two clients and two replicas. Every measurement now reports
+`served_by` — the pods that answered and the busiest one's share — so a rung
+where the clients collapsed says so, instead of the median of three
+repetitions absorbing it. It vanishes at the saturating rungs, which is where
+capacity is read, so no published capacity figure was affected.
+
 The concurrency ladder is 1, 2, 4, 8, 16, 32, 64, 128 and stops when **two**
 saturation signals agree: throughput gain under 5%, p95 over 5x baseline,
 errors over 1%, API CPU over 95% of its ceiling, PostgreSQL CPU over 95%. One

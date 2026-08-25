@@ -38,6 +38,24 @@ log = logging.getLogger("egernia_bench.load")
 # pg_stat_activity and a line in the executor's log.
 REQUEST_ID_HEADER = "X-Request-ID"
 
+# Which replica answered, in that replica's own words. The service has sent
+# this since it started setting `SERVED_BY_HEADER` — precisely so that "which
+# pod served this request" stops being an inference — and this generator spent
+# that whole time reading `X-Pod-Name`, a header nothing sends. So every sample
+# recorded an empty pod, the code here concluded "the service does not
+# advertise its pod name", and per-pod attribution was left to Prometheus,
+# which can say how busy each pod was but not which pod answered *this*
+# request. Two commits that never met.
+#
+# It matters most where it was missed: a closed-loop client holds keep-alive
+# connections, so kube-proxy assigns each client to a pod once per connection
+# and not per request. At low concurrency against several replicas that is a
+# coin flip which then persists for the whole window — two clients that land on
+# one pod measure one pod's throughput and the rung reads half. Populating this
+# makes that visible per measurement instead of something the median of three
+# repetitions absorbs.
+SERVED_BY_HEADER = "X-Served-By"
+
 
 @dataclasses.dataclass(slots=True)
 class Sample:
@@ -177,10 +195,7 @@ async def _issue_sync(
         ) as response:
             status = response.status_code
             request_id = response.headers.get(REQUEST_ID_HEADER, "")
-            # Only if the deployment chose to say; the service does not
-            # advertise its pod name, so this is usually empty and per-pod
-            # attribution comes from Prometheus instead.
-            pod = response.headers.get("X-Pod-Name", "")
+            pod = response.headers.get(SERVED_BY_HEADER, "")
             async for chunk in response.aiter_bytes():
                 if math.isnan(ttfb):
                     ttfb = time.perf_counter() - t0
@@ -231,6 +246,7 @@ async def _issue_async(
     ttfb = math.nan
     size = 0
     request_id = ""
+    pod = ""
     try:
         created = await client.post(
             f"{base_url}/tap/async",
@@ -239,6 +255,10 @@ async def _issue_async(
         )
         status = created.status_code
         request_id = created.headers.get(REQUEST_ID_HEADER, "")
+        # The pod that accepted the job, which is not necessarily the executor
+        # that ran it — the point of recording it is the same routing question
+        # the sync path asks.
+        pod = created.headers.get(SERVED_BY_HEADER, "")
         location = created.headers.get("location", "")
         if not location:
             error = "no-job-location"
@@ -283,7 +303,7 @@ async def _issue_async(
             ttfb_s=(0.0 if math.isnan(ttfb) else ttfb),
             response_bytes=size,
             rows=-1,
-            pod="",
+            pod=pod,
             mode="async",
             request_id=request_id,
         )

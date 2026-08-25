@@ -23,6 +23,7 @@ import json
 import pathlib
 import sys
 import threading
+import types
 import typing
 
 import pytest
@@ -610,3 +611,53 @@ def test_the_ladder_climbs_past_a_tripped_stop_when_asked_to():
     head = stop_block.split("if saturated_here and not refine_saturation:")[0]
     assert "previous = current" in head
     assert "continue" in head
+
+
+# ---------------------------------------------------------------------------
+# Which replica answered
+# ---------------------------------------------------------------------------
+
+
+def test_the_generator_reads_the_header_the_service_actually_sends():
+    """These two constants must be the same string, and were not.
+
+    The service has advertised the serving pod since it started setting
+    `SERVED_BY_HEADER` — its own comment says the point is to stop "which
+    replica served this request" being an inference. The generator read
+    `X-Pod-Name`, which nothing sends, so every sample recorded an empty pod
+    and the generator's own comment concluded the service did not advertise it.
+    Pinned here because the failure mode is silent: an absent header and an
+    unrouted request look identical in the data.
+    """
+    main = pytest.importorskip("egernia_api.main")
+    from egernia_bench.load import runner as load_mod
+
+    assert load_mod.SERVED_BY_HEADER == main.SERVED_BY_HEADER
+
+
+def test_a_rung_whose_clients_collapsed_onto_one_pod_says_so():
+    """The artefact this exists to make visible.
+
+    Keep-alive connections are assigned to pods once, not per request, so at
+    low concurrency against several replicas the assignment is a coin flip that
+    persists for the window: two clients on one pod measure one pod. Observed
+    as 177.6 rps against 98.1 rps on two repetitions of identical work, and
+    absorbed silently by the median of three.
+    """
+    from egernia_bench.analyze import stats as stats_mod
+
+    def sample(pod):
+        return types.SimpleNamespace(pod=pod)
+
+    spread = stats_mod.served_by([sample("api-a")] * 50 + [sample("api-b")] * 50)
+    assert spread["distinct_pods"] == 2
+    assert spread["concentration"] == pytest.approx(0.5)
+
+    collapsed = stats_mod.served_by([sample("api-a")] * 99 + [sample("api-b")])
+    assert collapsed["distinct_pods"] == 2
+    assert collapsed["concentration"] == pytest.approx(0.99)
+
+    # Every run before the header fix: the field is empty, and that is reported
+    # as unknown rather than as a single pod having served everything.
+    silent = stats_mod.served_by([sample("")] * 100)
+    assert silent == {"pods": {}, "distinct_pods": 0, "concentration": None}

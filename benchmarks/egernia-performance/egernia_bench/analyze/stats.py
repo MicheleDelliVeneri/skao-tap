@@ -106,6 +106,37 @@ def bootstrap_ci(
     return float(np.percentile(estimates, 2.5)), float(np.percentile(estimates, 97.5))
 
 
+def served_by(samples) -> dict:
+    """Which replica answered, and how unevenly the load was spread.
+
+    A closed-loop client holds keep-alive connections, so kube-proxy picks a
+    pod per *connection* and the choice persists for the window. At low
+    concurrency against several replicas that is a coin flip: two clients that
+    land on the same pod measure one pod's throughput, and the rung reads half
+    what the fleet can do. It is real (a two-client rung has been seen to
+    report 177.6 rps and 98.1 rps on two repetitions of identical work) and it
+    is invisible in a throughput number.
+
+    ``concentration`` is the busiest pod's share of the requests. Against N
+    ready replicas, even spreading puts it near 1/N and a rung where clients
+    collapsed onto one pod puts it near 1 — so a reader can tell the two apart
+    without re-running anything. Empty when the service did not say, which is
+    every run before the generator started reading the right header.
+    """
+    counts: dict[str, int] = {}
+    for sample in samples:
+        if sample.pod:
+            counts[sample.pod] = counts.get(sample.pod, 0) + 1
+    total = sum(counts.values())
+    if not total:
+        return {"pods": {}, "distinct_pods": 0, "concentration": None}
+    return {
+        "pods": dict(sorted(counts.items(), key=lambda kv: -kv[1])),
+        "distinct_pods": len(counts),
+        "concentration": max(counts.values()) / total,
+    }
+
+
 def summarise(samples, window_seconds: float, *, with_ci: bool = True) -> dict:
     """Every HTTP figure the suite reports, from one run's samples."""
     total = len(samples)

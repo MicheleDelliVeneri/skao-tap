@@ -415,6 +415,7 @@ def measure(
     window = window_end - measured_from
     http = stats_mod.summarise(recorder.samples, window)
     by_class = stats_mod.by_query_class(recorder.samples, window)
+    routing = stats_mod.served_by(recorder.samples)
     resources = aggregate_resources(metrics_rows)
     pg_summary = pg_mod.summarise(delta)
 
@@ -468,6 +469,10 @@ def measure(
         "ended_at": window_end,
         "http": http,
         "by_class": by_class,
+        # Which replicas actually answered. A rung whose clients collapsed onto
+        # one pod is a measurement of one pod, and nothing in the throughput
+        # figure says so.
+        "served_by": routing,
         "resources": {
             **resources,
             "tap_api_cpu_fraction_of_limit": resources.get("tap_api_cpu_cores_p95", 0.0)
