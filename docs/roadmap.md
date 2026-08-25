@@ -4,9 +4,9 @@ Follow-up work is organized in numbered packages, referenced by number in
 issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
-**No packages are open.** Everything through package 17 is delivered and
-merged; what each one settled is recorded in the findings below, and the next
-package opens at 18.
+**Packages 18 through 21 are open.** Everything through package 17 is
+delivered and merged; what each one settled is recorded in the findings
+below.
 
 ## Measured findings
 
@@ -386,3 +386,122 @@ and D2 (10 GiB) alike: PostgreSQL sits near idle for it. Saturation moved from
 four concurrent clients on D1 to eight on D2. So replicas and `tapApi.workers`
 remain the throughput lever — and each worker is now worth roughly 200
 requests/s rather than 20.
+
+## Package 18 — Name the API's per-request CPU
+
+Every scaling recommendation on this page rests on `TAP_CPU_BOUND`, and the
+only cause it ever named is gone. ADQL translation was 41 ms of a ~50 ms
+request when the API's ceiling was first attributed; the fast path took it to
+1.2 ms (35x, `e38ed30`), and nothing has re-attributed what remains. One
+uvicorn worker is one GIL-bound thread, so the newest single-replica runs put
+the budget at roughly 10 ms of CPU per request — 98.0 rps at saturation on D1
+(`20260825T005436Z-b450b0a9`) and 98.9 rps at C1
+(`20260824T235130Z-ccbcb41a`), both at `tapApi.replicas: 1`,
+`tapApi.workers: 1` — of which translation is now 1.2 ms. About 88% of the
+ceiling is unaccounted for, and two published figures already disagree about
+it: the 2026-08-23 finding above says a worker is worth "roughly 200
+requests/s", where these runs measure half that.
+
+The per-request profile is also missing the one cost production always pays.
+No benchmark enables authentication — `benchmarks/egernia-performance/config/chart-values.yaml`
+configures no OIDC issuer — so every capacity figure on this page is an
+unauthenticated figure, while a deployment that gates its endpoints verifies a
+token on exactly this CPU-bound path.
+
+Work: profile a saturated `tap-api` worker under the closed-loop normal mix
+(`py-spy` against the worker process, the tool
+[Python performance](python-performance.md) already prescribes for the
+micro-benchmarks) and attribute the 10 ms to named frames — request parsing
+and parameter validation, psycopg row conversion, the result writers at small
+row counts, observability instrumentation, and the translation that is now a
+twelfth of it. `tests/benchmarks/test_hot_paths.py` measures translation and
+two serializers but never a whole request, so a regression anywhere else is
+currently invisible; whatever the profile names belongs there as a hot path.
+
+**Resolution is shown by** a profile of the saturated worker in which named
+frames account for at least 80% of a request's CPU, published as a finding
+here; a hot-path benchmark covering the request path end to end whose
+per-request total agrees with the measured saturation throughput within 20%;
+and one measured rung with authentication enabled, so the cost of verifying a
+token on this path is a number rather than an assumption.
+
+## Package 19 — Workers against replicas, on one host
+
+The replica curve (1.00 / 0.96 / 0.88 / 0.73 at eight,
+`20260824T235130Z-ccbcb41a`) was measured at one worker per pod against a pod
+whose CPU limit is 2, so every point in it was half-idle by construction — and
+the chart still defaults `tapApi.workers: 1`. Two pages carry an explicit note
+that the worker figures predate the translation fast path and are being
+re-measured ([Autoscaling](autoscaling.md), [Deployment](deployment.md)); they
+have not been. Until they are, an operator has a measured answer for the axis
+that costs pods and a stale one for the axis that costs nothing.
+
+Work, benchmark-side: sweep `tapApi.workers` (1, 2, 4) within one pod at its
+CPU limit against the existing replica ladder, same host, same corpus, same
+workload seeds — and state the connection arithmetic each choice implies,
+since a pod's pool ceiling is `workers x dbPoolMax` and the two axes are
+therefore not interchangeable at the database.
+
+**Resolution is shown by** a capacity figure per (workers, replicas) point,
+each bracketed by a saturated sweep the way the replica ladder now is; the
+stale notes in `autoscaling.md` and `deployment.md` replaced by those numbers;
+and a stated default for `tapApi.workers` that follows the pod's CPU limit if
+the measurement supports one.
+
+## Package 20 — What one async job actually costs
+
+The chart puts an executor at ~2 jobs/s (`values.yaml`, `tapExecutor.replicas`
+note) where the API serves ~98 rps of the same mix: a job costs about fifty
+times a sync request, and no finding here has ever profiled one. The
+autoscaling packages measured how many executors get scheduled and how fast a
+queue drains; none of them asked what the ~500 ms goes into. The answer
+decides whether "eight executors for ~22 jobs/s" is physics or overhead, and
+async is the path a client takes for exactly the queries where cost is real.
+
+One term is visible without measuring anything. `worker.py` calls
+`touched_tables(job["query_sql"])` once per job — a full
+`PostgreSQLQueryProcessor` parse of the translated SQL, which is the second
+parse the API removed from its own path in `4e520b5`. `adql.py` records that
+cost at 39 ms against 14 ms for the translation itself, and the function's
+docstring concedes the executor "pays a full parse, once per job". The API
+already has the ADQL table list from the parse it does at submit time
+(`translate()` returns `tables`), so the executor can read it off the job row
+instead of deriving it again.
+
+Work: profile one job end to end — claim, parse, execute, write the result
+file to the ReadWriteMany volume, phase transitions — then remove the terms
+that turn out to be avoidable, starting with the per-job parse.
+
+**Resolution is shown by** a per-job cost breakdown published as a finding,
+the table list carried on the job rather than re-parsed, and a before/after
+jobs-per-executor figure from the autoscaling family on the same scenarios.
+
+## Package 21 — ADQL 2.1
+
+`/capabilities` declares ADQL 2.0 only, which is what the service implements:
+the parser is `queryparser`'s ANTLR grammar, and that grammar predates 2.1.
+The gap is not theoretical. The geometry-column argument form the ObsCore
+footprint queries need — `INTERSECTS(s_region_geom, ...)`, a column where 2.0
+allows only a constructor — is a syntax error to that grammar, and `adql.py`
+reaches it by hiding the column behind a sentinel `POLYGON` literal with magic
+coordinates and swapping the emitted pgsphere literal back afterwards, pinned
+by unit tests so an upstream change fails loudly rather than quietly producing
+wrong SQL. What 2.1 adds beyond that is what current clients write: `ILIKE`,
+`OFFSET`, `CAST`, bitwise operators, `IN_UNIT`.
+
+This is the largest user-visible gap left now that the performance surface has
+been worked over, and it is also the project's narrowest dependency: the whole
+query layer rests on one ANTLR grammar from a single upstream, wrapped in a
+substitution the service has to keep honest.
+
+Work: settle the parser question before writing any grammar — fork
+queryparser's grammar to 2.1, or replace the parse with a maintained
+alternative — and only then the feature surface, the sentinel's removal, and
+the declared version. Note that the parse is also the subject of package 18's
+profile, so the two packages share evidence: a replacement parser has to hold
+the fast path's 1.2 ms as well as accept more syntax.
+
+**Resolution is shown by** `/capabilities` declaring 2.1 truthfully; the
+sentinel substitution deleted because the grammar accepts a geometry column
+directly; a conformance test per added construct; and no regression in the
+translation hot-path benchmark.
