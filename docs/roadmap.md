@@ -15,7 +15,80 @@ Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/tap-performance/results/`.
 
-### 2026-08-24 — the classifier's three misreadings, corrected (package 15, delivered)
+### 2026-08-25 — the size sweep is finished, and size almost is not the story (packages 16 and 17, delivered)
+
+One db-scaling run (`20260825T005436Z-b450b0a9`), one corpus, D1 through
+D4 grown in place, every measurement guard-valid and none invalid. The
+throughput-versus-size curve is republished from this run alone
+([results](performance/index.md)), and it is nearly flat:
+
+| | at saturation (c=4) | single client | classified |
+| --- | --- | --- | --- |
+| D1, 2 GiB | 98.0 rps, p95 63 ms | 85.0 rps | `TAP_CPU_BOUND` |
+| D2, 10 GiB | 94.1 rps, p95 66 ms | 79.9 rps | `TAP_CPU_BOUND` |
+| D3, 25 GiB | 92.4 rps, p95 67 ms | 78.0 rps | `TAP_CPU_BOUND` |
+| D4, 45 GiB | 91.9 rps, p95 67 ms | 75.9 rps | `TAP_CPU_BOUND` |
+
+Twenty-two times the data costs six percent of the throughput. The tier
+that was "where the working set stops fitting" — D3, 68–70% hit ratio, up
+to 52 s of read wait per window — became `TAP_CPU_BOUND` the moment the
+cone-search expression index existed (package 16): the cone classes had
+been sequentially scanning the whole ObsCore table, and that, not the
+mix, was the I/O regime. What remains of size is visible only at a single
+client (D4 reads `DATABASE_IO_BOUND` there, 11% under D1) and in the one
+class whose work is proportional by construction.
+
+- **The warmup fix holds.** Each tier's declared warmup (300 s at D3,
+  600 s at D4) makes the first repetition statistically indistinct from
+  the rest — within 1% at every size — where it used to be the coldest
+  point in the set.
+- **Package 16's plan verification.** No cone-search class sequentially
+  scans ObsCore at any size, at last: `Q05/Q06/Q07/Q12` all plan through
+  `obscore_spoint_gist`, the index the schema had described in a comment
+  and asserted in a test expectation without ever creating. The remaining
+  `bad_cardinality_estimate` flags concentrate where they should: Q14's
+  unanchored `LIKE` is unestimable by design, and a share of the recorded
+  ratios on Q10/Q14 are the LIMIT artefact (a node above a `TOP` stops
+  early, so "actual" undercounts and the ratio inflates) — a flag-quality
+  observation, not a planner failure.
+- **The deferred admission decision: no `EXPLAIN` gate.** Q13, the
+  full-table aggregate, is the one class that scales with size — p95
+  292 ms / 1.23 s / 3.04 s / 6.67 s across D1–D4, `DATABASE_CPU_BOUND`
+  with parallel plans throughout (it was 17.8 s and I/O-bound on D3
+  before the cursor fix). Even at D4 that sits inside a sane
+  `syncTimeoutSeconds`, and under four concurrent D3 aggregates the pool
+  shed 23% with 503s — which is the admission mechanism working: bound by
+  actual cost, refuse with an answer when concurrent cost exceeds the
+  pool. A cost-estimate gate would add a planning round trip to every
+  query to refuse queries a timeout already bounds. If a deployment's
+  users hammer full aggregates, the fix is a summary table in the data
+  domain, not a smarter gatekeeper.
+
+### 2026-08-25 — replica scaling measured: 0.73 at eight, and it is a ceiling (package 14, delivered)
+
+Run `20260824T235130Z-ccbcb41a`, the closed-loop sweep once per replica
+count, same ladder and workload seeds at every count, every capacity a
+saturated sweep's plateau rather than the largest rate anybody offered:
+
+| replicas | capacity | scaling |
+| --- | --- | --- |
+| 1 | 98.9 rps (C1) | 1.00 |
+| 2 | 190.8 rps | 0.96 |
+| 4 | 347.5 rps | 0.88 |
+| 8 | 577.9 rps | **0.73** |
+
+The number that did not survive: the first run of this family published
+an eight-replica ceiling of 403 rps (efficiency 0.51) that was the load
+generator's own — one asyncio event loop pinned at 100% of a core, read
+as "3% of the host" because the self-watch divided by the core count, so
+the guard built to catch exactly this stayed green. With the peak judged
+against one core and the family's held concurrency sharded over four
+processes, the busiest generator process peaked at 47% and the plateau is
+the service's (`TAP_CPU_BOUND` at the top rung). The 27% lost by eight
+replicas is the shared substrate — one PostgreSQL, one node — and is now
+a number with a measured failure on each side of it.
+
+### 2026-08-24 — the classifier's four misreadings, corrected (package 15, delivered)
 
 None changed what was measured; all changed what a reader concludes, and
 each is now pinned by a test that fails if it comes back:
@@ -44,6 +117,16 @@ each is now pinned by a test that fails if it comes back:
   from the run's own series). The KEDA run the package named is not in
   this checkout's results, so the correction is pinned by unit tests on
   exactly that ramp shape rather than by a reclassify.
+- **The alignment covers every gate that compares against a fleet
+  ceiling** — both `hot` gates and the `SERIALIZATION_BOUND` gate, the
+  most sensitive of the three because its bar is 60% of the ceiling
+  rather than 90%: a ramping fleet formatting bytes the whole window read
+  as a fifth busy against the peak-fleet ceiling, missed the 0.25
+  threshold, and was filed as something else. And `_timed_series()` now
+  insists on timestamps rather than quietly judging a window on whichever
+  subset of rows carried one — every row a measurement produces has one,
+  and a path that only *mostly* had them would have computed a plausible
+  number over a fraction of the window.
 
 ### 2026-08-24 — overload now sheds with answers, and the ceiling is placed (package 13, delivered)
 
@@ -280,52 +363,6 @@ so the log says what changed as well as what was found:
   a per-worker connection ceiling — off by default until the reset onset is
   established, which is package 13.
 
-### 2026-08-24 — the aggregate query is the case for admission control
-
-Q13 (`GROUP BY` over the whole ObsCore table) across the three sizes, four
-concurrent clients:
-
-| | p95 | throughput |
-| --- | --- | --- |
-| D1, 2 GiB | 393 ms | 11.2 requests/s |
-| D2, 10 GiB | 3,128 ms | 1.7 requests/s |
-| **D3, 25 GiB** | **17,753 ms** | **0.2 requests/s** |
-
-Forty-five times the latency for twelve times the data, and at D3 it is
-`DATABASE_IO_BOUND` with a plan that discards 616,550 rows after reading them.
-Nothing here is a bad plan — a full aggregate over 7.4 million wide rows is
-proportional work — but a user can issue this *synchronously* today, and one
-such request occupies a connection for eighteen seconds. These numbers were
-taken when result queries still ran on cursors (serial, fast-start-biased
-plans; see the package 11 entry above): D3 must be remeasured with parallel
-plans before the admission decision is made, which package 17's sweep now
-carries. What already stands either way is that `syncTimeoutSeconds` bounds
-the whole statement, so a runaway synchronous aggregate is refused by its
-actual cost rather than holding the connection indefinitely.
-
-### 2026-08-24 — D3 is where the working set stops fitting
-
-D3 (25.28 GiB, 7.4M ObsCore rows) against a 6 GiB PostgreSQL is the first size
-that touches the disk in earnest. Per 180-second measurement window, on client
-backends only:
-
-| | buffer hit ratio | blocks read | read wait |
-| --- | --- | --- | --- |
-| D1 (2 GiB), warm | 100.00% | 0 | 0 s |
-| D2 (10 GiB), warm | 100.00% | 0–7 | 0 s |
-| **D3 (25 GiB)** | **68–70%** | **1.6–2.2M** | **14–52 s** |
-
-Throughput at one client falls from 145 requests/s on D2 to 115–142 on D3 —
-less than a 70% hit ratio might suggest, because the reads are NVMe-fast and a
-single client cannot queue behind itself. What this regime costs under
-concurrency is the question the rest of the D3 sweep answers.
-
-The first repetition at each size is measurably colder than the rest (D1's
-first window read 280 MiB, D2's first read 1,091 MiB, and both were at 100%
-thereafter), so the 60-second warmup does not fully warm a working set of this
-size. Worth widening the warmup for the larger datasets rather than reading the
-first repetition as a result.
-
 ### 2026-08-24 — cross-size comparisons made before the corpus fix are not size effects
 
 The corpus used to be rebuilt per dataset tier, so each size was measured
@@ -345,80 +382,3 @@ and D2 (10 GiB) alike: PostgreSQL sits near idle for it. Saturation moved from
 four concurrent clients on D1 to eight on D2. So replicas and `tapApi.workers`
 remain the throughput lever — and each worker is now worth roughly 200
 requests/s rather than 20.
-
-## Package 14 — Measure replica scaling
-
-Run `20260824T014320Z-a5058118-fixed-scaling`: seventeen of 24 measurements
-were generator-capped, and the seven valid points do not bracket a ceiling
-at any replica count — one replica cannot serve C1 (it sheds 98.7% of it),
-and two, four and eight replicas all serve 1×C1 with headroom to spare. The
-suite nearly published "replica scaling efficiency at 8: 0.25" from two
-rates the service met in full; efficiency figures now require a bracketed
-capacity, so the column reads "—" until this package runs.
-
-Work, benchmark-side: rungs between 1× and 2×C1 — where the interesting
-region for two replicas and up turned out to be — or bounded-concurrency
-runs per replica count, the shape the size sweep already uses.
-
-**Resolution is shown by** a fixed-scaling run in which every replica count
-has a bracketed capacity (a valid rung the service was pushed past), the
-per-replica efficiency column populates from those brackets, and the p95 at
-each count's capacity is reported alongside it.
-
-## Package 16 — Ship the planner what it needs
-
-Two database-side findings, both currently documentation rather than
-deployment:
-
-- Cone search needs the index on the *expression* the translator emits —
-  `spoint(RADIANS(s_ra), RADIANS(s_dec)) @ scircle(...)` — or every cone
-  search is a sequential scan; a GiST index on a stored `spoint` column is
-  never considered. All three functions are `IMMUTABLE`, so the expression
-  index is legal, and the planner uses it once present.
-- Ten plan nodes costing 5 ms or more carry cardinality estimates 50x to
-  477x out, all in the join-heavy classes (Q09, Q11, Q14). Extended
-  statistics on the CAOM parent/child key pairs read as the obvious
-  candidate; it is not one. `dependencies` sharpens a conjunction of
-  equality quals over one table's columns and `ndistinct` sharpens group
-  counts over them — both single-table estimates — while these nodes
-  misestimate `child.parent_key = parent.parent_key`, an equality across
-  two relations. Postgres estimates join selectivity from per-column
-  statistics on the two sides and does not consult extended statistics for
-  it, so the misestimates survive the statistics objects and the lever is
-  still unidentified.
-
-Work: create the expression index and the key-chain statistics in the
-metadata domains' bootstrap (the same ensure-path the schema uses), so a
-deployment gets them without reading a guidance page. The statistics stay
-for what they do buy — sharper n-distinct and grouping estimates over the
-key chain — and not for the join estimates.
-
-**Resolution is shown by** the stress-class family on D2 or larger: the
-cone-search classes plan through the expression index (no sequential scan
-of ObsCore in their `EXPLAIN`) and their p95 does not regress. The
-Q09/Q11/Q14 join cardinality misestimates are carried forward as an open
-finding, not closed here.
-
-## Package 17 — Finish the size sweep
-
-D3 (25 GiB) is the first size that touches disk in earnest — buffer hit
-ratio 68–70% against 100% on D1/D2 — and D4 (45 GiB) is unmeasured, so the
-suite has said nothing yet about the I/O-bound regime under concurrency.
-Two harness gaps block reading it well: the 60-second warmup demonstrably
-does not warm a working set this size (the first repetition at each size is
-colder than the rest), and every cross-size throughput comparison taken
-before the per-tier corpus fix compares different workloads and was
-retracted as a size effect.
-
-Work, benchmark-side: widen the warmup for the larger tiers, run the
-concurrency sweep on D3 and D4, and re-publish throughput-versus-size from
-post-fix runs only. Include the stress classes: Q13 held a sync connection
-for 18 s on D3 when it ran on a cursor (serial, fast-start-biased plan), and
-whether a parallel plan brings that inside a defensible `syncTimeoutSeconds`
-is the measurement the deferred `EXPLAIN`-based admission decision (package
-11) is waiting on.
-
-**Resolution is shown by** a db-scaling run covering D1–D4 with one corpus,
-in which the first repetition at each size is statistically indistinct from
-the rest, and a published throughput-versus-size curve whose every point
-comes from that run.

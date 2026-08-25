@@ -7,10 +7,19 @@ datasets:
     target_bytes: 2147483648        # 2 GiB
   - name: D2
     target_bytes: 10737418240       # 10 GiB
+  # The larger tiers carry their own warmup. The measured fact behind it:
+  # with the default 60 s warmup the first repetition at each size was
+  # colder than the rest (D1's first window read 280 MiB, D2's 1,091 MiB),
+  # so the first repetition was a property of the cache, not the service.
+  # A working set bigger than memory never becomes "warm" — the target is
+  # the steady-state hit ratio, which takes as long as reading the hot set
+  # once.
   - name: D3
     target_bytes: 26843545600       # 25 GiB
+    warmup_seconds: 300
   - name: D4
     target_bytes: 48318382080       # 45 GiB
+    warmup_seconds: 600
 
 generation:
   seed: 20260823

@@ -1,0 +1,130 @@
+{
+  "D1": {
+    "database_bytes": 2314213055,
+    "index_bytes": {
+      "caom.artifact": 115367936,
+      "caom.chunk": 300113920,
+      "caom.observation": 28516352,
+      "caom.part": 200081408,
+      "caom.plane": 87818240,
+      "ivoa.obscore": 154796032
+    },
+    "index_to_table_ratio": 0.6257927996161029,
+    "name": "D1",
+    "obscore_rows": 700090,
+    "observations_generated": 350000,
+    "row_counts": {
+      "caom.artifact": 1498415,
+      "caom.chunk": 3371149,
+      "caom.observation": 350000,
+      "caom.part": 2247315,
+      "caom.plane": 700090,
+      "ivoa.obscore": 700090
+    },
+    "seconds": 4.246895506978035,
+    "table_bytes": {
+      "caom.artifact": 323149824,
+      "caom.chunk": 394665984,
+      "caom.observation": 51159040,
+      "caom.part": 238911488,
+      "caom.plane": 119554048,
+      "ivoa.obscore": 289472512
+    }
+  },
+  "D2": {
+    "database_bytes": 10750506687,
+    "index_bytes": {
+      "caom.artifact": 557637632,
+      "caom.chunk": 1451606016,
+      "caom.observation": 121364480,
+      "caom.part": 967835648,
+      "caom.plane": 377847808,
+      "ivoa.obscore": 664354816
+    },
+    "index_to_table_ratio": 0.6274509317109443,
+    "name": "D2",
+    "obscore_rows": 3000213,
+    "observations_generated": 1500000,
+    "row_counts": {
+      "caom.artifact": 7248412,
+      "caom.chunk": 16305743,
+      "caom.observation": 1500000,
+      "caom.part": 10871368,
+      "caom.plane": 3000213,
+      "ivoa.obscore": 3000213
+    },
+    "seconds": 1240.2423109738156,
+    "table_bytes": {
+      "caom.artifact": 1563066368,
+      "caom.chunk": 1908809728,
+      "caom.observation": 219111424,
+      "caom.part": 1155563520,
+      "caom.plane": 512229376,
+      "ivoa.obscore": 1240375296
+    }
+  },
+  "D3": {
+    "database_bytes": 26884839103,
+    "index_bytes": {
+      "caom.artifact": 1403469824,
+      "caom.chunk": 3653935104,
+      "caom.observation": 307822592,
+      "caom.part": 2436096000,
+      "caom.plane": 928587776,
+      "ivoa.obscore": 1633763328
+    },
+    "index_to_table_ratio": 0.6277035699949937,
+    "name": "D3",
+    "obscore_rows": 7399024,
+    "observations_generated": 3700000,
+    "row_counts": {
+      "caom.artifact": 18245577,
+      "caom.chunk": 41045725,
+      "caom.observation": 3700000,
+      "caom.part": 27364544,
+      "caom.plane": 7399024,
+      "ivoa.obscore": 7399024
+    },
+    "seconds": 2498.892861036118,
+    "table_bytes": {
+      "caom.artifact": 3934486528,
+      "caom.chunk": 4804886528,
+      "caom.observation": 540426240,
+      "caom.part": 2908594176,
+      "caom.plane": 1263198208,
+      "ivoa.obscore": 3058868224
+    }
+  },
+  "D4": {
+    "database_bytes": 48526923455,
+    "index_bytes": {
+      "caom.artifact": 2538012672,
+      "caom.chunk": 6608166912,
+      "caom.observation": 542244864,
+      "caom.part": 4405600256,
+      "caom.plane": 1674207232,
+      "ivoa.obscore": 2943025152
+    },
+    "index_to_table_ratio": 0.6277898316302495,
+    "name": "D4",
+    "obscore_rows": 13299270,
+    "observations_generated": 6650000,
+    "row_counts": {
+      "caom.artifact": 32996248,
+      "caom.chunk": 74232285,
+      "caom.observation": 6650000,
+      "caom.part": 49488417,
+      "caom.plane": 13299270,
+      "ivoa.obscore": 13299270
+    },
+    "seconds": 3560.5938295740634,
+    "table_bytes": {
+      "caom.artifact": 7115300864,
+      "caom.chunk": 8689737728,
+      "caom.observation": 971276288,
+      "caom.part": 5260124160,
+      "caom.plane": 2270502912,
+      "ivoa.obscore": 5498028032
+    }
+  }
+}
