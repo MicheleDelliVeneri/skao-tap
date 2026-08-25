@@ -1,0 +1,60 @@
+{
+  "chart_values": "# Chart values for the benchmark deployment. Everything here is either the\n# hardware budget or a value the benchmark needs to observe; the service's own\n# defaults are left alone, because a benchmark of a tuned-for-the-benchmark\n# configuration measures the tuning.\nimage:\n  registry: tapbench\n  tag: bench\n  pullPolicy: Never\n\ntapApi:\n  replicas: 1\n  # The load generator runs on the host, so the URLs the service hands out\n  # (UWS job locations, result links) have to be reachable from there. Left at\n  # the in-cluster default, every async job would return a location pointing at\n  # a Service name the generator cannot resolve, and the KEDA scenarios would\n  # measure DNS failures.\n  baseUrl: \"http://127.0.0.1:30080/tap\"\n  # One worker per pod. The replica count is the variable under test, and a\n  # pod that also scales internally would make \"throughput per replica\" mean\n  # two different things at once.\n  workers: 1\n  resources:\n    requests: {cpu: 1, memory: 512Mi}\n    limits: {cpu: 2, memory: 1Gi}\n\ntapExecutor:\n  replicas: 1\n  # CPU limit 1, not 2: the executor is a single thread, and under sustained\n  # load it pins at ~0.96 cores with zero throttling \u2014 a 2-core limit is one\n  # core it can never use, and headroom in the numbers that does not exist.\n  # Per-pod throughput (~2 jobs/s) is set by the single thread, not by CPU;\n  # replicas are the executor's scaling axis.\n  resources:\n    requests: {cpu: 500m, memory: 512Mi}\n    limits: {cpu: 1, memory: 1Gi}\n\n# Both autoscalers are configured here and switched on per scenario, so the\n# KEDA runs use the repository's real ScaledObject rather than one written for\n# the benchmark.\nhorizontalAutoscaling:\n  tapApi:\n    enabled: false\n    minReplicas: 1\n    maxReplicas: 8\n    targetCPUUtilizationPercentage: 70\n  tapExecutor:\n    enabled: false\n    scaler: keda\n    minReplicas: 1\n    maxReplicas: 8\n    queuedJobsPerReplica: 10\n    prometheusAddress: http://prometheus.benchmon.svc:9090\n    pollingIntervalSeconds: 5\n\nverticalAutoscaling:\n  enabled: false\n\nmetrics:\n  scrapeAnnotations: true\n\n# The benchmark's own Prometheus scrapes the pods (manifests/monitoring.yaml);\n# the chart's bundled one would be a second scraper on the same endpoints.\nprometheus:\n  enabled: false\n\nconfig:\n  # 8 per process against an 8-CPU server: the pool is the concurrency limit\n  # under test, so it is stated rather than left at whatever the default is.\n  # Unchanged when the server's cores doubled, because moving the pool and the\n  # cores together would leave nothing to attribute a change to.\n  dbPoolMin: 1\n  dbPoolMax: 8\n  dbPoolTimeoutSeconds: 5\n  syncTimeoutSeconds: 60\n  asyncExecDurationSeconds: 600\n  hardMaxrec: 1000000\n  defaultMaxrec: 10000\n  logLevel: WARNING\n  executorMetricsPort: 9100\n\nresults:\n  size: 5Gi\n\npostgresql:\n  enabled: true\n  storage: 200Gi\n  resources:\n    requests: {cpu: 4, memory: 4Gi}\n    limits: {cpu: 8, memory: 12Gi}\n  tuning:\n    # pg_stat_statements and I/O timing are requirements of the suite, not\n    # tuning: without them there is no per-statement or per-relation I/O data\n    # to attribute anything to.\n    shared_preload_libraries: pg_stat_statements\n    track_io_timing: \"on\"\n    \"pg_stat_statements.max\": \"10000\"\n    \"pg_stat_statements.track\": all\n    # Sized for the 12 GiB limit: shared_buffers a quarter of it, the rest left\n    # to the page cache, which is where a 45 GiB database lives or does not.\n    shared_buffers: 3GB\n    effective_cache_size: 8GB\n    work_mem: 32MB\n    maintenance_work_mem: 512MB\n    max_connections: \"200\"\n    max_wal_size: 4GB\n    random_page_cost: \"1.1\"\n",
+  "chart_values_sha256": "d2e1f81d36fe3b3b2d792ed3073fe539cd43c74c2edaec35842e43dbfbe54a33",
+  "cluster": {
+    "architecture": "amd64",
+    "container_runtime": "containerd://2.1.1",
+    "helm": "v4.0.0+g99cd196",
+    "keda_image": "ghcr.io/kedacore/keda:2.18.1",
+    "kernel": "6.8.0-134-generic",
+    "kind": "kind v0.29.0 go1.24.2 linux/amd64",
+    "kubernetes": "v1.33.1",
+    "node_cpu_capacity": "30",
+    "node_memory_capacity": "126738624Ki",
+    "os_image": "Debian GNU/Linux 12 (bookworm)",
+    "postgres": "PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+    "postgres_extensions": "pg_sphere 1.5.2, pg_stat_statements 1.12, plpgsql 1.0"
+  },
+  "corpus_sha256": "45623decb402cb2d85ea533de109cd9b49935165dac9da1ab10f0be228a62af1",
+  "git": {
+    "branch": "feat/package-17-size-sweep",
+    "describe": "085c095",
+    "dirty": false,
+    "sha": "085c0954e1dcfc8cb1bd759431b3d6fc5938a9fb"
+  },
+  "hardware_budget": {
+    "budget": {
+      "host_cpus": 30,
+      "host_memory_gib": 120,
+      "host_storage_gb": 440,
+      "kubernetes_cpus": 24,
+      "kubernetes_memory_gib": 96,
+      "postgres_cpus": 8,
+      "postgres_memory_gib": 12,
+      "postgres_storage_cap_gb": 200,
+      "tap_replicas_max": 8,
+      "tap_replicas_min": 1
+    },
+    "enforcement": {
+      "kind_node_cpus": 24,
+      "kind_node_memory": "96g",
+      "load_generator_on_host": true,
+      "min_free_disk_gb": 40
+    }
+  },
+  "host": {
+    "cpu_count": 30,
+    "free_disk_bytes": 388220809216,
+    "machine": "x86_64",
+    "platform": "Linux-6.8.0-134-generic-x86_64-with-glibc2.39",
+    "processor": "x86_64",
+    "python": "3.14.6"
+  },
+  "images": {
+    "tapbench/tap-api:bench-2ac62dd21c3a": "sha256:ba4f22abd5e5e41310ad2a4a99bab7ab7371f1c86d297fcaf717821b1dd4dfd9",
+    "tapbench/tap-db:bench-2ac62dd21c3a": "sha256:f1fdfa7967014501403e24faa10bdc0adb5a78cabacb963965f3e53aa7114104",
+    "tapbench/tap-executor:bench-2ac62dd21c3a": "sha256:a83ac3fcb17bf8c2794b2de8ffcd88984fcd54587e4a5a6bf3ceed45b384ec73"
+  },
+  "recorded_at": 1787656157.2270582,
+  "seed": 20260823
+}
