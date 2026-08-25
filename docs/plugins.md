@@ -191,7 +191,7 @@ Unknown identifiers return HTTP 404.
 
 ## Querying across domains
 
-The runnable [`demo/srcnet_metadata_tap.ipynb`](https://github.com/MicheleDelliVeneri/egernia/blob/main/demo/srcnet_metadata_tap.ipynb)
+The runnable [`demo/srcnet_metadata_tap.ipynb`](https://github.com/ska-telescope/egernia/blob/main/demo/srcnet_metadata_tap.ipynb)
 populates 100 positioned rows in `srcnet.data_products` plus
 `srcnet.software` against the Docker Compose deployment, then demonstrates
 PyVO discovery, spatial and asynchronous queries, amendment, and deletion.
