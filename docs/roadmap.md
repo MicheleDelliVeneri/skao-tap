@@ -377,16 +377,27 @@ deployment:
   index is legal, and the planner uses it once present.
 - Ten plan nodes costing 5 ms or more carry cardinality estimates 50x to
   477x out, all in the join-heavy classes (Q09, Q11, Q14). Extended
-  statistics on the CAOM parent/child key pairs is the obvious candidate.
+  statistics on the CAOM parent/child key pairs read as the obvious
+  candidate; it is not one. `dependencies` sharpens a conjunction of
+  equality quals over one table's columns and `ndistinct` sharpens group
+  counts over them — both single-table estimates — while these nodes
+  misestimate `child.parent_key = parent.parent_key`, an equality across
+  two relations. Postgres estimates join selectivity from per-column
+  statistics on the two sides and does not consult extended statistics for
+  it, so the misestimates survive the statistics objects and the lever is
+  still unidentified.
 
-Work: create the expression index and the extended statistics in the
+Work: create the expression index and the key-chain statistics in the
 metadata domains' bootstrap (the same ensure-path the schema uses), so a
-deployment gets them without reading a guidance page.
+deployment gets them without reading a guidance page. The statistics stay
+for what they do buy — sharper n-distinct and grouping estimates over the
+key chain — and not for the join estimates.
 
 **Resolution is shown by** the stress-class family on D2 or larger: the
 cone-search classes plan through the expression index (no sequential scan
-of ObsCore in their `EXPLAIN`), Q09/Q11/Q14 cardinality estimates come
-within an order of magnitude, and their p95 does not regress.
+of ObsCore in their `EXPLAIN`) and their p95 does not regress. The
+Q09/Q11/Q14 join cardinality misestimates are carried forward as an open
+finding, not closed here.
 
 ## Package 17 — Finish the size sweep
 

@@ -159,3 +159,37 @@ def test_geometry_columns_are_registered_in_tap_schema():
     }
     assert ("srcnet.data_products", "s_region_geom") in registered
     assert ("srcnet.artifacts", "s_region_geom") in registered
+
+
+def test_position_pairs_get_the_expression_cone_index():
+    """The translator emits `spoint(RADIANS(s_ra), RADIANS(s_dec)) @ ...`;
+    only an index on that expression is ever considered (package 16)."""
+    ddl = ddl_statements(TABLES, "tap_reader")
+    spatial = [s for s in ddl if "spoint(RADIANS(s_ra), RADIANS(s_dec))" in s]
+    assert any("data_products_spoint_gist" in s for s in spatial)
+    assert any("artifacts_spoint_gist" in s for s in spatial)
+
+
+def test_key_chains_get_extended_statistics():
+    ddl = ddl_statements(TABLES, "tap_reader")
+    stx = [s for s in ddl if s.startswith("CREATE STATISTICS")]
+    assert (
+        "CREATE STATISTICS IF NOT EXISTS srcnet.artifacts_keys_stx (ndistinct, dependencies)"
+        " ON project_id, obs_id, sbd_id, eb_id, product_id, artifact_id"
+        " FROM srcnet.artifacts" in stx
+    )
+    # a single-column key has no correlation to declare
+    assert not any("projects_keys_stx" in s for s in stx)
+
+
+def test_statistics_objects_are_named_in_the_tables_schema():
+    """CREATE INDEX puts the index in the table's schema whatever the
+    search_path says; a statistics object name does not — it lands in the
+    search_path schema. Two plugins with same-named tables in different
+    schemas would collide there, and IF NOT EXISTS would make the collision a
+    silent skip pointing at the wrong table."""
+    stx = [s for s in ddl_statements(TABLES, "tap_reader") if s.startswith("CREATE STATISTICS")]
+    assert stx
+    for statement in stx:
+        name = statement.split("IF NOT EXISTS ", 1)[1].split(" ", 1)[0]
+        assert name.startswith("srcnet."), statement

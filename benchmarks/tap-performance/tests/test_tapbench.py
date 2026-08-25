@@ -437,3 +437,15 @@ def test_publish_drops_host_identifying_fields(tmp_path):
     assert published["host"]["platform"] == "macOS-26.6.2-arm64"
     assert published["host"]["cpu_count"] == 14
     assert published["git"]["sha"] == "deadbeef"
+
+
+def test_every_expected_index_is_created_by_the_schema():
+    """EXPECTED_INDEXES is the contract the plan flags assert against; an
+    index the schema never creates makes the flag fire on every run — which
+    is exactly how the cone-search expression index went missing while its
+    explanatory comment sat right above the index block (package 16)."""
+    from tapbench.collect import postgres as pg_mod
+
+    schema = (SUITE / "tapbench/dataset/schema.sql").read_text()
+    for index_name in set(pg_mod.EXPECTED_INDEXES.values()):
+        assert f"CREATE INDEX IF NOT EXISTS {index_name}" in schema, index_name
