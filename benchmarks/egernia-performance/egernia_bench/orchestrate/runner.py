@@ -568,6 +568,11 @@ def concurrency_sweep(
         for repetition in range(reps):
             workload = load_mod.Workload(entries, mix, seed=1000 + repetition)
             key = f"{key_prefix}-{dataset}-c{concurrency}-r{repetition}"
+            # The settle pause exists so a run does not inherit its
+            # predecessor's state — a rung replayed from cache ran nothing, so
+            # there is nothing to settle, and a resumed grid would otherwise
+            # spend minutes sleeping between measurements that never happened.
+            cached = run.done(key)
             ingredients = {
                 "entries": entries,
                 "mix": mix,
@@ -598,7 +603,8 @@ def concurrency_sweep(
             if result:
                 measured.append(result)
                 results.append(result)
-            time.sleep(timing["settle_seconds"] if not quick else 2)
+            if not cached:
+                time.sleep(timing["settle_seconds"] if not quick else 2)
 
         if not measured:
             continue
@@ -635,6 +641,7 @@ def concurrency_sweep(
             for repetition in range(timing["saturation_repetitions"]):
                 workload = load_mod.Workload(entries, mix, seed=2000 + repetition)
                 key = f"sat-{dataset}-c{concurrency}-r{repetition}"
+                cached = run.done(key)
                 result = measure(
                     run,
                     cfg,
@@ -651,7 +658,8 @@ def concurrency_sweep(
                 )
                 if result:
                     results.append(result)
-                time.sleep(timing["settle_seconds"])
+                if not cached:
+                    time.sleep(timing["settle_seconds"])
             break
         previous = current
     return results
