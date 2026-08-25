@@ -6,8 +6,8 @@ authors:
   - family-names: "Delli Veneri"
     given-names: "Michele"
     affiliation: "SKA Observatory"
-repository-code: "https://github.com/MicheleDelliVeneri/egernia"
-url: "https://micheledelliveneri.github.io/egernia/"
+repository-code: "https://github.com/ska-telescope/egernia"
+url: "https://ska-telescope.github.io/egernia/"
 license: MIT
 abstract: >-
   An IVOA Table Access Protocol (TAP) 1.1 server implemented in Python as two
