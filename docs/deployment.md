@@ -61,7 +61,7 @@ Key values (see `values.yaml` for the full list):
 | `config.executorMetricsPort` | `9100` | Port the executor serves metrics on — it has no API of its own |
 | `config.dbPoolMax` | `8` | Database connections per process — the real limit on concurrent queries |
 | `config.dbPoolTimeoutSeconds` | `5` | How long a request waits for one before answering `503` |
-| `tapApi.workers` | `1` | Uvicorn processes per pod; ADQL translation holds the GIL, so this is what lets a pod use more than one core |
+| `tapApi.workers` | `1` | Uvicorn processes per pod; about half a request's CPU holds the GIL, so this is what lets a pod use more than one core. Set it to the pod's CPU limit — [measured](#serving-concurrent-queries) |
 | `auth.enabled` | `false` | Require verified tokens and gate the mutating metadata endpoints ([guide](auth.md)) |
 | `auth.requireToken` | `true` | With `auth.enabled`, every request needs a verified token — discovery and the health check aside |
 | `auth.anonymousQueries` | `false` | Let token-less callers read metadata through `/tap/sync` and the `/tap/async` job; what standard VO clients need |
@@ -73,26 +73,35 @@ Key values (see `values.yaml` for the full list):
 
 ### Serving concurrent queries
 
-Translating ADQL is pure-Python ANTLR work — tens of milliseconds per query,
-holding the GIL — so a single process answers one query at a time no matter
-how many cores the pod has. Measured locally at 8 concurrent clients, same
-machine and same queries:
+About half of a request's CPU is pure-Python work that holds the GIL — ADQL
+translation (3.19 ms of a ~10.5 ms request) and the result writers — so one
+worker process cannot use more than one core however many the pod has.
+Measured (run `20260825T180219Z-f8b21fc4`, D1, normal mix, each figure a
+saturated closed-loop ceiling on one pod):
 
-| workers | throughput | p95 |
-| ---: | ---: | ---: |
-| 1 | 59 req/s | 199 ms |
-| 4 | 210 req/s | 61 ms |
+| workers | pod CPU limit | throughput | pod CPU used | pod memory peak |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 2 | 99.1 req/s | 1.04–1.08 cores | 138 MiB |
+| 2 | 2 | 187.6 req/s | 1.94 cores | 302 MiB |
+| 4 | 2 | 179.2 req/s | 2.00 cores | 562 MiB |
+| 4 | 4 | 338.1 req/s | 4.00 cores | 581 MiB |
 
-!!! warning "Measured before the translation fast path"
-    These were taken when ADQL translation cost 41 ms of a ~50 ms request. It
-    now costs 1.2 ms, so a single worker goes very much further than this table
-    suggests, and the ratio between one and four workers no longer holds.
-    They are kept only until the re-measurement lands in
-    [Performance](performance/index.md).
+**Set `tapApi.workers` to the pod's CPU limit** — measured, not just advised:
+one worker consumes almost exactly one core, two workers on a 2-core pod are
+1.89x one, and a third and fourth worker on the same 2 cores *lose* ~4% to
+context switching. The last row shows the ceiling is the pod, not uvicorn:
+the same four workers given 4 cores reach 3.4x, pinned at the new limit and
+still CPU-bound.
 
-Set `tapApi.workers` to the pod's CPU limit and no higher: beyond that the
-workers compete for the same cores and only latency moves. `tapApi.replicas`
-does the same across pods, and the two combine.
+The two axes buy the same throughput per process — 4 processes as
+2 workers x 2 replicas measured 335.8 req/s against 342.9 as 4 single-worker
+replicas, and at 8 processes 583.0 against 581.6 — so choose by what each
+costs. A worker costs no pod, but roughly 140–165 MiB of mostly private
+memory (size `tapApi.resources.limits.memory` with the worker count: four
+workers peak at ~580 MiB against the default 1 Gi) and a connection-pool
+ceiling of `workers x config.dbPoolMax` per pod, which is the arithmetic in
+[When every connection is busy](#when-every-connection-is-busy) below.
+Replicas cost pods and spread across nodes; workers cannot.
 
 ### Shedding overload with refusals, not resets
 
@@ -150,8 +159,8 @@ to queue. Measured locally with one worker and the default pool of 8:
 
 Throughput holds flat and latency grows: requests wait their turn, which is
 what a queue should look like. Add `tapApi.workers` to raise the ceiling
-itself — four workers carried 233 req/s at 32 clients on the same machine
-(again, before the translation fast path).
+itself — see the measured worker table in
+[Serving concurrent queries](#serving-concurrent-queries).
 
 If the wait for a connection exceeds `config.dbPoolTimeoutSeconds` the request
 answers `503` with `Retry-After` rather than holding the caller. Five seconds

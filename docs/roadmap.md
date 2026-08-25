@@ -4,9 +4,9 @@ Follow-up work is organized in numbered packages, referenced by number in
 issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
-**Packages 18 through 21 are open.** Everything through package 17 is
-delivered and merged; what each one settled is recorded in the findings
-below.
+**Packages 18, 20 and 21 are open.** Everything through package 17, and
+package 19, is delivered and merged; what each one settled is recorded in
+the findings below.
 
 ## Measured findings
 
@@ -18,6 +18,69 @@ so it can be checked and it can go stale — the run that produced it is named.
 Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/egernia-performance/results/`.
+
+### 2026-08-25 — workers against replicas: same price per process, and the wall is the cgroup (package 19, delivered)
+
+One run (`20260825T180219Z-f8b21fc4`), twelve (workers, replicas) points plus
+one probe, every point a saturated closed-loop ceiling on the same host,
+corpus and seeds — and the w=1 column reproduces the replica ladder
+(99.1 / 189.9 / 342.9 / 581.6 rps against `ccbcb41a`'s 98.9 / 190.8 / 347.5 /
+577.9) on a rebuilt cluster, which is what makes the rest comparable.
+
+| rps | n=1 | n=2 | n=4 | n=8 |
+| --- | ---: | ---: | ---: | ---: |
+| w=1 | 99.1 | 189.9 | 342.9 | 581.6 |
+| w=2 | 187.6 | 335.8 | 583.0 | 830.7 |
+| w=4 | 179.2 | 346.7 | 640.6 | 1005.5 |
+
+- **A worker is worth a replica, and it costs no pod.** At equal process
+  count the two axes are interchangeable in throughput: 4 processes measure
+  335.8 (2x2) against 342.9 (1x4); 8 processes measure 583.0 against 581.6.
+  What a worker costs instead is ~140–165 MiB of essentially private memory
+  (pod peaks 138 / 302 / 562 MiB at w=1/2/4 — the interpreter shares almost
+  nothing) and `dbPoolMax` more connections in the pod's ceiling.
+- **The default follows the pod's CPU limit, and the mechanism was
+  falsifiable in advance.** Package 18's profile priced a request at 10.5 ms
+  of CPU with ~53% GIL-serialised and one worker at 1.05 cores, predicting
+  w=2 at 2 x 1.05 wanted against 2.00 allowed = 0.952 of doubling; measured,
+  187.6 / (2 x 99.1) = 0.945, with the pod at 1.94 cores. Four workers on
+  the same 2 cores *lose* 4% (179.2). The probe settles what that means:
+  the same four workers at a 4-core limit reach 338.1 rps pinned at exactly
+  4.00 cores, still `TAP_CPU_BOUND` — the wall is the cgroup, not uvicorn.
+  So `tapApi.workers` = the pod's CPU limit, stated in
+  [Deployment](deployment.md) with the table.
+- **On one host the axes stop being interchangeable at the top.** At n=8 a
+  w=2 fleet's pods reach only 1.45 cores each (11.6 of 16 allowed) where
+  w=4 pods reach 1.81 — 830.7 against 1005.5 rps from the same eight pods —
+  so extra in-pod workers recovered capacity that adding pods could not,
+  on a 24-core node also running PostgreSQL (1.9 cores at the top point)
+  and the cluster plane. Per process, 32 processes on one host serve
+  31 rps each against a single process's 99.
+- **The connection arithmetic is stated, and it was survived, not
+  validated.** The w=4 n=8 shape may open 256 connections against
+  `max_connections: 200`; it served 1,005 rps with zero errors because this
+  CPU-bound mix holds few connections at once. The ceiling is what the
+  fleet *may* open — [Autoscaling](autoscaling.md) now says so next to the
+  chart's own refusal arithmetic.
+- **What the sweep broke on the way is fixed and pinned.** A ConfigMap-only
+  change (workers, auth, any `config.*`) never restarted the pods — the pod
+  templates now hash ConfigMap and Secret, the harness verifies the deployed
+  worker count and limits from the pods rather than from helm's exit code,
+  and package 18's authenticated rungs were the first beneficiary. Also
+  fixed: dataset generation on a fresh cluster (the service's obscore view
+  pre-empts the suite's table), the restart guard judging pods on lifetime
+  `restartCount`, the database port-forward adopted on an accepting socket
+  a dying forwarder still held, and `MEMORY_BOUND` judged on a fleet-summed
+  working set that counts a rollout's terminating pods (now judged per pod;
+  six transition rungs in this run carry the old misverdict, capacity rungs
+  are unaffected).
+- **Known artefact, diagnosable but not yet attributed per worker:**
+  keep-alive connections pin to a pod *and to a worker within it*, so
+  low-concurrency rungs are bimodal (two clients on one worker of two
+  measure 98 rps where spread clients measure 167). It vanishes at every
+  capacity rung in this run (max repetition spread 2.7%), and per-pod
+  `served_by` concentration lands with package 18 — per-*worker* identity
+  in the response is proposed follow-up, not tacked onto either package.
 
 ### 2026-08-25 — the size sweep is finished, and size almost is not the story (packages 16 and 17, delivered)
 
@@ -424,29 +487,6 @@ here; a hot-path benchmark covering the request path end to end whose
 per-request total agrees with the measured saturation throughput within 20%;
 and one measured rung with authentication enabled, so the cost of verifying a
 token on this path is a number rather than an assumption.
-
-## Package 19 — Workers against replicas, on one host
-
-The replica curve (1.00 / 0.96 / 0.88 / 0.73 at eight,
-`20260824T235130Z-ccbcb41a`) was measured at one worker per pod against a pod
-whose CPU limit is 2, so every point in it was half-idle by construction — and
-the chart still defaults `tapApi.workers: 1`. Two pages carry an explicit note
-that the worker figures predate the translation fast path and are being
-re-measured ([Autoscaling](autoscaling.md), [Deployment](deployment.md)); they
-have not been. Until they are, an operator has a measured answer for the axis
-that costs pods and a stale one for the axis that costs nothing.
-
-Work, benchmark-side: sweep `tapApi.workers` (1, 2, 4) within one pod at its
-CPU limit against the existing replica ladder, same host, same corpus, same
-workload seeds — and state the connection arithmetic each choice implies,
-since a pod's pool ceiling is `workers x dbPoolMax` and the two axes are
-therefore not interchangeable at the database.
-
-**Resolution is shown by** a capacity figure per (workers, replicas) point,
-each bracketed by a saturated sweep the way the replica ladder now is; the
-stale notes in `autoscaling.md` and `deployment.md` replaced by those numbers;
-and a stated default for `tapApi.workers` that follows the pod's CPU limit if
-the measurement supports one.
 
 ## Package 20 — What one async job actually costs
 

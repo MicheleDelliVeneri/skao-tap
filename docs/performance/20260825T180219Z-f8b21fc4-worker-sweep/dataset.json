@@ -1,0 +1,34 @@
+{
+  "D1": {
+    "database_bytes": 2209633983,
+    "index_bytes": {
+      "caom.artifact": 115408896,
+      "caom.chunk": 300417024,
+      "caom.observation": 25214976,
+      "caom.part": 200302592,
+      "caom.plane": 74063872,
+      "ivoa.obscore": 131334144
+    },
+    "index_to_table_ratio": 0.6262048575981001,
+    "name": "D1",
+    "obscore_rows": 600120,
+    "observations_generated": 300000,
+    "row_counts": {
+      "caom.artifact": 1499914,
+      "caom.chunk": 3374401,
+      "caom.observation": 300000,
+      "caom.part": 2249841,
+      "caom.plane": 600120,
+      "ivoa.obscore": 600120
+    },
+    "seconds": 4.029172596056014,
+    "table_bytes": {
+      "caom.artifact": 323477504,
+      "caom.chunk": 395042816,
+      "caom.observation": 43851776,
+      "caom.part": 239181824,
+      "caom.plane": 102498304,
+      "ivoa.obscore": 248127488
+    }
+  }
+}
