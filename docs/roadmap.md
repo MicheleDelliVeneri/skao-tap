@@ -42,14 +42,22 @@ corpus and seeds — and the w=1 column reproduces the replica ladder
   on the memory: the working set keeps growing after the pod warms — a fresh
   four-worker pod went 548 → 581 MiB over its 25 minutes of serving — so
   read the default 1 Gi as hosting four workers with real, not generous,
-  margin. The shape of that growth says warm-up, not leak: it steps at each
-  new concurrency level and decays at constant load, the per-request slope
-  differs 37x between w=2 and w=4 at equal throughput (0.03 against
+  margin. The shape of that growth says warm-up, not leak: the per-request
+  slope differs 37x between w=2 and w=4 at equal throughput (0.03 against
   1.05 MiB per thousand requests) where a real per-request cost would be a
-  constant, and the two-worker pod measurably flattens at its own steady
-  state. What rules out a slow residual leak conclusively is a soak — no
-  configuration here was held longer than ten minutes — noted as the
-  outstanding check rather than assumed away.
+  constant, it decays at constant load, and the two-worker pod measurably
+  flattens at its own steady state. The steps between rungs have a named
+  mechanism: they coincide exactly with the per-worker psycopg pools
+  opening connections as concurrency rises (server sessions 11 → 24 across
+  the probe's rungs, ~2–3 MiB a connection), so the pod's memory floor
+  grows toward `workers x dbPoolMax` — the same product its connection
+  ceiling is made of, which gives the workers default its companion:
+  workers follow the CPU limit, and `config.dbPoolMax` is what makes them
+  fit the memory limit. What rules out a slow residual leak conclusively
+  is a soak — no configuration here was held longer than ten minutes — run
+  it at the w=4 saturation rung, where the bound is tightest and a real
+  residual shows first (the flattest slope observed here, taken at face
+  value, reaches 1 Gi in ~12 hours at that rung's 338 rps).
 - **The default follows the pod's CPU limit, and the mechanism was
   falsifiable in advance.** Package 18's profile priced a request at 10.5 ms
   of CPU with ~53% GIL-serialised and one worker at 1.05 cores, predicting
