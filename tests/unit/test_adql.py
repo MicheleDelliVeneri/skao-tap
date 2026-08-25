@@ -367,3 +367,59 @@ def test_with_is_still_refused():
     refusal must stay a clear error rather than becoming silent breakage."""
     with pytest.raises(QueryParseError, match="WITH"):
         adql_to_postgresql("WITH x AS (SELECT a FROM t) SELECT a FROM x")
+
+
+# ---------------------------------------------------------------------------
+# Geometry-slot columns are reported on the Translation (package 22 enabler).
+# Translation is pure — no TAP_SCHEMA — so a *text* column in a geometry slot
+# (ObsCore's s_region) translates cleanly here and would die in PostgreSQL
+# with "operator does not exist: text && scircle". The type check lives with
+# the caller that has column metadata; this list is what it checks.
+# ---------------------------------------------------------------------------
+
+
+def test_geometry_slot_columns_are_reported():
+    from egernia_core.query.adql import translate
+
+    result = translate(
+        "SELECT obs_id FROM ivoa.obscore"
+        " WHERE 1=INTERSECTS(s_region, CIRCLE('ICRS', 150.0, -30.0, 0.5))"
+    )
+    # The translator accepts it — the type check is the caller's, from here:
+    assert result.geometry_columns == frozenset({"s_region"})
+
+
+def test_geometry_slot_columns_in_either_argument_position():
+    from egernia_core.query.adql import translate
+
+    for query in (
+        "SELECT 1 FROM t WHERE 1=INTERSECTS(footprint, CIRCLE('ICRS',1,2,0.1))",
+        "SELECT 1 FROM t WHERE 1=INTERSECTS(CIRCLE('ICRS',1,2,0.1), footprint)",
+        "SELECT 1 FROM t WHERE 1=CONTAINS(footprint, CIRCLE('ICRS',1,2,0.1))",
+        "SELECT 1 FROM t WHERE 1=CONTAINS(CIRCLE('ICRS',1,2,0.1), footprint)",
+    ):
+        assert translate(query).geometry_columns == frozenset({"footprint"})
+
+
+def test_geometry_slot_columns_from_every_accepting_construct():
+    from egernia_core.query.adql import translate
+
+    area = translate("SELECT AREA(a.footprint) FROM t AS a")
+    assert area.geometry_columns == frozenset({"a.footprint"})
+
+    distance = translate("SELECT DISTANCE(p1, p2) FROM t")
+    assert distance.geometry_columns == frozenset({"p1", "p2"})
+
+    centre = translate("SELECT 1 FROM t WHERE 1=CONTAINS(pt_col, CIRCLE(center_col, 0.5))")
+    assert centre.geometry_columns == frozenset({"pt_col", "center_col"})
+
+
+def test_all_literal_geometry_reports_no_columns():
+    from egernia_core.query.adql import translate
+
+    result = translate(
+        "SELECT TOP 5 obs_id FROM ivoa.obscore"
+        " WHERE 1=CONTAINS(POINT('ICRS', s_ra, s_dec), CIRCLE('ICRS', 10.5, -30.2, 0.5))"
+    )
+    # s_ra/s_dec are constructor *coordinates*, not geometry-slot columns.
+    assert result.geometry_columns == frozenset()

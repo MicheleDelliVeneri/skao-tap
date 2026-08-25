@@ -39,10 +39,20 @@ def check_language(lang: str) -> None:
 
 @dataclass(frozen=True)
 class Translation:
-    """A translated query and the tables it reads, from one parse."""
+    """A translated query and the tables it reads, from one parse.
+
+    ``geometry_columns`` holds the column references (as written in the
+    query, possibly qualified) that the translator accepted in geometry
+    slots — CONTAINS/INTERSECTS/AREA arguments, DISTANCE point arguments,
+    CIRCLE centres. Translation is pure and consults no TAP_SCHEMA, so a
+    text column such as ObsCore's ``s_region`` passes through here and
+    would only fail inside PostgreSQL; a caller that has column metadata
+    uses this list to refuse it with a usage error instead (package 22).
+    """
 
     sql: str
     tables: frozenset[str]
+    geometry_columns: frozenset[str]
 
 
 class _Translator(ADQLQueryTranslator):
@@ -146,7 +156,11 @@ def translate(query: str) -> Translation:
         raise QueryParseError(f"ADQL syntax error: {detail}") from exc
     except QueryError as exc:
         raise QueryParseError(f"ADQL error: {exc}") from exc
-    return Translation(sql=sql, tables=_tables_from_tree(translator))
+    return Translation(
+        sql=sql,
+        tables=_tables_from_tree(translator),
+        geometry_columns=translator.geometry_columns,
+    )
 
 
 def _tables_from_tree(translator: ADQLQueryTranslator) -> frozenset[str]:

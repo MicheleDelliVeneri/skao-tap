@@ -11,7 +11,11 @@ Changes against upstream, all ADQL 2.1:
 
 - geometry arguments (CONTAINS/INTERSECTS/AREA/DISTANCE, circle centres) may
   be column references, not just constructors — the column name passes
-  through to the SQL, where it is a pgsphere-typed column;
+  through to the SQL, where it is a pgsphere-typed column; every column
+  reference accepted this way is recorded on the translator as
+  ``geometry_columns`` (the translator itself has no column metadata, so a
+  caller with TAP_SCHEMA access type-checks them — a *text* column here
+  would otherwise only fail inside PostgreSQL);
 - CAST and COALESCE render as themselves (both are PostgreSQL-native); CAST
   to the geometry types the grammar admits is rejected with a clear error
   because no pgsphere mapping is defined for it;
@@ -123,6 +127,10 @@ class ADQLGeometryTranslationVisitor(ADQLParserVisitor):
     def __init__(self, conunits="RADIANS"):
         self.contexts = {}
         self.conunits = conunits
+        # Column references accepted in geometry slots (ADQL 2.1), as
+        # written in the query. The translator has no column metadata, so a
+        # caller that does (TAP_SCHEMA) uses this list to type-check them.
+        self.geometry_columns = set()
 
     def _convert_values(self, ctx, cidx):
         return _convert_values(ctx, cidx)
@@ -208,6 +216,7 @@ class ADQLGeometryTranslationVisitor(ADQLParserVisitor):
                         ADQLParser.Column_referenceContext):
             # ADQL 2.1: a POINT-typed column as the circle centre.
             point_ctx_text = circle_center.children[0].getText()
+            self.geometry_columns.add(point_ctx_text)
         else:
             point_ctx = circle_center.children[0].children[0].children[0]
             if isinstance(point_ctx, ADQLParser.PointContext):
@@ -273,6 +282,8 @@ class ADQLFunctionsTranslationVisitor(ADQLParserVisitor):
     def __init__(self, contexts, conunits="DEGREES"):
         self.contexts = contexts
         self.conunits = conunits
+        # See ADQLGeometryTranslationVisitor.geometry_columns.
+        self.geometry_columns = set()
 
     def _geometry_argument(self, gve_ctx):
         """The SQL for one geometry_value_expression argument.
@@ -288,6 +299,7 @@ class ADQLFunctionsTranslationVisitor(ADQLParserVisitor):
         except KeyError:
             pass
         if isinstance(child, ADQLParser.Column_referenceContext):
+            self.geometry_columns.add(child.getText())
             return child.getText()
         raise QueryError('unsupported geometry argument: %s' %
                          gve_ctx.getText())
@@ -371,6 +383,7 @@ class ADQLFunctionsTranslationVisitor(ADQLParserVisitor):
         child = coord_value_ctx.children[0]
         if isinstance(child, ADQLParser.Column_referenceContext):
             # ADQL 2.1: a POINT-typed column.
+            self.geometry_columns.add(child.getText())
             return child.getText()
         inner = child.children[0]
         if isinstance(inner, ADQLParser.PointContext):
@@ -521,6 +534,11 @@ class ADQLQueryTranslator(object):
     """
     def __init__(self, query=None):
         self._query = None
+        # Column references accepted in geometry slots (ADQL 2.1), as
+        # written in the query; filled by to_postgresql(). The translator
+        # has no column metadata, so a caller that does (TAP_SCHEMA) uses
+        # this to refuse a non-geometry column before the database has to.
+        self.geometry_columns = frozenset()
 
         if query is not None:
             self.set_query(query)
@@ -585,11 +603,14 @@ class ADQLQueryTranslator(object):
 
         self.parse()
 
-        translator_visitor = ADQLGeometryTranslationVisitor()
-        translator_visitor.visit(self.tree)
+        geometry_visitor = ADQLGeometryTranslationVisitor()
+        geometry_visitor.visit(self.tree)
         translator_visitor = \
-            ADQLFunctionsTranslationVisitor(translator_visitor.contexts)
+            ADQLFunctionsTranslationVisitor(geometry_visitor.contexts)
         translator_visitor.visit(self.tree)
+        self.geometry_columns = frozenset(
+            geometry_visitor.geometry_columns |
+            translator_visitor.geometry_columns)
 
         translated_query = self.translate(translator_visitor)
 
