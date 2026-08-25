@@ -78,6 +78,13 @@ QUERIES: dict[str, str] = {
     "postgres_throttled_seconds": _rate(THROTTLE, PG),
     # -- Memory
     "tap_api_memory_bytes": _gauge(WORKING_SET, API),
+    # The busiest single pod, because a memory limit is a per-container
+    # ceiling: the fleet sum both hides one pod near its limit inside a
+    # comfortable average and, during a rollout, counts the terminating
+    # pods of the previous configuration — the worker sweep's post-upgrade
+    # rungs summed nine pods against a one-pod allowance and were called
+    # MEMORY_BOUND at 130 MiB a worker.
+    "tap_api_memory_max_bytes": f"max({WORKING_SET}{{{API}}})",
     "tap_executor_memory_bytes": _gauge(WORKING_SET, EXEC),
     "postgres_memory_bytes": _gauge(WORKING_SET, PG),
     "tap_api_rss_bytes": _gauge("container_memory_rss", API),

@@ -226,6 +226,75 @@ def test_the_worker_sweep_plan_is_in_the_config():
     assert plan["repetitions"] >= 2
 
 
+# -- memory is judged per pod, not per fleet sum ------------------------------
+
+
+def _mem_rows(*series):
+    rows = []
+    for metric, values in series:
+        rows += [
+            {"metric": metric, "labels": "", "t": float(i), "value": v}
+            for i, v in enumerate(values)
+        ]
+    return rows
+
+
+def _mem_verdicts(rows):
+    return {
+        v.classification: v
+        for v in bottleneck.classify(
+            metrics_rows=rows,
+            summary={"window_seconds": 60.0, "requests": 1000, "error_fraction": 0.0},
+            pg_summary={"cache_hit_ratio": 1.0},
+            recorder_cpu_peak=0.05,
+            limits={
+                "tap_api_cpu_limit_cores": 2.0,
+                "postgres_cpu_limit_cores": 4.0,
+                "db_pool_max_total": 8,
+                "tap_api_workers": 1,
+                "tap_api_memory_limit_bytes": 1 << 30,
+            },
+        )
+    }
+
+
+def test_a_rollouts_terminating_pods_are_not_a_memory_verdict():
+    """The bug this pins: right after a worker-count upgrade the fleet-summed
+    working set still counts the previous configuration's terminating pods —
+    nine pods against a one-pod allowance read as 3.3 GiB over a 1 GiB limit,
+    and six transition rungs were called MEMORY_BOUND at 130 MiB a worker."""
+    rows = _mem_rows(
+        ("tap_api_memory_bytes", [3.3e9] * 50),  # sum: 8 dying pods + 1 new
+        ("tap_api_memory_max_bytes", [560e6] * 50),  # busiest single pod
+        ("api_replicas_ready", [1.0] * 50),
+    )
+    assert "MEMORY_BOUND" not in _mem_verdicts(rows)
+
+
+def test_one_pod_near_its_limit_is_memory_bound_whatever_the_fleet_average():
+    """The same mistake in the other direction: eight pods averaging 500 MiB
+    hide one at 990 MiB from a fleet-sum comparison."""
+    rows = _mem_rows(
+        ("tap_api_memory_bytes", [4.5e9] * 50),  # comfortable against 8 GiB
+        ("tap_api_memory_max_bytes", [990e6] * 50),
+        ("api_replicas_ready", [8.0] * 50),
+    )
+    verdict = _mem_verdicts(rows)["MEMORY_BOUND"]
+    assert verdict.evidence["api_peak_is_per_pod"]
+    assert verdict.evidence["api_limit_bytes"] == 1 << 30
+
+
+def test_artefacts_without_the_per_pod_series_keep_the_fleet_judgement():
+    """Runs measured before the per-pod series existed can still be
+    reclassified; they get the old fleet arithmetic, not a crash or silence."""
+    rows = _mem_rows(
+        ("tap_api_memory_bytes", [7.8e9] * 50),
+        ("api_replicas_ready", [8.0] * 50),
+    )
+    verdict = _mem_verdicts(rows)["MEMORY_BOUND"]
+    assert not verdict.evidence["api_peak_is_per_pod"]
+
+
 # -- restarts are judged per window, not per pod lifetime ---------------------
 
 
