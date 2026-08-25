@@ -196,3 +196,30 @@ def test_the_worker_sweep_plan_is_in_the_config():
     assert plan["workers"] == [1, 2, 4]
     assert plan["replicas"] == [1, 2, 4, 8]
     assert plan["repetitions"] >= 2
+
+
+# -- restarts are judged per window, not per pod lifetime ---------------------
+
+
+def test_a_restart_before_the_window_does_not_taint_the_measurement():
+    """restartCount is the pod's whole history. Judged cumulatively, one
+    crash taints every measurement that pod appears in afterwards — a
+    12-point sweep would publish eleven invalid results for one restart
+    during its first."""
+    from egernia_bench.collect import guards
+
+    pods = [{"pod": "tap-api-abc", "component": "tap-api", "restarts": 2}]
+    guard = guards.Guards(min_free_disk_gb=0)
+
+    def verdict(baseline):
+        results = guard.evaluate(pod_timings=pods, restarts_before=baseline)
+        return {r.name: r for r in results}["no_unexpected_restarts"]
+
+    # the 2 restarts predate this window: clean
+    assert verdict({"tap-api-abc": 2}).ok
+    # one of them happened inside the window: tainted
+    assert not verdict({"tap-api-abc": 1}).ok
+    # a pod born during the window carrying restarts: the window's own
+    assert not verdict({}).ok
+    # no baseline taken: the old cumulative judgement, unchanged
+    assert not verdict(None).ok

@@ -326,6 +326,14 @@ def measure(
         pg_mod.reset_statements(conn)
         before = pg_mod.snapshot(conn)
         activity_samples = [pg_mod.activity(conn)]
+        # The restart baseline, so the guard judges restarts *during* this
+        # window rather than the pods' whole history: restartCount is
+        # cumulative, and a pod that crashed once before a sweep would
+        # otherwise invalidate every later measurement it appears in.
+        restarts_before = {
+            p["pod"]: p.get("restarts") or 0
+            for p in kube.pod_timings("tap-api") + kube.pod_timings("tap-executor")
+        }
         phase("statistics snapshot")
 
         measured_elapsed = float(measure_s)
@@ -423,6 +431,7 @@ def measure(
         pod_timings=pod_timings,
         metrics_rows=metrics_rows,
         dropped_arrivals=dropped_arrivals,
+        restarts_before=restarts_before,
     )
     failed = [r for r in guard_results if not r.ok]
     for failure in failed:
