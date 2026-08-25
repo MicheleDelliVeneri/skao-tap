@@ -56,8 +56,12 @@ corpus and seeds — and the w=1 column reproduces the replica ladder
   fit the memory limit. What rules out a slow residual leak conclusively
   is a soak — no configuration here was held longer than ten minutes — run
   it at the w=4 saturation rung, where the bound is tightest and a real
-  residual shows first (the flattest slope observed here, taken at face
-  value, reaches 1 Gi in ~12 hours at that rung's 338 rps).
+  residual shows first. And because the pool is bounded by construction at
+  `workers x dbPoolMax` = 32 connections (the probe's top rung had opened
+  only 24), the mechanism makes the soak a prediction rather than a watch:
+  the working set should flatten near ~600 MiB (the ~548 MiB warm floor
+  plus the remaining connections at ~2.5 MiB each); past ~650 MiB there is
+  a second mechanism and the bounded-pool explanation is wrong.
 - **The default follows the pod's CPU limit, and the mechanism was
   falsifiable in advance.** Package 18's profile priced a request at 10.5 ms
   of CPU with ~53% GIL-serialised and one worker at 1.05 cores, predicting

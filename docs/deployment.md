@@ -96,12 +96,22 @@ still CPU-bound.
 The two axes buy the same throughput per process — 4 processes as
 2 workers x 2 replicas measured 335.8 req/s against 342.9 as 4 single-worker
 replicas, and at 8 processes 583.0 against 581.6 — so choose by what each
-costs. A worker costs no pod, but roughly 140–165 MiB of mostly private
-memory (size `tapApi.resources.limits.memory` with the worker count: four
-workers peak at ~580 MiB against the default 1 Gi) and a connection-pool
-ceiling of `workers x config.dbPoolMax` per pod, which is the arithmetic in
-[When every connection is busy](#when-every-connection-is-busy) below.
-Replicas cost pods and spread across nodes; workers cannot.
+costs. A worker costs no pod, but memory and connections — and the two are
+one mechanism, because every worker holds its own connection pool and each
+pooled connection carries ~2.5 MiB of client-side state. Size the pod's
+memory limit by arithmetic rather than by watching:
+
+```
+pod memory floor ≈ ~140 MiB x workers + workers x config.dbPoolMax x ~2.5 MiB
+```
+
+(measured: four workers with pools exercised settle toward ~600 MiB against
+the default 1 Gi). The same `workers x config.dbPoolMax` product is the
+pod's connection ceiling — the arithmetic in
+[When every connection is busy](#when-every-connection-is-busy) below — so
+raising workers multiplies both, and `config.dbPoolMax` is what makes a
+worker count fit both limits. Replicas cost pods and spread across nodes;
+workers cannot.
 
 ### Shedding overload with refusals, not resets
 
