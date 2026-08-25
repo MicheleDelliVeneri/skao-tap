@@ -48,7 +48,14 @@ def _queue(conn, job: dict, prepared: dict) -> None:
     """
     if job["phase"] not in ("PENDING", "HELD"):
         raise UsageError(f"cannot start job in phase {job['phase']}")
-    uws.update_job(conn, job["job_id"], phase="QUEUED", query_sql=prepared["sql"])
+    uws.update_job(
+        conn,
+        job["job_id"],
+        phase="QUEUED",
+        query_sql=prepared["sql"],
+        # from the parse the API already did, so the executor never parses
+        query_tables=sorted(prepared["tables"]),
+    )
 
 
 WAIT_POLL_S = 1.0

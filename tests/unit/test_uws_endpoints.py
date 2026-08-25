@@ -26,6 +26,8 @@ def test_create_job_with_phase_run_queues(client, fake_db):
     job = fake_db.jobs[job_id]
     assert job["phase"] == "QUEUED"
     assert "ska.continuum_sources" in job["query_sql"]
+    # from the submit-time parse, so the executor never parses the SQL again
+    assert job["query_tables"] == ["ska.continuum_sources"]
 
 
 def test_job_list_and_phase_filter(client, fake_db):
