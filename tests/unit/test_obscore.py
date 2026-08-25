@@ -161,17 +161,23 @@ class _ViewShapeChanged(Exception):
 
 class _RecordingConn:
     """Just enough connection for ensure_obscore: records statements, answers
-    the relkind/comment probe, and optionally refuses the view replacement
-    the way Postgres does when the column list changed."""
+    the relkind/comment and quoting probes, and optionally refuses the view
+    replacement the way Postgres does when the column list changed.
+
+    Params are recorded alongside each statement, not discarded: Postgres
+    plans no parameters for DDL, so a statement's *bindability* is part of
+    what these tests have to be able to see."""
 
     def __init__(self, relkind: str | None, comment: str | None = None, refuse_replace=False):
         self._relkind = relkind
         self._comment = comment
         self._refuse_replace = refuse_replace
         self.statements: list[str] = []
+        self.calls: list[tuple[str, tuple | None]] = []
 
     def execute(self, sql, params=None):
         self.statements.append(sql)
+        self.calls.append((sql, params))
         if self._refuse_replace and sql.startswith("CREATE OR REPLACE VIEW"):
             raise _ViewShapeChanged("cannot change name of view column")
         relkind, comment = self._relkind, self._comment
@@ -180,6 +186,8 @@ class _RecordingConn:
             def fetchone(self):
                 if "pg_class" in sql:
                     return (relkind, comment) if relkind else None
+                if "quote_literal" in sql:
+                    return ("'" + str(params[0]).replace("'", "''") + "'",)
                 return None
 
         return Result()
@@ -224,6 +232,21 @@ def test_a_stale_view_is_replaced_in_place():
     assert conn.statements.count("SAVEPOINT obscore_view") == 1
     assert "RELEASE SAVEPOINT obscore_view" in conn.statements
     assert any(s.startswith("COMMENT ON VIEW ivoa.obscore") for s in conn.statements)
+
+
+def test_the_view_comment_is_quoted_into_the_ddl_not_bound_as_a_parameter():
+    """COMMENT ON is DDL and Postgres plans no parameters for it: binding the
+    fingerprint raises 42601 and takes the whole metadata bootstrap — hence
+    every pod's startup — down with it. The comment must reach the statement
+    already quoted."""
+    conn = _RecordingConn("v", comment="stale")
+    obscore.ensure_obscore(conn)
+    ddl_keywords = ("COMMENT", "CREATE", "DROP", "GRANT", "ALTER")
+    ddl = [(s, p) for s, p in conn.calls if s.startswith(ddl_keywords)]
+    assert all(p is None for _, p in ddl), [s for s, p in ddl if p is not None]
+    comment_ddl = next(s for s, _ in ddl if s.startswith("COMMENT ON VIEW ivoa.obscore"))
+    assert obscore.definition_comment(obscore.view_sql()) in comment_ddl
+    assert "%s" not in comment_ddl
 
 
 def test_a_changed_column_list_falls_back_to_drop_and_create():

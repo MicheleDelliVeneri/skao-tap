@@ -607,7 +607,11 @@ def _replace_view(conn, current_comment: str | None) -> None:
         conn.execute(sql)
     else:
         conn.execute("RELEASE SAVEPOINT obscore_view")
-    conn.execute("COMMENT ON VIEW ivoa.obscore IS %s", (comment,))
+    # COMMENT ON is DDL: Postgres plans no parameters for it, so the
+    # fingerprint has to arrive already quoted rather than bound. Quoting is
+    # left to the server so the escaping matches whatever the comment holds.
+    literal = conn.execute("SELECT quote_literal(%s)", (comment,)).fetchone()[0]
+    conn.execute(f"COMMENT ON VIEW ivoa.obscore IS {literal}")
 
 
 def ensure_obscore(conn) -> None:
