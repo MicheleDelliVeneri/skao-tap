@@ -155,6 +155,34 @@ def test_limits_follow_the_deployed_worker_count():
     assert four["tap_api_cpu_limit_cores"] == 2.0  # the cgroup, not the count
 
 
+def test_the_limit_probe_is_graded_against_the_limits_it_deployed():
+    """The probe raises the pod's CPU and memory limits past the values
+    file's; graded against the file's, its pod would read as impossibly past
+    its ceiling and every verdict would be about the wrong pod."""
+    base = {
+        "tap_api_workers": 1,
+        "tap_api_cpu_limit_cores": 1.0,
+        "tap_api_pod_cpu_limit_cores": 2.0,
+        "tap_api_memory_limit_bytes": 1 << 30,
+    }
+    probe = runner.limits_with_workers(base, 4, pod_cpu=4.0, pod_memory_bytes=2 << 30)
+    assert probe["tap_api_cpu_limit_cores"] == 4.0
+    assert probe["tap_api_pod_cpu_limit_cores"] == 4.0
+    assert probe["tap_api_memory_limit_bytes"] == 2 << 30
+    # and the grid's own w=4 point stays capped by the file's 2-core pod
+    grid = runner.limits_with_workers(base, 4)
+    assert grid["tap_api_cpu_limit_cores"] == 2.0
+
+
+def test_the_limit_probe_is_not_a_grid_point():
+    """Same (workers, replicas) as a grid point, different pod: merged into
+    worker_capacities it would overwrite the grid's w=4 capacity with one
+    measured against twice the CPU."""
+    probe_row = _sweep_point(4, 1, 8, 350.0, saturation_count=2)
+    probe_row["kind"] = "worker_limit_probe"
+    assert runner.worker_capacities([probe_row], 2.0, pool_max=8, max_connections=200) == []
+
+
 def test_a_multi_worker_pods_pool_is_per_process_times_workers():
     """The fleet pool ceiling is pods x workers x dbPoolMax: 12 connections
     against one two-worker pod is 12 of 16, not a full single pool."""

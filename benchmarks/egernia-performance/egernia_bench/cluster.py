@@ -441,8 +441,29 @@ def set_workers(value: int) -> None:
     rollout `--wait` waits out rather than a config change no running pod has
     read.
     """
-    install_chart({"tapApi.workers": str(value)})
-    verify_workers(value)
+    configure_api(workers=value)
+
+
+def configure_api(
+    *,
+    workers: int,
+    cpu_limit_cores: float | None = None,
+    memory_limit: str | None = None,
+) -> None:
+    """One upgrade carrying every tap-api override this point needs.
+
+    One upgrade, not one per knob: a helm upgrade resets every override the
+    previous one set, so two sequential calls would deploy only the second
+    knob. Same caveats as set_limit_concurrency otherwise — the replica count
+    reverts to the values file's, so the caller re-applies scale() after.
+    """
+    overrides = {"tapApi.workers": str(workers)}
+    if cpu_limit_cores is not None:
+        overrides["tapApi.resources.limits.cpu"] = str(cpu_limit_cores)
+    if memory_limit is not None:
+        overrides["tapApi.resources.limits.memory"] = memory_limit
+    install_chart(overrides)
+    verify_workers(workers)
 
 
 def verify_workers(expected: int, timeout_s: float = 120.0) -> None:

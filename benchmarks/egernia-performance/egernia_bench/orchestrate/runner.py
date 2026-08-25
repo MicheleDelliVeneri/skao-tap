@@ -178,21 +178,41 @@ def limits(cfg: dict) -> dict:
     }
 
 
-def limits_with_workers(limits_map: dict, workers: int | None) -> dict:
-    """The per-pod ceilings for the worker count actually deployed.
+def limits_with_workers(
+    limits_map: dict,
+    workers: int | None,
+    *,
+    pod_cpu: float | None = None,
+    pod_memory_bytes: int | None = None,
+) -> dict:
+    """The per-pod ceilings for the pod actually deployed.
 
     The worker sweep deploys counts the values file does not state, and
     `limits()` reads the file. Grading those measurements against the file's
     count would repeat the mistake the min(cpu, workers) ceiling exists to
     prevent: a two-worker pod judged against a one-worker ceiling reads as
     past its limit at half load, and a four-worker pod's pool arithmetic
-    would be counted at a quarter of its real connections.
+    would be counted at a quarter of its real connections. The limit probe
+    also raises the pod's CPU and memory limits past the file's, for the
+    same reason in the other direction: a probe pod graded against the
+    file's limits would read as impossibly past them.
     """
-    if workers is None or workers == limits_map.get("tap_api_workers"):
+    if (
+        pod_cpu is None
+        and pod_memory_bytes is None
+        and (workers is None or workers == limits_map.get("tap_api_workers"))
+    ):
         return limits_map
     out = dict(limits_map)
-    out["tap_api_workers"] = workers
-    out["tap_api_cpu_limit_cores"] = min(out["tap_api_pod_cpu_limit_cores"], float(workers))
+    if pod_cpu is not None:
+        out["tap_api_pod_cpu_limit_cores"] = pod_cpu
+    if pod_memory_bytes is not None:
+        out["tap_api_memory_limit_bytes"] = pod_memory_bytes
+    if workers is not None:
+        out["tap_api_workers"] = workers
+    out["tap_api_cpu_limit_cores"] = min(
+        out["tap_api_pod_cpu_limit_cores"], float(out["tap_api_workers"])
+    )
     return out
 
 
@@ -287,6 +307,8 @@ def measure(
     steps: list[load_mod.Step] | None = None,
     replicas: int | None = None,
     workers: int | None = None,
+    pod_cpu_limit: float | None = None,
+    pod_memory_limit_bytes: int | None = None,
     offered_rps: float | None = None,
     repetition: int = 0,
     warmup_s: float | None = None,
@@ -439,7 +461,9 @@ def measure(
 
     # The worker sweep deploys a count the values file does not state; every
     # ceiling below has to be the deployed pod's, not the file's.
-    limits_map = limits_with_workers(limits(cfg), workers)
+    limits_map = limits_with_workers(
+        limits(cfg), workers, pod_cpu=pod_cpu_limit, pod_memory_bytes=pod_memory_limit_bytes
+    )
     # The per-pod ceilings go in as they are: classify() multiplies each of
     # them by the replicas the run actually had ready, which is the only count
     # that is also right when an autoscaler moved it mid-window. The same
@@ -464,6 +488,9 @@ def measure(
         # varies it, and a recorded 1 on every older measurement would claim a
         # certainty about deployments this field did not exist to observe.
         "workers": workers,
+        # Same convention: recorded only where a measurement deployed a limit
+        # the values file does not state (the limit probe).
+        "pod_cpu_limit": pod_cpu_limit,
         "offered_rps": offered_rps,
         "repetition": repetition,
         "request_mode": request_mode,
@@ -533,6 +560,8 @@ def concurrency_sweep(
     quick: bool = False,
     replicas: int = 1,
     workers: int | None = None,
+    pod_cpu_limit: float | None = None,
+    pod_memory_limit_bytes: int | None = None,
     kind: str = "concurrency",
     key_prefix: str = "conc",
     refine_saturation: bool = True,
@@ -590,6 +619,8 @@ def concurrency_sweep(
                 concurrency=concurrency,
                 replicas=replicas,
                 workers=workers,
+                pod_cpu_limit=pod_cpu_limit,
+                pod_memory_limit_bytes=pod_memory_limit_bytes,
                 repetition=repetition,
                 warmup_s=warmup_s
                 if warmup_s is not None
@@ -1174,6 +1205,46 @@ def worker_sweep(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
                     measure_s=plan["measure_seconds"],
                     generator_processes=int(plan.get("generator_processes", 1)),
                 )
+        probe = plan.get("limit_probe")
+        if probe:
+            # The grid's own top worker count cannot answer the question it
+            # looks like it answers: one worker costs ~1.05 cores, so at the
+            # suite's 2-core limit every count past 2 measures the cgroup.
+            # This point deploys the same workers against a raised limit —
+            # its own kind, so worker_capacities() cannot merge it with the
+            # grid point that shares its (workers, replicas).
+            memory_bytes = _memory_bytes(probe.get("memory_limit"), 1 << 30)
+            log.info(
+                "limit probe: workers=%d replicas=%d at cpu=%s memory=%s",
+                probe["workers"],
+                probe["replicas"],
+                probe["cpu_limit_cores"],
+                probe.get("memory_limit"),
+            )
+            cluster.configure_api(
+                workers=probe["workers"],
+                cpu_limit_cores=probe["cpu_limit_cores"],
+                memory_limit=probe.get("memory_limit"),
+            )
+            cluster.scale("tap-api", probe["replicas"])
+            results += concurrency_sweep(
+                run,
+                cfg,
+                dataset,
+                entries,
+                replicas=probe["replicas"],
+                workers=probe["workers"],
+                pod_cpu_limit=float(probe["cpu_limit_cores"]),
+                pod_memory_limit_bytes=memory_bytes,
+                kind="worker_limit_probe",
+                key_prefix=f"wprobe-w{probe['workers']}cpu{probe['cpu_limit_cores']}"
+                f"-n{probe['replicas']}",
+                refine_saturation=False,
+                repetitions=plan["repetitions"],
+                warmup_s=plan["warmup_seconds"],
+                measure_s=plan["measure_seconds"],
+                generator_processes=int(plan.get("generator_processes", 1)),
+            )
     finally:
         cluster.set_workers(default_workers)
         cluster.scale("tap-api", 1)

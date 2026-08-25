@@ -116,6 +116,20 @@ worker_sweep:
   # (~400 requests/second each) can offer, and the hardware budget reserves
   # six host cores for the generator.
   generator_processes: 6
+  # One point past the grid, because the grid's own w=4 row cannot answer the
+  # question it looks like it answers. One worker costs ~1.05 cores (package
+  # 18's profile) and two want 2.10 against the pod's 2-core limit, so at the
+  # suite limit every worker count past 2 measures chart-values.yaml, not
+  # uvicorn. This probe reruns w=4 with the CPU limit raised to 4 — and the
+  # memory limit raised with it, because one worker peaks at ~278 MiB and
+  # four against 1Gi would make an OOM the confound rather than the finding.
+  # "Workers stop scaling at 2" and "this pod stops at 2 cores" are
+  # distinguishable only by this point.
+  limit_probe:
+    workers: 4
+    replicas: 1
+    cpu_limit_cores: 4
+    memory_limit: 2Gi
 
 # Package 13: where does shed load stop being an answer? A closed loop is
 # bounded concurrency by construction — each client has exactly one request
