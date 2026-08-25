@@ -602,13 +602,20 @@ carrying a PostgreSQL operator name — a server-fault shape for what is a usage
 error, naming neither the column at fault nor the one to use instead. The first
 spatial query a new user writes is the one that produces it.
 
-Work: give `Translation` the identifiers the substitution actually used —
-`_hide_geometry_columns` already collects exactly that list and throws it away —
-and have `prepare_query` reject a non-geometry column among them with a message
-naming `s_region_geom`. The type lookup belongs there rather than in
-`translate()`: that path already reads TAP_SCHEMA for the publication check and
-for column metadata, both cached, while the translator is the hot path package
-18 profiled and must stay free of I/O.
+Work: **the translator half is already done.** The ADQL 2.1 work exposes
+`Translation.geometry_columns` — a frozenset of every column reference the
+translator accepted in a geometry slot, named as the caller wrote it — so what
+is left here is purely the API layer: `prepare_query` reads that set, checks
+each name's type against the TAP_SCHEMA it already has cached, and refuses a
+non-geometry column with a usage error naming `s_region_geom`. This package is
+sequenced *after* that one rather than absorbed into it, so it begins with the
+hook in place.
+
+The type lookup belongs in `prepare_query` rather than in `translate()`, and
+that division is why the hook is a set of names rather than a check: the query
+path already reads TAP_SCHEMA for the publication check and for column
+metadata, both cached, while the translator is the hot path package 18 measured
+at 3.19 ms — 30.9% of a request — and must stay free of I/O.
 
 One decision to take rather than default: **do not silently rewrite `s_region`
 to `s_region_geom`.** Answering a different query than the one asked is worse
