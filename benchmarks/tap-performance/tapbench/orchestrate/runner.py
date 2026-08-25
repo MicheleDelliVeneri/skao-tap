@@ -610,6 +610,7 @@ def concurrency_sweep(
                     concurrency=concurrency,
                     replicas=1,
                     repetition=repetition,
+                    warmup_s=warmup_for(cfg, dataset) or timing["warmup_seconds"],
                     measure_s=timing["saturation_measure_seconds"],
                 )
                 if result:
