@@ -19,6 +19,10 @@ spec:
   template:
     metadata:
       annotations:
+        # Same reason as the API's: configuration is read at startup, so a
+        # ConfigMap or Secret change must be a rollout to take effect at all.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         # the executor has no Service, so annotations are how it is found; a deployment's own Prometheus discovers pods by these
         prometheus.io/scrape: {{ .Values.metrics.scrapeAnnotations | quote }}
         prometheus.io/path: /metrics

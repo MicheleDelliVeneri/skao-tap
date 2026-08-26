@@ -127,6 +127,59 @@ shedding:
   warmup_seconds: 5
   measure_seconds: 45
 
+# Package 18: where one worker's per-request CPU goes, and what verifying a
+# bearer token adds to it. Held at replicas: 1, workers: 1 throughout, because
+# "per request" and "per worker" have to be the same statement for the
+# reciprocal of throughput to be interpretable as interpreter-lock occupancy.
+profile:
+  dataset: D1
+  # Unset: the family runs the short ladder below and profiles the busiest
+  # CPU-bound rung on it. Pin it to profile a chosen point instead.
+  concurrency: null
+  # Run to the top, with no early stop, and one rung above where D1 is known
+  # to saturate — a ladder whose last rung is the chosen one cannot tell a
+  # ceiling from the ladder running out. Short windows, because these rungs
+  # only *pick* a concurrency; the rungs that get reported are measured at
+  # length below.
+  ladder: [1, 2, 4, 8]
+  ladder_warmup_seconds: 10
+  ladder_measure_seconds: 20
+  warmup_seconds: 30
+  measure_seconds: 150
+  repetitions: 2
+  # Ten minutes, one repetition rather than two: a sampling profile's precision
+  # is in its sample count, so the second repetition is better spent extending
+  # the first. The length also amortises py-spy's startup, which is most of a
+  # short window: a 30-second nonblocking pass returned 80 samples where a
+  # 600-second one returned 24,400 — ~41 Hz of the 100 asked for, and enough to
+  # put a one-percent share at a couple of hundred samples.
+  profile_seconds: 600
+  # Asked for; not achieved. Nonblocking sampling reached ~41 Hz of this over a
+  # ten-minute window, so a pass's sample count is not a duration and the
+  # artefacts refuse to report it as one. Left at the default rather than
+  # raised: the limit is the sampler's own cost per attempt, so asking for more
+  # would change that ratio and nothing else.
+  sample_rate_hz: 100
+  # The profiler's own cost is measured, not assumed: the profiled window
+  # against the unprofiled rung before it, same concurrency, same pod. A
+  # profile that cost more than this much throughput is marked invalid, because
+  # a breakdown of a worker slowed by its profiler describes a service nobody
+  # runs.
+  max_overhead_fraction: 0.10
+  # Sample without pausing the worker. This is not the cautious choice, it is
+  # the measured one: py-spy's default (pausing to walk the stacks) cost 74% of
+  # this service's throughput at 100 Hz — 95.5 rps unprofiled against 24.9 rps
+  # profiled — and then stalled it past its one-second liveness timeout, so the
+  # kubelet restarted a worker that was busy rather than broken. Both guards
+  # fired; the run that produced those numbers is kept as
+  # 20260825T155319Z-44a69b9c-profile.
+  #
+  # What this costs instead is torn stacks: py-spy discards the samples it can
+  # detect as inconsistent (kept as the profile's error_fraction) and
+  # misattributes the ones it cannot. Set false to take the accurate reading
+  # from a process that can survive it.
+  nonblocking: true
+
 # The p95 the scale-out clock stops at (T8). Not a service guarantee — a
 # fixed line to measure recovery against, so "recovered" is a number and not
 # a judgement.
