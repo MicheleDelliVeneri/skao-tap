@@ -52,12 +52,37 @@ identity chain:
 <prefix><project_id>/<obs_id>/<sbd_id>/<eb_id>/<product_id>
 ```
 
-The five key columns are free `text` in the data model, so each one is
+The key columns are free `text` in the data model, so each one is
 percent-encoded into the path: everything outside the RFC 3986 unreserved
 set (`A-Za-z0-9._~-`) becomes `%XX` per UTF-8 byte. A `product_id` of
 `cube 3/a` therefore appears as `cube%203%2Fa` rather than forging a sixth
 path segment, and two products can never collide on one identifier. The
 `/` separators between components are the only unencoded ones.
+
+### Choosing the chain
+
+Which columns form the chain is set with `config.obscoreDidColumns` (env
+`TAP_OBSCORE_DID_COLUMNS`), dot-separated and in order:
+
+```yaml
+config:
+  obscoreDidColumns: "project_id.obs_id.sbd_id.eb_id.product_id"
+```
+
+The default is the **primary key of `srcnet.data_products`** — one
+component per level of the ODP hierarchy — because that is exactly what
+identifies a data product uniquely. Set it only for a data model that nests
+differently, and with the same care the prefix deserves:
+
+- a chain that does **not** identify a product uniquely makes two products
+  share a DID, which the percent-encoding cannot save you from;
+- changing it re-identifies every dataset already published.
+
+Each component must be a plain lower-case SQL identifier; the names are
+interpolated into the view definition, where nothing can be bound, so
+anything else is refused before it reaches a `CREATE VIEW`. A name that is
+syntactically fine but absent from `srcnet.data_products` fails at
+bootstrap, where PostgreSQL names it.
 
 The prefix defaults to `ivo://skao.int/~?` and is set with
 `config.obscoreDidPrefix` (env `TAP_OBSCORE_DID_PREFIX`). A PublisherDID is
