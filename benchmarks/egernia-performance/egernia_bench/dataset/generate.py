@@ -326,6 +326,27 @@ def register_columns(conn) -> None:
            SET indexed = excluded.indexed
         """
     )
+    # Then drop what no longer exists. The insert above only upserts, and this
+    # generator *replaces* ivoa.obscore: it drops the ODP plugin's view and
+    # creates its own CAOM-flavoured table in its place. Every column the view
+    # had and the table has not — s_region_geom, s_xel1, t_xel and the rest —
+    # would otherwise stay advertised in TAP_SCHEMA forever.
+    #
+    # That is not a cosmetic leak. TAP_SCHEMA is the contract a client reads
+    # before writing a query, so an orphaned row is the service asserting a
+    # column exists and then answering 500 when someone believes it. Scoped to
+    # the two schemas this generator owns, so a deployment's own tables are
+    # never touched.
+    conn.execute(
+        """
+        DELETE FROM tap_schema.columns c
+         WHERE split_part(c.table_name, '.', 1) IN ('caom', 'ivoa')
+           AND NOT EXISTS (
+               SELECT 1 FROM information_schema.columns i
+                WHERE format('%s.%s', i.table_schema, i.table_name) = c.table_name
+                  AND i.column_name = c.column_name)
+        """
+    )
     conn.commit()
 
 

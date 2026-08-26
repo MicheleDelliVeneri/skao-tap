@@ -492,3 +492,25 @@ def test_start_opens_a_family_in_the_documented_order(monkeypatch):
 
     assert calls == ["load_config", ("new_run", "keda", "prior-run"), ("setup", True, False)]
     assert cfg is cfg_obj and run is run_obj and digests == {"img": "digest"}
+
+
+def test_register_columns_prunes_what_the_relation_no_longer_has():
+    """This generator replaces ivoa.obscore: it drops the ODP plugin's view and
+    creates its own CAOM-flavoured table. The insert only upserts, so without a
+    prune every column the view had and the table has not — s_region_geom,
+    s_xel1, t_xel — stays advertised in TAP_SCHEMA.
+
+    That is the service asserting a column exists and then answering 500 when a
+    client believes it, which is exactly what happened on the demo cluster.
+    """
+    import inspect
+
+    from egernia_bench.dataset import generate as dataset_mod
+
+    source = inspect.getsource(dataset_mod.register_columns)
+    assert "DELETE FROM tap_schema.columns" in source, "orphaned columns are never pruned"
+    # scoped to the two schemas this generator owns — a deployment's own tables
+    # must not be touched
+    delete = source.split("DELETE FROM tap_schema.columns", 1)[1]
+    assert "('caom', 'ivoa')" in delete
+    assert "information_schema.columns" in delete, "prune by what the relation actually has"
