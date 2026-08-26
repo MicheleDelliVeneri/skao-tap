@@ -188,9 +188,11 @@ def touched_tables(sql: str) -> set[str]:
     """Best-effort extraction of the tables referenced by *translated* SQL.
 
     Prefer :func:`translate`, which gets the same answer from the ADQL parse
-    it already did. This one exists for the executor, which reads the SQL
-    stored on a job and has no ADQL tree to walk — it pays a full parse, once
-    per job rather than once per request.
+    it already did. This is a fallback for the executor, for jobs queued by
+    an API that predates the ``query_tables`` column — and it is expensive:
+    a full ANTLR parse of the SQL, 100-190 ms per query on this corpus
+    (``PostgreSQLQueryProcessor`` has none of the SLL fast path the
+    translator's parse got), where the translation itself is 1-2 ms.
     """
     try:
         processor = PostgreSQLQueryProcessor(sql)

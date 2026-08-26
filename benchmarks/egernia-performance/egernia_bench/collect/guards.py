@@ -145,6 +145,7 @@ class Guards:
         pod_timings: list[dict] | None = None,
         metrics_rows: list[dict] | None = None,
         dropped_arrivals: int = 0,
+        restarts_before: dict[str, int] | None = None,
     ) -> list[GuardResult]:
         after = self._machine()
         results: list[GuardResult] = []
@@ -226,7 +227,19 @@ class Guards:
 
         # -- nothing restarted or was killed ---------------------------------
         if pod_timings is not None:
-            restarted = [p["pod"] for p in pod_timings if p.get("restarts")]
+            # Judged as a delta over this measurement where the caller took a
+            # baseline, cumulative otherwise. restartCount is the pod's whole
+            # history: judged cumulatively, one crash taints every measurement
+            # that pod appears in afterwards — a 12-point sweep would publish
+            # eleven invalid results for one restart during its first. A pod
+            # not in the baseline is new during the window, so any restarts it
+            # carries are the window's.
+            restarted = [
+                p["pod"]
+                for p in pod_timings
+                if (p.get("restarts") or 0)
+                > (restarts_before.get(p["pod"], 0) if restarts_before is not None else 0)
+            ]
             oom = [
                 p["pod"] for p in pod_timings if "OOMKilled" in (p.get("terminated_reasons") or [])
             ]

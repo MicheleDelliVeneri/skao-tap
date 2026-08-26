@@ -73,9 +73,11 @@ tapExecutor:
   #
   # One executor process is one thread running one job at a time, so it can
   # never use more than one core: a CPU limit above 1 buys nothing, and a
-  # limit below 1 slows every job. Per-pod throughput is fixed by that single
-  # thread (~2 jobs/s measured on the benchmark hardware) — `replicas`, or
-  # the queue-depth autoscaler below, is the executor's scaling axis.
+  # limit below 1 slows every job. Per-pod throughput is set by the query
+  # mix, not by fixed overhead: ~5 ms of CPU per job since the per-job SQL
+  # re-parse was removed (it was ~2 jobs/s at ~0.4 s of CPU per job before —
+  # package 20, docs/roadmap.md finding 2026-08-26). `replicas`, or the
+  # queue-depth autoscaler below, is the executor's scaling axis.
   replicas: 1
   # -- Override the chart's default spreading (see `scheduling`) wholesale.
   affinity: {}
@@ -179,8 +181,10 @@ horizontalAutoscaling:
     # -- QUEUED jobs one replica is expected to absorb. The autoscaler
     # divides: 50 queued jobs against 10 here asks for 5 replicas. Lower it
     # to react sooner and to run more executors; raise it to tolerate a
-    # queue. (One executor works through roughly 2 jobs/s, so the default
-    # is about 5 s of queue per replica.)
+    # queue. (Since the per-job re-parse was removed — package 20 — an
+    # executor's fixed cost is ~5 ms of CPU per job, so 10 queued jobs are
+    # typically well under a second of queue; what a replica really absorbs
+    # is set by the query mix.)
     queuedJobsPerReplica: 10
     pollingIntervalSeconds: 30
     # -- Queue depth that counts as work worth starting a pod for, when

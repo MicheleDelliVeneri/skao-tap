@@ -25,7 +25,7 @@ ALL_PHASES = ACTIVE_PHASES | FINAL_PHASES
 
 JOB_COLUMNS = (
     "job_id, phase, run_id, owner_id, quote, creation_time, start_time, end_time, "
-    "execution_duration, destruction, parameters, query_sql, error_type, "
+    "execution_duration, destruction, parameters, query_sql, query_tables, error_type, "
     "error_message, result_mime, result_size, backend_pid, request_id"
 )
 

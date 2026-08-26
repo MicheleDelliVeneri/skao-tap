@@ -39,7 +39,10 @@ def test_create_job_run_immediately(client, fake_db):
     response = client.post("/api/v1/jobs", json={"query": QUERY, "run": True})
     body = response.json()
     assert body["phase"] == "QUEUED"
-    assert "ska.continuum_sources" in fake_db.jobs[body["job_id"]]["query_sql"]
+    stored = fake_db.jobs[body["job_id"]]
+    assert "ska.continuum_sources" in stored["query_sql"]
+    # from the submit-time parse, so the executor never parses the SQL again
+    assert stored["query_tables"] == ["ska.continuum_sources"]
 
 
 def test_create_job_validates_before_storing(client, fake_db):

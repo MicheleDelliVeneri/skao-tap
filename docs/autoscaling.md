@@ -14,15 +14,16 @@ than inherit.
 
 ## The API scales on CPU
 
-ADQL translation is pure-Python ANTLR and holds the GIL, so one worker cannot
-use more than one core however large the pod's CPU limit is — which makes CPU
-the signal, and it needs nothing beyond metrics-server:
-
-!!! note "The worker figures here predate the translation fast path"
-    They were measured when translation cost 41 ms per request; it now costs
-    1.2 ms. More workers still add capacity, but the numbers below understate
-    what one worker does and are being re-measured — see
-    [Performance](performance/index.md).
+About half of a request's CPU holds the GIL (ADQL translation and the result
+writers), so one worker cannot use more than one core however large the pod's
+CPU limit is — which makes CPU the signal, and it needs nothing beyond
+metrics-server. Measured (run `20260825T180219Z-f8b21fc4`): one worker
+saturates at 99 requests/s consuming 1.04–1.08 cores; a second worker on a
+2-core pod takes the same pod to 187.6 (1.89x); single-worker replicas
+multiply the 99 at 0.96 efficiency at two, 0.87 at four and 0.73 at eight on
+the benchmark's single host. Set `tapApi.workers` to the pod's CPU limit first
+([Deployment](deployment.md#serving-concurrent-queries) has the worker
+table), and let the autoscaler move replicas:
 
 ```yaml
 horizontalAutoscaling:
@@ -95,10 +96,19 @@ autoscaler divides:
 replicas = ceil(queued_jobs / queuedJobsPerReplica)
 ```
 
-So 50 queued jobs against the default 10 asks for 5 executors. One executor
-works through roughly 2 jobs/s, so the default is about 5 s of queue per
-replica. Lower it to react sooner and run more; raise it to tolerate a
-queue.
+So 50 queued jobs against the default 10 asks for 5 executors. Lower it to
+react sooner and run more; raise it to tolerate a queue. The old sizing
+aid — one executor works through roughly 2 jobs/s, so 10 is about 5 s of
+queue — was re-measured and confirmed on the image that still re-parsed
+each job's query (run `20260826T013544Z-88d8c5e9`: 2.3–2.5 jobs/s at ~0.9
+cores per pod). With that parse removed (package 20) an executor's fixed
+cost is ~5 ms of CPU per job and the benchmark's autoscaling family can no
+longer saturate one: run `20260826T050451Z-0f62a0fa` completed every
+offered job in-window at every load with the queue never past 52 jobs and
+pods at 2–3% CPU. The default of 10 still behaves — it now buys well under
+a second of queue per replica, and the async path's practical ceiling is
+the API pod, not the executors (the 2026-08-26 finding on the
+[Roadmap](roadmap.md) has the before/after).
 
 !!! note "Renamed values"
     `backlogSecondsPerReplica` and `activationBacklogSeconds` are refused by
@@ -243,6 +253,14 @@ Raise `max_connections`, lower `config.dbPoolMax`, or lower the maximums. For
 a deployment that genuinely needs many pods against a small server, put
 pgbouncer in front — the pool ceiling is then the pooler's, not the sum of
 every pod's.
+
+Do not read a quiet run as permission to skip the arithmetic. The worker
+sweep (run `20260825T180219Z-f8b21fc4`) deliberately measured a shape whose
+ceiling exceeds the server's limit — 8 pods x 4 workers x 8 is 256 against
+`max_connections: 200` — and it served 1,005 requests/s without an error,
+because a CPU-bound workload holds few connections at once. The ceiling is
+what the fleet *may* open, and the first slow, I/O-heavy query mix is what
+turns may into does.
 
 ## Damping
 

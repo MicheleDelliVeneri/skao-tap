@@ -17,9 +17,14 @@ timing:
   # Async jobs wait in a queue rather than in the service, so they accumulate
   # far more outstanding requests at the same offered rate: a KEDA scenario
   # abandoned 38.6% of its arrivals at 4096, which shrinks the very backlog the
-  # autoscaler is being measured on. Affordable at this size because a queued
-  # job's phase poll backs off after its first seconds.
-  max_in_flight_async: 20000
+  # autoscaler is being measured on. Sized to hold the family's worst case —
+  # under sustained overload a job stays outstanding for its whole 600 s client
+  # timeout, so the spike scenarios keep ~offered_rate x 600 in flight
+  # (~24,600 at 6xC1): keda-K3 abandoned 11.9% at 20,000 against a slow fleet
+  # (20260826, take 3). Affordable at this size because a queued job's phase
+  # poll backs off in proportion to its age and costs a raw socket, not an
+  # httpx pass.
+  max_in_flight_async: 32768
 
 concurrency_sweep:
   levels: [1, 2, 4, 8, 16, 32, 64, 128]
@@ -38,6 +43,16 @@ fixed_replica_scaling:
   # Offered rates as multiples of C1, the sustainable capacity of one replica.
   c1_multiples: [0.5, 1.0, 2.0, 4.0, 6.0, 8.0]
   dataset: D4
+
+# The async scenarios' generator, sharded like the replica sweep's. Even at
+# ~24 offered jobs/s one asyncio loop pinned its core (keda-K2 on
+# 20260825T220317Z, marked invalid by the headroom guard): every job in
+# flight holds a phase-poll loop, so a scenario that queues thousands of
+# jobs makes the generator's real request rate the poll rate, not the
+# arrival rate. Four processes put the ceiling far above what the polls
+# and the arrivals together need.
+keda_load:
+  generator_processes: 4
 
 keda_scenarios:
   - id: K1
@@ -93,6 +108,43 @@ replica_sweep:
   # run of this family measured its own generator at the top rungs. Four
   # processes put the client ceiling far above the fleet's.
   generator_processes: 4
+
+# Package 19: workers against replicas, on one host. The replica ladder was
+# measured at one worker per pod against a 2-core CPU limit, so every point
+# in it was half-idle by construction. Same closed-loop ladder and stop rule
+# as the replica sweep, once per (workers, replicas) point — same host, same
+# corpus, same workload seeds, so two points differ in the fleet's shape and
+# nothing else. Workers 1/2/4 against the 2-core pod is under-, at- and
+# over-subscribed: the chart's guidance ("set workers to the pod's CPU limit
+# and no higher") is a claim this grid either measures or corrects. The two
+# axes are not interchangeable at the database — a pod's pool ceiling is
+# workers x dbPoolMax — so every point's connection arithmetic is recorded
+# beside its capacity.
+worker_sweep:
+  workers: [1, 2, 4]
+  replicas: [1, 2, 4, 8]
+  warmup_seconds: 15
+  measure_seconds: 45
+  repetitions: 2
+  # Six, not the replica sweep's four: the top of this grid is a fleet of up
+  # to 16 worker processes, which serves more than four generator processes
+  # (~400 requests/second each) can offer, and the hardware budget reserves
+  # six host cores for the generator.
+  generator_processes: 6
+  # One point past the grid, because the grid's own w=4 row cannot answer the
+  # question it looks like it answers. One worker costs ~1.05 cores (package
+  # 18's profile) and two want 2.10 against the pod's 2-core limit, so at the
+  # suite limit every worker count past 2 measures chart-values.yaml, not
+  # uvicorn. This probe reruns w=4 with the CPU limit raised to 4 — and the
+  # memory limit raised with it, because one worker peaks at ~278 MiB and
+  # four against 1Gi would make an OOM the confound rather than the finding.
+  # "Workers stop scaling at 2" and "this pod stops at 2 cores" are
+  # distinguishable only by this point.
+  limit_probe:
+    workers: 4
+    replicas: 1
+    cpu_limit_cores: 4
+    memory_limit: 2Gi
 
 # Package 13: where does shed load stop being an answer? A closed loop is
 # bounded concurrency by construction — each client has exactly one request

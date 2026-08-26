@@ -4,11 +4,11 @@ Follow-up work is organized in numbered packages, referenced by number in
 issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
-**Packages 19, 20 and 22 are open.** Everything through package 18 is
-delivered and merged, and package 21 is delivered with this change; what
-each one settled is recorded in the findings below. Listed rather than
-given as a range, because packages are delivered out of order and a range
-silently misstates the set the moment one in the middle lands.
+**Packages 20, 21 and 22 are open.** Everything through package 19 is
+delivered and merged; what each one settled is recorded in the findings below.
+Listed rather than given as a range, because packages are delivered out of
+order and a range silently misstates the set the moment one in the middle
+lands.
 
 ## Measured findings
 
@@ -70,6 +70,159 @@ in-cluster translation *share* published by package 18's profile was
 measured against the un-vendored translator; `make benchmark-profile`
 (~40 min, D1 only) re-measures it — the profile's bucket already matches
 the vendored module path.
+### 2026-08-26 — the parse removal, deployed: executors stopped being the async bottleneck (package 20, delivered)
+
+The autoscaling family (K1–K7), run twice on identical offered load — the
+ladder anchored at C1 = 6.83 jobs/s in both — differing only in whether the
+executor re-parses each job's query: run `20260826T013544Z-88d8c5e9` with
+the parse in the loop, run `20260826T050451Z-0f62a0fa` with the table list
+carried on the job row (`query_tables`, package 20's fix; the local profile
+behind it — 190 ms of per-job re-parse against ~6 ms for everything else,
+by `tests/performance/profile_async_job.py` — is in the 2026-08-25 entry in
+git history). Every validity guard passed in both runs. Completions are
+counted server-side: a `uws.jobs` row is inserted once and updated exactly
+four times on its way to COMPLETED, so per-window completions are the
+table's `n_tup_upd / 4` — the client's own success count is a casualty in
+both runs, for two different reasons below.
+
+| | before (`88d8c5e9`) | after (`0f62a0fa`) |
+| --- | --- | --- |
+| executor CPU per completed job | 385–469 ms | **4.3–5.0 ms** |
+| per-executor drain, fleet saturated | 2.3–2.5 jobs/s at ~0.9 core/pod (K3, K6) | never saturated — ≥6.2 jobs/s at 2–3% CPU (K6) |
+| sustained 6×C1 — K6, ~41 jobs/s offered | 80% done in-window; queue peaks 20,870; oldest job 851 s | 100% done in-window; queue peaks 52; oldest job 1 s |
+| KEDA replicas | pegged at 8 | peak 5, mean 3.7 |
+
+The before run is the published ~2 jobs/s figure re-measured and confirmed:
+a pegged executor drains 2.3–2.5 jobs/s at ~0.9 cores — ~0.4 s of CPU per
+job — and a fleet of eight cannot hold 6×C1: the queue grows past twenty
+thousand, jobs wait fourteen minutes, and 94% of K6's clients gave up
+before their job ran. The after run is the local profile transferring to
+the deployed environment almost exactly: ~4.6 ms of executor CPU per job
+against the profile's ~6 ms, ninety times less than before. No scenario in
+the family can make the executor the bottleneck any more — every job every
+scenario offered completed inside that scenario's window, KEDA never ran
+more than five replicas, and the pods that did run sat 97% idle.
+
+What the after run surfaces instead is the async path's next ceiling: the
+API. From 3.5×C1 up, 17–57% of client conversations failed — with
+connection errors, on jobs the server had accepted and did complete —
+against the single API pod at ~85% of its one-core limit. A job is a
+submit plus phase polls plus a result fetch, and ~41 arrivals/s of that
+control traffic exceeds what one pod that also answers ~99 rps of sync
+queries can serve. The executor autoscaling defaults survive unchanged
+(`queuedJobsPerReplica: 10` — the queue simply never builds); the ~2
+jobs/s notes in `values.yaml`, `autoscaling.md` and `architecture.md` are
+republished from these runs. What one executor can do now has no measured
+ceiling: feeding it one would take an API that scales, which is not this
+package.
+
+One boundary before that ceiling is read as a service property. The
+executor numbers above are server-side and client-independent; the API
+ceiling is a joint property of the service and a spin-polling client. The
+generator never sends UWS 1.1 `WAIT`: it polls each job's phase at 0.25 s
+backing off to 2 s, so one job costs the API roughly six to eight
+requests, and package 18 put this API at 10.5 ms of CPU per request
+(96–100 rps at one worker) — ~100 rps over ~7 requests per job predicts a
+~14 jobs/s ceiling. The data cannot test that prediction, only fail to
+contradict it: the family is clean at 0.5×C1 ≈ 3.4 jobs/s and failing at
+every rung from 3.5×C1 ≈ 24 jobs/s up, a factor-of-seven bracket with no
+rung between, and the suite cannot count the requests that would settle it
+(the generator records one sample per job however many polls it made, and
+no collected Prometheus series counts API requests — so `http.rps` on an
+async artefact is jobs/s, unlabelled; no published page mislabels it, the
+docs site's only requests/s column never sees an async measurement, so the
+fix is a unit on the field, not a correction to published figures). The service already
+carries the lever the generator did not use: `uws_api.py` implements the
+blocking `WAIT`, which would replace most of those requests with one held
+connection per job — so an operator hitting this ceiling may want a client
+change before more API replicas. The follow-up is one package with a
+prerequisite, not two: teach the harness to count API requests per job,
+then measure the async ceiling under a `WAIT`-ing client.
+### 2026-08-25 — workers against replicas: same price per process, and the wall is the cgroup (package 19, delivered)
+
+One run (`20260825T180219Z-f8b21fc4`), twelve (workers, replicas) points plus
+one probe, every point a saturated closed-loop ceiling on the same host,
+corpus and seeds — and the w=1 column reproduces the replica ladder
+(99.1 / 189.9 / 342.9 / 581.6 rps against `ccbcb41a`'s 98.9 / 190.8 / 347.5 /
+577.9) on a rebuilt cluster, which is what makes the rest comparable.
+
+| rps | n=1 | n=2 | n=4 | n=8 |
+| --- | ---: | ---: | ---: | ---: |
+| w=1 | 99.1 | 189.9 | 342.9 | 581.6 |
+| w=2 | 187.6 | 335.8 | 583.0 | 830.7 |
+| w=4 | 179.2 | 346.7 | 640.6 | 1005.5 |
+
+- **A worker is worth a replica, and it costs no pod.** At equal process
+  count the two axes are interchangeable in throughput: 4 processes measure
+  335.8 (2x2) against 342.9 (1x4); 8 processes measure 583.0 against 581.6.
+  What a worker costs instead is ~140–165 MiB of essentially private memory
+  (pod peaks 138 / 302 / 562 MiB at w=1/2/4 — the interpreter shares almost
+  nothing) and `dbPoolMax` more connections in the pod's ceiling. One caveat
+  on the memory: the working set keeps growing after the pod warms — a fresh
+  four-worker pod went 548 → 581 MiB over its 25 minutes of serving — so
+  read the default 1 Gi as hosting four workers with real, not generous,
+  margin. The shape of that growth says warm-up, not leak: the per-request
+  slope differs 37x between w=2 and w=4 at equal throughput (0.03 against
+  1.05 MiB per thousand requests) where a real per-request cost would be a
+  constant, it decays at constant load, and the two-worker pod measurably
+  flattens at its own steady state. The steps between rungs have a named
+  mechanism: they coincide exactly with the per-worker psycopg pools
+  opening connections as concurrency rises (server sessions 11 → 24 across
+  the probe's rungs, ~2–3 MiB a connection), so the pod's memory floor
+  grows toward `workers x dbPoolMax` — the same product its connection
+  ceiling is made of, which gives the workers default its companion:
+  workers follow the CPU limit, and `config.dbPoolMax` is what makes them
+  fit the memory limit. What rules out a slow residual leak conclusively
+  is a soak — no configuration here was held longer than ten minutes — run
+  it at the w=4 saturation rung, where the bound is tightest and a real
+  residual shows first. And because the pool is bounded by construction at
+  `workers x dbPoolMax` = 32 connections (the probe's top rung had opened
+  only 24), the mechanism makes the soak a prediction rather than a watch:
+  the working set should flatten near ~600 MiB (the ~548 MiB warm floor
+  plus the remaining connections at ~2.5 MiB each); past ~650 MiB there is
+  a second mechanism and the bounded-pool explanation is wrong.
+- **The default follows the pod's CPU limit, and the mechanism was
+  falsifiable in advance.** Package 18's profile priced a request at 10.5 ms
+  of CPU with ~53% GIL-serialised and one worker at 1.05 cores, predicting
+  w=2 at 2 x 1.05 wanted against 2.00 allowed = 0.952 of doubling; measured,
+  187.6 / (2 x 99.1) = 0.945, with the pod at 1.94 cores. Four workers on
+  the same 2 cores *lose* 4% (179.2). The probe settles what that means:
+  the same four workers at a 4-core limit reach 338.1 rps pinned at exactly
+  4.00 cores, still `TAP_CPU_BOUND` — the wall is the cgroup, not uvicorn.
+  So `tapApi.workers` = the pod's CPU limit, stated in
+  [Deployment](deployment.md) with the table.
+- **On one host the axes stop being interchangeable at the top.** At n=8 a
+  w=2 fleet's pods reach only 1.45 cores each (11.6 of 16 allowed) where
+  w=4 pods reach 1.81 — 830.7 against 1005.5 rps from the same eight pods —
+  so extra in-pod workers recovered capacity that adding pods could not,
+  on a 24-core node also running PostgreSQL (1.9 cores at the top point)
+  and the cluster plane. Per process, 32 processes on one host serve
+  31 rps each against a single process's 99.
+- **The connection arithmetic is stated, and it was survived, not
+  validated.** The w=4 n=8 shape may open 256 connections against
+  `max_connections: 200`; it served 1,005 rps with zero errors because this
+  CPU-bound mix holds few connections at once. The ceiling is what the
+  fleet *may* open — [Autoscaling](autoscaling.md) now says so next to the
+  chart's own refusal arithmetic.
+- **What the sweep broke on the way is fixed and pinned.** A ConfigMap-only
+  change (workers, auth, any `config.*`) never restarted the pods — the pod
+  templates now hash ConfigMap and Secret, the harness verifies the deployed
+  worker count and limits from the pods rather than from helm's exit code,
+  and package 18's authenticated rungs were the first beneficiary. Also
+  fixed: dataset generation on a fresh cluster (the service's obscore view
+  pre-empts the suite's table), the restart guard judging pods on lifetime
+  `restartCount`, the database port-forward adopted on an accepting socket
+  a dying forwarder still held, and `MEMORY_BOUND` judged on a fleet-summed
+  working set that counts a rollout's terminating pods (now judged per pod;
+  six transition rungs in this run carry the old misverdict, capacity rungs
+  are unaffected).
+- **Known artefact, diagnosable but not yet attributed per worker:**
+  keep-alive connections pin to a pod *and to a worker within it*, so
+  low-concurrency rungs are bimodal (two clients on one worker of two
+  measure 98 rps where spread clients measure 167). It vanishes at every
+  capacity rung in this run (max repetition spread 2.7%), and per-pod
+  `served_by` concentration lands with package 18 — per-*worker* identity
+  in the response is proposed follow-up, not tacked onto either package.
 
 ### 2026-08-25 — the API's per-request CPU, named (package 18, delivered)
 
@@ -560,7 +713,6 @@ each bracketed by a saturated sweep the way the replica ladder now is; the
 stale notes in `autoscaling.md` and `deployment.md` replaced by those numbers;
 and a stated default for `tapApi.workers` that follows the pod's CPU limit if
 the measurement supports one.
-
 ## Package 20 — What one async job actually costs
 
 The chart puts an executor at ~2 jobs/s (`values.yaml`, `tapExecutor.replicas`
@@ -656,4 +808,3 @@ than a server fault; a test per predicate and argument order (`INTERSECTS` and
 text column reached the same way, not a special case for `s_region`; and the
 translation hot-path benchmark unmoved, since the check costs a set lookup over
 a handful of names against an already-cached table.
-

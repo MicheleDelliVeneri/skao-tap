@@ -400,6 +400,7 @@ Roughly, on the reference machine:
 | `profile` (ladder, six rungs, three 10-min passes, two chart upgrades) | ~65 min |
 | `serialize` (no cluster) | 15 s |
 | fixed replica scaling | ~2 h for 4 counts x 6 rates |
+| worker sweep (`benchmark-workers`) | ~3–5 h for the 3 worker counts x 4 replica counts grid |
 | KEDA K1–K7 | ~1.5 h |
 | `benchmark-full` on all four datasets | 25–40 h |
 
