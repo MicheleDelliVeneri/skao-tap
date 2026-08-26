@@ -45,17 +45,24 @@ MANDATORY = [
 
 
 def _by_name():
-    return {c[0]: c for c in obscore.OBSCORE_COLUMNS}
+    return {c.name: c for c in obscore.OBSCORE_COLUMNS}
 
 
 def test_all_thirty_mandatory_columns_in_rec_order():
-    names = [c[0] for c in obscore.OBSCORE_COLUMNS]
+    names = [c.name for c in obscore.OBSCORE_COLUMNS]
     assert names[: len(MANDATORY)] == MANDATORY
     # the one extra is the package-7 geometry, declared non-standard
     assert names[len(MANDATORY) :] == ["s_region_geom"]
-    std = {name: c[8] for name, c in zip(names, obscore.OBSCORE_COLUMNS, strict=True)}
+    std = {c.name: c.std for c in obscore.OBSCORE_COLUMNS}
     assert all(std[name] == 1 for name in MANDATORY)
     assert std["s_region_geom"] == 0
+
+
+def test_char_columns_declare_a_variable_arraysize():
+    """VOTable needs arraysize="*" on char and nothing on the fixed-width
+    types; it is derived from the datatype, so this is the rule's test."""
+    for column in obscore.OBSCORE_COLUMNS:
+        assert column.arraysize == ("*" if column.datatype == "char" else None), column.name
 
 
 @pytest.mark.parametrize(
@@ -78,14 +85,14 @@ def test_all_thirty_mandatory_columns_in_rec_order():
 )
 def test_units_ucds_and_utypes_match_rec_table_6(name, unit, ucd, utype):
     column = _by_name()[name]
-    assert column[4] == unit
-    assert column[5] == ucd
+    assert column.unit == unit
+    assert column.ucd == ucd
     if utype is not None:
-        assert column[6] == utype
+        assert column.utype == utype
 
 
 def test_s_region_is_declared_a_region():
-    assert _by_name()["s_region"][3] == "adql:REGION"
+    assert _by_name()["s_region"].xtype == "adql:REGION"
 
 
 def test_view_sql_carries_the_mapping_decisions():
@@ -197,7 +204,7 @@ def test_calib_level_description_does_not_claim_obscores_vocabulary():
     """srcnet reads level 1 as calibrated where ObsCore 1.1 reads it as
     instrumental, and the view passes the value through untranslated: the
     description has to describe the column, not the standard."""
-    description = obscore.DESCRIPTIONS["calib_level"]
+    description = _by_name()["calib_level"].description
     assert "1=calibrated" in description
     assert "instrumental" not in description
     assert "untranslated" in description
