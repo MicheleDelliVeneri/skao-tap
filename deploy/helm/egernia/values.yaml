@@ -562,3 +562,8 @@ ingress:
   host: tap.example.org
   annotations: {}
   tls: []
+  # -- Also route `/prometheus` to the bundled Prometheus. Off by default:
+  # Prometheus has no authentication of its own, so publishing it is a
+  # decision to take rather than inherit. The multi-machine demo turns it on
+  # so a notebook elsewhere can read the same series the operator sees.
+  exposePrometheus: false

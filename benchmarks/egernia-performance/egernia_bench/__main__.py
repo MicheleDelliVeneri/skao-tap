@@ -196,6 +196,17 @@ PLAN_EXPLANATIONS = {
 # ---------------------------------------------------------------------------
 
 
+def sweep_datasets(cfg: dict) -> list[str]:
+    """The tiers the size-sweeping families measure when none is named.
+
+    Tiers marked ``demo_only`` are left out: they exist for deploy/demo, and
+    sweeping one would add its whole generation cost — 55 GiB for D5 — to
+    every db-scaling and full run, for a curve D1-D4 already gives the shape
+    of. Naming it explicitly (``--datasets D5``) still works.
+    """
+    return [d["name"] for d in cfg["datasets"]["datasets"] if not d.get("demo_only")]
+
+
 def _start(scenario: str, args) -> tuple[dict, runs_mod.Run, dict]:
     """The three lines every measuring family opens with: the config, the run
     directory (resumed when asked) and the images the cluster will serve."""
@@ -218,7 +229,7 @@ def cmd_smoke(args) -> int:
 
 def cmd_db_scaling(args) -> int:
     cfg, run, digests = _start("db-scaling", args)
-    names = args.datasets or [d["name"] for d in cfg["datasets"]["datasets"]]
+    names = args.datasets or sweep_datasets(cfg)
     results: list[dict] = []
     datasets: dict = {}
     plan_flags: dict = {}
@@ -513,7 +524,7 @@ def cmd_serialize(args) -> int:
 
 def cmd_full(args) -> int:
     cfg, run, digests = _start("full", args)
-    names = args.datasets or [d["name"] for d in cfg["datasets"]["datasets"]]
+    names = args.datasets or sweep_datasets(cfg)
     results: list[dict] = []
     datasets: dict = {}
     entries: list = []

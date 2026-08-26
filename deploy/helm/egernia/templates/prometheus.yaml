@@ -108,6 +108,12 @@ spec:
           args:
             - --config.file=/etc/prometheus/prometheus.yml
             - --storage.tsdb.retention.time={{ .Values.prometheus.retention }}
+            {{- if and .Values.ingress.enabled .Values.ingress.exposePrometheus }}
+            # served under a path prefix, so it has to be told: without this
+            # every request arrives as /prometheus/... and is answered 404
+            - --web.route-prefix=/prometheus
+            - --web.external-url=http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}/prometheus
+            {{- end }}
           ports:
             - name: http
               containerPort: 9090

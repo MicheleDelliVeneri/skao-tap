@@ -35,6 +35,15 @@ docs = [
     "mkdocs>=1.6",
     "mkdocs-material>=9.5",
 ]
+# deploy/demo: the marimo notebook that drives the multi-machine demo. Kept
+# out of `dev` because nothing in CI runs it and it pulls a UI stack.
+demo = [
+    "marimo>=0.9",
+    "httpx>=0.27",
+    "pyvo>=1.5",
+    "altair>=5.4",
+    "pandas>=2.2",
+]
 # benchmarks/egernia-performance. Kept out of `dev` because it is heavier than the
 # test suite needs and nothing in CI imports it.
 benchmark = [
@@ -79,6 +88,10 @@ exclude = ["libs/egernia-core/egernia_core/query/_adql/translator.py"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011"]
+# marimo notebooks are Python files whose cells end in a bare expression —
+# that expression IS the cell's rendered output, not a statement with no
+# effect. Everything else stays enforced.
+"deploy/demo/*.py" = ["B018"]
 # vendored from queryparser: keeps upstream's style so diffs against
 # upstream stay readable
 "libs/egernia-core/egernia_core/query/_adql/translator.py" = [

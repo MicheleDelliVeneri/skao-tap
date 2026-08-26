@@ -96,3 +96,84 @@ benchmark-publish:
 
 benchmark-teardown:
 	$(BENCH) teardown
+
+# ---------------------------------------------------------------------------
+# Multi-machine demo (deploy/demo): the service on a Kubernetes cluster you
+# already have, the notebook on someone else's laptop.
+#
+#   make demo-help                        this list, and the current target
+#   make demo-preflight                   what the cluster is and what it lacks
+#   make demo-deploy HOST=tap.example.org deploy the chart via the current context
+#   make demo-headlamp                    Headlamp, for the cluster view on screen
+#   make demo-dataset                     generate the ~100 GiB D5 dataset in-cluster
+#   make demo-snapshot                    capture D5 so the next run is minutes
+#   make demo-restore                     restore a captured D5
+#   make demo-notebook                    marimo, against the deployed service
+#   make demo-status                      URLs, replicas, dataset size
+#   make demo-teardown                    remove the release (KEEP_DATA=1 keeps the PVC)
+#
+# The cluster is whatever `kubectl config current-context` points at. Every
+# target that changes the cluster prints that context and refuses to guess:
+# deploying 100 GiB into the wrong cluster is not an undo-able mistake.
+
+DEMO_DIR := $(CURDIR)/deploy/demo
+DEMO_NS ?= egernia-demo
+DEMO_RELEASE ?= egernia
+DEMO_VALUES ?= $(DEMO_DIR)/values-demo.yaml
+DEMO_CONTEXT = $(shell kubectl config current-context 2>/dev/null)
+DEMO_MARIMO := $(DEMO_DIR)/scaling_demo.py
+
+.PHONY: demo-help demo-preflight demo-deploy demo-headlamp demo-dataset \
+        demo-snapshot demo-restore demo-notebook demo-status demo-teardown
+
+demo-help:
+	@sed -n '/^# Multi-machine demo/,/^# deploying 100 GiB/p' $(firstword $(MAKEFILE_LIST))
+	@echo
+	@echo "current kubectl context: $(or $(DEMO_CONTEXT),<none>)"
+
+demo-preflight:
+	@$(DEMO_DIR)/preflight.sh
+
+demo-deploy:
+	@test -n "$(HOST)" || { echo "HOST is required, e.g. make demo-deploy HOST=tap.example.org" >&2; exit 2; }
+	@test -n "$(DEMO_CONTEXT)" || { echo "no current kubectl context" >&2; exit 2; }
+	@echo "deploying to context '$(DEMO_CONTEXT)', namespace '$(DEMO_NS)', host '$(HOST)'"
+	helm upgrade --install $(DEMO_RELEASE) $(CURDIR)/deploy/helm/egernia \
+	  --namespace $(DEMO_NS) --create-namespace \
+	  --values $(DEMO_VALUES) \
+	  --set ingress.host=$(HOST) \
+	  $(if $(INGRESS_CLASS),--set ingress.className=$(INGRESS_CLASS),) \
+	  $(if $(STORAGE_CLASS),--set postgresql.storageClass=$(STORAGE_CLASS) --set results.storageClass=$(STORAGE_CLASS),) \
+	  --wait --timeout 15m
+	@$(MAKE) --no-print-directory demo-status HOST=$(HOST)
+
+demo-headlamp:
+	@test -n "$(DEMO_CONTEXT)" || { echo "no current kubectl context" >&2; exit 2; }
+	$(DEMO_DIR)/headlamp.sh install $(DEMO_NS)
+
+demo-dataset:
+	$(DEMO_DIR)/dataset.sh generate $(DEMO_NS) $(DEMO_RELEASE)
+
+demo-snapshot:
+	$(DEMO_DIR)/dataset.sh snapshot $(DEMO_NS) $(DEMO_RELEASE)
+
+demo-restore:
+	$(DEMO_DIR)/dataset.sh restore $(DEMO_NS) $(DEMO_RELEASE)
+
+demo-notebook:
+	@test -n "$(HOST)" || { echo "HOST is required, e.g. make demo-notebook HOST=tap.example.org" >&2; exit 2; }
+	EGERNIA_BASE_URL=$(if $(SCHEME),$(SCHEME),http)://$(HOST) \
+	  $(PYTHON) -m marimo edit $(DEMO_MARIMO)
+
+demo-status:
+	@$(DEMO_DIR)/status.sh $(DEMO_NS) $(DEMO_RELEASE) $(HOST)
+
+demo-teardown:
+	@echo "removing release '$(DEMO_RELEASE)' from context '$(DEMO_CONTEXT)'"
+	-helm uninstall $(DEMO_RELEASE) --namespace $(DEMO_NS)
+	@if [ -n "$(KEEP_DATA)" ]; then \
+	  echo "keeping the PostgreSQL PVC (KEEP_DATA set); 'make demo-deploy' will reuse the dataset"; \
+	else \
+	  echo "deleting the namespace, dataset included"; \
+	  kubectl delete namespace $(DEMO_NS) --ignore-not-found; \
+	fi
