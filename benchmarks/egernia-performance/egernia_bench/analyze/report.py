@@ -684,26 +684,27 @@ class Plotter:
 
     # -- result formats -----------------------------------------------------
 
-    def format_latency(self) -> Figure:
-        """p95 per writer, per query class: what the format costs a client."""
+    def _format_bars(self, name: str, title: str, ylabel: str, value_of, caption: str) -> Figure:
+        """A grouped bar chart over the result-format comparison: one bar per
+        query class within each writer, missing pairs left as gaps.
+
+        The two callers differ only in the number they pull from a row and in
+        their prose, so the layout arithmetic — bar width, group offsets, the
+        centred tick positions — is stated here once.
+        """
         comparison = self.summary.get("format_comparison") or []
         if not comparison:
-            return self._skip(
-                "format_latency",
-                "Latency by result format",
-                "no result-format measurements in this run",
-            )
+            return self._skip(name, title, "no result-format measurements in this run")
         classes = sorted({row["query_class"] for row in comparison})
         formats = sorted({row["response_format"] for row in comparison})
-        fig, ax = self._axes("result format", "p95 latency (ms)", "Latency by result format")
+        fig, ax = self._axes("result format", ylabel, title)
         width = 0.8 / max(len(classes), 1)
         positions = np.arange(len(formats))
         for index, query_class in enumerate(classes):
             heights = [
-                1000
-                * next(
+                next(
                     (
-                        r["latency_p95_s"]
+                        value_of(r)
                         for r in comparison
                         if r["query_class"] == query_class and r["response_format"] == fmt
                     ),
@@ -721,10 +722,15 @@ class Plotter:
         ax.set_xticks(positions + width * (len(classes) - 1) / 2)
         ax.set_xticklabels(formats, rotation=20)
         ax.legend(frameon=False)
-        return self._save(
-            fig,
+        return self._save(fig, name, title, caption)
+
+    def format_latency(self) -> Figure:
+        """p95 per writer, per query class: what the format costs a client."""
+        return self._format_bars(
             "format_latency",
             "Latency by result format",
+            "p95 latency (ms)",
+            lambda r: 1000 * r["latency_p95_s"],
             "The same rows out through every writer, at fixed concurrency. The "
             "difference between two bars is the writer and the bytes it made, "
             "because nothing else about the request changed.",
@@ -732,46 +738,11 @@ class Plotter:
 
     def format_bytes(self) -> Figure:
         """Bytes per response per writer — the other half of the cost."""
-        comparison = self.summary.get("format_comparison") or []
-        if not comparison:
-            return self._skip(
-                "format_bytes",
-                "Response size by result format",
-                "no result-format measurements in this run",
-            )
-        classes = sorted({row["query_class"] for row in comparison})
-        formats = sorted({row["response_format"] for row in comparison})
-        fig, ax = self._axes(
-            "result format", "mean response (MiB)", "Response size by result format"
-        )
-        width = 0.8 / max(len(classes), 1)
-        positions = np.arange(len(formats))
-        for index, query_class in enumerate(classes):
-            heights = [
-                next(
-                    (
-                        r["mean_response_bytes"] / 2**20
-                        for r in comparison
-                        if r["query_class"] == query_class and r["response_format"] == fmt
-                    ),
-                    float("nan"),
-                )
-                for fmt in formats
-            ]
-            ax.bar(
-                positions + index * width,
-                heights,
-                width=width,
-                label=query_class,
-                color=SERIES[index % len(SERIES)],
-            )
-        ax.set_xticks(positions + width * (len(classes) - 1) / 2)
-        ax.set_xticklabels(formats, rotation=20)
-        ax.legend(frameon=False)
-        return self._save(
-            fig,
+        return self._format_bars(
             "format_bytes",
             "Response size by result format",
+            "mean response (MiB)",
+            lambda r: r["mean_response_bytes"] / 2**20,
             "A format can be cheap to produce and expensive to receive, or the "
             "other way round. Parquet is the case that makes the distinction "
             "worth drawing.",
