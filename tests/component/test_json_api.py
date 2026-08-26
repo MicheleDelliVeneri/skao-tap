@@ -443,7 +443,8 @@ def test_schema_evolution_adds_new_model_columns_without_data_loss(tap_service, 
     missing a column is migrated forward by ensure_schema (ADD COLUMN IF
     NOT EXISTS) and already-ingested rows survive."""
     import psycopg
-    from egernia_api.plugins.odp import ensure_schema
+    from egernia_api.plugins.odp import PLUGIN
+    from egernia_core.metadata.ingest import ensure_schema
 
     httpx.post(f"{_api(tap_service)}/notifications", json=SRC_INGESTION_EXAMPLE, timeout=30)
 
@@ -456,7 +457,7 @@ def test_schema_evolution_adds_new_model_columns_without_data_loss(tap_service, 
         conn.execute("ALTER TABLE srcnet.data_products DROP COLUMN beam_pa")
 
     with psycopg.connect(database_url) as conn, conn.transaction():
-        ensure_schema(conn)
+        ensure_schema(conn, PLUGIN)
 
     with psycopg.connect(database_url) as conn:
         restored = conn.execute(

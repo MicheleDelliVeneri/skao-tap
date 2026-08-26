@@ -13,6 +13,7 @@ import os
 import shutil
 import threading
 import time
+from types import SimpleNamespace
 
 from egernia_core import uws
 from egernia_core.config import settings
@@ -216,41 +217,19 @@ def _count_finalized_elsewhere(job_id: str) -> None:
     JOBS_COMPLETED.labels(phase=phase).inc()
 
 
-class _AsyncDuration:
-    """Records an async job's query duration once, however the job ends.
-
-    A flag and one ``finally`` rather than an observe at each exit: this
-    function returns early at four points — an ABORT before execution, an
-    ABORT during it, an error, and a job finalized under us — and a review
-    found one of them recording nothing at all. With a single recording site,
-    a path added later cannot quietly miss it.
-
-    ``query_ran`` is what keeps the histogram meaning what it says: an ABORT
-    that lands before the cursor executes spent no time querying, and counting
-    its setup as a query duration would pull the low buckets down.
-    """
-
-    def __init__(self, started: float) -> None:
-        self._started = started
-        self.query_ran = False
-
-    def __enter__(self) -> _AsyncDuration:
-        return self
-
-    def __exit__(self, *exc_info) -> bool:
-        if self.query_ran:
-            QUERY_DURATION.labels(kind="async").observe(time.monotonic() - self._started)
-        return False
-
-
 def execute_job(job: dict) -> None:
     job_id = job["job_id"]
     params = job["parameters"] or {}
-    backend_pid = None
     started = time.monotonic()
-    # scoped to the job: this loop runs for the life of the pod, so a leftover
-    # id would attribute the next poll, the cleanup pass and any loop error to
-    # whichever job happened to run last
+    # duration is a one-item mutable so the single recording site below covers
+    # every exit: this job ends at four early-return points, and a review once
+    # found one of them recording nothing. query_ran keeps the histogram
+    # meaning what it says — an ABORT that lands before the cursor executes
+    # spent no time querying and must not pull the low buckets down.
+    duration = SimpleNamespace(query_ran=False)
+    # request context scoped to the job: this loop runs for the life of the
+    # pod, so a leftover id would attribute the next poll, the cleanup pass
+    # and any loop error to whichever job happened to run last
     with (
         request_context(job.get("request_id")),
         LogContext(
@@ -258,12 +237,16 @@ def execute_job(job: dict) -> None:
             owner_id=job.get("owner_id"),
             request_id=job.get("request_id"),
         ),
-        _AsyncDuration(started) as duration,
     ):
-        _execute_job_inner(job, job_id, params, backend_pid, duration)
+        try:
+            _execute_job_inner(job, job_id, params, duration)
+        finally:
+            if duration.query_ran:
+                QUERY_DURATION.labels(kind="async").observe(time.monotonic() - started)
 
 
-def _execute_job_inner(job: dict, job_id, params, backend_pid, duration) -> None:
+def _execute_job_inner(job: dict, job_id, params, duration) -> None:
+    backend_pid = None
     log.info("executing job %s", job_id)
     try:
         maxrec = min(int(params.get("MAXREC", settings.default_maxrec)), settings.hard_maxrec)
@@ -397,9 +380,7 @@ def _ensure_job_columns(attempts: int = 30, delay_s: float = 2.0) -> None:
     for attempt in range(1, attempts + 1):
         try:
             with db_connection() as conn:
-                conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS backend_pid integer")
-                conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS request_id text")
-                conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS query_tables text[]")
+                uws.ensure_job_columns(conn)
             return
         except Exception as exc:
             if attempt == attempts:

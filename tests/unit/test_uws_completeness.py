@@ -76,9 +76,6 @@ def test_json_wait_blocks_until_phase_changes(client, fake_db, monkeypatch):
     job = fake_db.add_job(phase="EXECUTING")
     _flip_phase_on_sleep(monkeypatch, fake_db, job["job_id"], "ERROR")
 
-    import egernia_api.endpoints.json_api as json_api
-
-    monkeypatch.setattr(json_api.asyncio, "sleep", uws_api.asyncio.sleep, raising=False)
     response = client.get(f"/api/v1/jobs/{job['job_id']}", params={"wait": 30})
     assert response.json()["phase"] == "ERROR"
 

@@ -15,12 +15,8 @@ discovery domain (egernia_api.plugins.software) ship built in; third-party model
 packages register through the egernia.models entry-point group.
 """
 
-import asyncio
-import datetime
 import logging
-import os
 import shutil
-import time
 
 from egernia_core import uws
 from egernia_core.config import settings
@@ -29,12 +25,19 @@ from egernia_core.errors import NotFoundError, UsageError
 from egernia_core.metadata import ingest
 from egernia_core.metadata.plugins import MetadataPlugin, active_plugins
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from ..auth import auth_summary, gated, owner_of, require
 from ..queries.query import prepare_query, run_sync
+from .uws_api import (
+    parse_job_filters,
+    queue_job,
+    result_file_response,
+    run_or_abort,
+    wait_for_phase,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["json-api"])
 log = logging.getLogger("egernia_api")
@@ -125,12 +128,6 @@ async def sync_query(body: QueryRequest):
 # ---------------------------------------------------------------------------
 
 
-def _iso(dt: datetime.datetime | None) -> str | None:
-    if dt is None:
-        return None
-    return dt.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")  # pyright: ignore
-
-
 def _api_base() -> str:
     """The /api/v1 base derived from the TAP base URL (…/tap -> …/api/v1)."""
     root = settings.base_url.rsplit("/tap", 1)[0]
@@ -143,11 +140,11 @@ def _job_json(job: dict) -> dict:
         "phase": job["phase"],
         "run_id": job["run_id"],
         "owner_id": job["owner_id"],
-        "creation_time": _iso(job["creation_time"]),
-        "start_time": _iso(job["start_time"]),
-        "end_time": _iso(job["end_time"]),
+        "creation_time": uws.iso_utc(job["creation_time"]),
+        "start_time": uws.iso_utc(job["start_time"]),
+        "end_time": uws.iso_utc(job["end_time"]),
         "execution_duration": job["execution_duration"],
-        "destruction": _iso(job["destruction"]),
+        "destruction": uws.iso_utc(job["destruction"]),
         "parameters": job["parameters"],
         "urls": {
             "job": f"{_api_base()}/jobs/{job['job_id']}",
@@ -165,25 +162,6 @@ def _job_json(job: dict) -> dict:
     return body
 
 
-def _queue(conn, job: dict, prepared: dict) -> None:
-    """Move a job to QUEUED, using an already-translated query.
-
-    ``prepared`` is required rather than optional: translating here would put
-    an ADQL parse back on the event loop, since every caller is an async
-    handler. Required means a future caller cannot reintroduce that quietly.
-    """
-    if job["phase"] not in ("PENDING", "HELD"):
-        raise UsageError(f"cannot start job in phase {job['phase']}")
-    uws.update_job(
-        conn,
-        job["job_id"],
-        phase="QUEUED",
-        query_sql=prepared["sql"],
-        # from the parse the API already did, so the executor never parses
-        query_tables=sorted(prepared["tables"]),
-    )
-
-
 @router.post("/jobs", status_code=201, dependencies=[Depends(require("jobs.create"))])
 async def create_job(body: JobRequest, request: Request):
     params = _tap_params(body, fmt=body.format)
@@ -195,24 +173,14 @@ async def create_job(body: JobRequest, request: Request):
     with db_connection() as conn:
         job = uws.create_job(conn, params, owner_id=owner_of(request))
         if body.run:
-            _queue(conn, job, prepared)
+            queue_job(conn, job, prepared)
         return _job_json(uws.get_job(conn, job["job_id"]))
 
 
 @router.get("/jobs")
 async def list_jobs(phase: str | None = None, last: int | None = None, after: str | None = None):
-    if last is not None and last < 1:
-        raise UsageError("last must be a positive integer")
-    phases = [p.strip().upper() for p in phase.split(",")] if phase else None
-    for item in phases or []:
-        if item not in uws.ALL_PHASES:
-            raise UsageError(f"unknown phase {item}")
-    since = None
-    if after is not None:
-        try:
-            since = datetime.datetime.fromisoformat(after.replace("Z", "+00:00"))
-        except ValueError:
-            raise UsageError("after must be an ISO-8601 timestamp") from None
+    phases = [p.strip().upper() for p in phase.split(",")] if phase else []
+    phases, last, since = parse_job_filters(phases, last, after)
     with db_connection() as conn:
         jobs = uws.list_jobs(conn, phases, last, since)
     return {"jobs": [_job_json(j) for j in jobs]}
@@ -227,18 +195,7 @@ async def get_job(job_id: str, wait: int | None = None):
         raise UsageError("wait must be >= -1")
     if wait == -1:
         wait = settings.wait_max_s
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
-    if wait and job["phase"] in uws.ACTIVE_PHASES:
-        from .uws_api import WAIT_POLL_S
-
-        reference = job["phase"]
-        deadline = time.monotonic() + min(wait, settings.wait_max_s)
-        while job["phase"] == reference and time.monotonic() < deadline:
-            await asyncio.sleep(min(WAIT_POLL_S, max(0.0, deadline - time.monotonic())))
-            with db_connection() as conn:
-                job = uws.get_job(conn, job_id)
-    return _job_json(job)
+    return _job_json(await wait_for_phase(job_id, min(wait or 0, settings.wait_max_s)))
 
 
 class PhaseRequest(BaseModel):
@@ -247,22 +204,7 @@ class PhaseRequest(BaseModel):
 
 @router.post("/jobs/{job_id}/phase", dependencies=[Depends(require("jobs.mutate"))])
 async def post_phase(job_id: str, body: PhaseRequest):
-    phase = body.phase.upper()
-    prepared = None
-    if phase == "RUN":
-        # the job's own parameters, translated off the event loop
-        with db_connection() as conn:
-            stored = uws.get_job(conn, job_id)
-        prepared = await run_in_threadpool(prepare_query, stored["parameters"])
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
-        if prepared is not None:  # set exactly when the phase is RUN
-            _queue(conn, job, prepared)
-        elif phase == "ABORT":
-            uws.abort_job(conn, job)
-        else:
-            raise UsageError("phase must be RUN or ABORT")
-        return _job_json(uws.get_job(conn, job_id))
+    return _job_json(await run_or_abort(job_id, body.phase.upper()))
 
 
 @router.delete("/jobs/{job_id}", status_code=204, dependencies=[Depends(require("jobs.delete"))])
@@ -287,20 +229,7 @@ async def delete_job(job_id: str):
 async def get_result(job_id: str):
     with db_connection() as conn:
         job = uws.get_job(conn, job_id)
-    if job["phase"] != "COMPLETED":
-        raise NotFoundError(f"job {job_id} has no result (phase {job['phase']})")
-    result_dir = uws.job_results_dir(job_id)
-    try:
-        result_names = os.listdir(result_dir) if os.path.isdir(result_dir) else []
-    except OSError:
-        result_names = []
-    for name in result_names:
-        if name.startswith("result."):
-            return FileResponse(
-                os.path.join(result_dir, name),
-                media_type=job["result_mime"] or "application/octet-stream",
-            )
-    raise NotFoundError(f"result file for job {job_id} not found")
+    return result_file_response(job, job_id)
 
 
 # ---------------------------------------------------------------------------

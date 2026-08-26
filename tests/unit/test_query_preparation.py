@@ -187,6 +187,6 @@ def test_queueing_a_job_cannot_translate_on_the_event_loop():
 
     from egernia_api.endpoints import json_api, uws_api
 
-    for module in (json_api, uws_api):
-        parameter = inspect.signature(module._queue).parameters["prepared"]
-        assert parameter.default is inspect.Parameter.empty, module.__name__
+    assert json_api.queue_job is uws_api.queue_job  # one shared implementation
+    parameter = inspect.signature(uws_api.queue_job).parameters["prepared"]
+    assert parameter.default is inspect.Parameter.empty

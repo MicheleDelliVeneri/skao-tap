@@ -55,10 +55,19 @@ def job_results_dir(job_id: str) -> str:
     return path
 
 
-def _iso(dt: datetime.datetime | None) -> str | None:
+def iso_utc(dt: datetime.datetime | None) -> str | None:
     if dt is None:
         return None
     return dt.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def ensure_job_columns(conn) -> None:
+    """Forward-migrate uws.jobs columns older deployments lack (fresh
+    databases get them from db/init). Called by both services: in a rolling
+    upgrade either one can be the first to touch the table."""
+    conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS backend_pid integer")
+    conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS request_id text")
+    conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS query_tables text[]")
 
 
 def create_job(conn, parameters: dict[str, str], owner_id: str | None = None) -> dict:
@@ -260,12 +269,12 @@ def job_xml(job: dict) -> bytes:
     _nillable("runId", job["run_id"])
     _nillable("ownerId", job["owner_id"])
     _el(root, "phase", job["phase"])
-    _nillable("quote", _iso(job["quote"]))
-    _el(root, "creationTime", _iso(job["creation_time"]))
-    _nillable("startTime", _iso(job["start_time"]))
-    _nillable("endTime", _iso(job["end_time"]))
+    _nillable("quote", iso_utc(job["quote"]))
+    _el(root, "creationTime", iso_utc(job["creation_time"]))
+    _nillable("startTime", iso_utc(job["start_time"]))
+    _nillable("endTime", iso_utc(job["end_time"]))
     _el(root, "executionDuration", job["execution_duration"])
-    _el(root, "destruction", _iso(job["destruction"]))
+    _el(root, "destruction", iso_utc(job["destruction"]))
 
     params = _el(root, "parameters")
     for key, value in (job["parameters"] or {}).items():
