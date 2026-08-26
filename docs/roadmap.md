@@ -77,7 +77,10 @@ contradict it: the family is clean at 0.5×C1 ≈ 3.4 jobs/s and failing at
 every rung from 3.5×C1 ≈ 24 jobs/s up, a factor-of-seven bracket with no
 rung between, and the suite cannot count the requests that would settle it
 (the generator records one sample per job however many polls it made, and
-no collected Prometheus series counts API requests). The service already
+no collected Prometheus series counts API requests — so `http.rps` on an
+async artefact is jobs/s, unlabelled; no published page mislabels it, the
+docs site's only requests/s column never sees an async measurement, so the
+fix is a unit on the field, not a correction to published figures). The service already
 carries the lever the generator did not use: `uws_api.py` implements the
 blocking `WAIT`, which would replace most of those requests with one held
 connection per job — so an operator hitting this ceiling may want a client
