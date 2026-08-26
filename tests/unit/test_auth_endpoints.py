@@ -17,25 +17,8 @@ EMPTY_ROLES = json.dumps({"metadata.ingest": {}, "metadata.amend": {}, "metadata
 
 
 @pytest.fixture
-def secured(auth_settings, stub_iam, iam_issuer, iam_audience):
-    auth_settings(
-        auth_enabled=True,
-        auth_plugin="iam-groups",
-        auth_roles=ROLES,
-        iam_issuer=iam_issuer,
-        iam_audience=iam_audience,
-    )
-    return auth_settings
-
-
-@pytest.fixture
-def bearer(make_token):
-    """An Authorization header for a token signed by the stub IAM."""
-
-    def build(private=None, **overrides):
-        return {"Authorization": f"Bearer {make_token(private, **overrides)}"}
-
-    return build
+def secured(secure):
+    secure(auth_roles=ROLES)
 
 
 def test_ingest_without_a_token_is_401_with_a_challenge(client, secured, software_payload):
@@ -163,17 +146,9 @@ def test_mutations_are_open_when_auth_is_disabled(client, software_payload):
     assert deleted.status_code == 200
 
 
-def test_an_empty_policy_denies_every_write(
-    client, auth_settings, stub_iam, iam_issuer, iam_audience, software_payload, bearer
-):
+def test_an_empty_policy_denies_every_write(client, secure, software_payload, bearer):
     """Auth enabled with an unwritten policy must lock writes, not open them."""
-    auth_settings(
-        auth_enabled=True,
-        auth_plugin="iam-groups",
-        auth_roles=EMPTY_ROLES,
-        iam_issuer=iam_issuer,
-        iam_audience=iam_audience,
-    )
+    secure(auth_roles=EMPTY_ROLES)
     token = bearer()
     created = client.post("/api/v1/software", json=software_payload, headers=token)
     deleted = client.delete(f"/api/v1/software/{software_payload['uri']}", headers=token)

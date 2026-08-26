@@ -38,27 +38,23 @@ PAYLOAD = {
 }
 
 
-def _api(tap_service: str) -> str:
-    return tap_service.rsplit("/tap", 1)[0] + "/api/v1"
-
-
-def test_software_ingest_built_with_the_model(tap_service):
+def test_software_ingest_built_with_the_model(api_url):
     """Producer path: the payload validates through the ska-src-sdm model
     itself before being sent, then upserts idempotently."""
     document = Software.from_dict(PAYLOAD)  # raises on invalid payload
-    response = httpx.post(f"{_api(tap_service)}/software", json=document.to_dict(), timeout=30)
+    response = httpx.post(f"{api_url}/software", json=document.to_dict(), timeout=30)
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["uri"] == PAYLOAD["uri"]
     assert body["rows"] == {"srcnet.software": 1, "srcnet.software_artifacts": 2}
-    again = httpx.post(f"{_api(tap_service)}/software", json=PAYLOAD, timeout=30)
+    again = httpx.post(f"{api_url}/software", json=PAYLOAD, timeout=30)
     assert again.status_code == 201
     assert again.json()["rows"] == body["rows"]
 
 
-def test_software_document_roundtrip(tap_service):
-    httpx.post(f"{_api(tap_service)}/software", json=PAYLOAD, timeout=30)
-    document = httpx.get(f"{_api(tap_service)}/software/{PAYLOAD['uri']}", timeout=10).json()
+def test_software_document_roundtrip(api_url):
+    httpx.post(f"{api_url}/software", json=PAYLOAD, timeout=30)
+    document = httpx.get(f"{api_url}/software/{PAYLOAD['uri']}", timeout=10).json()
     assert document["description"] == PAYLOAD["description"]
     # flattened nested objects come back nested
     assert document["resources"]["min_memory"] == 16
@@ -66,14 +62,14 @@ def test_software_document_roundtrip(tap_service):
     assert document["discovery"]["tools_included"] == ["casa", "wsclean"]
     assert {a["kind"] for a in document["artifacts"]} == {"DOCKER", "SINGULARITY"}
 
-    listing = httpx.get(f"{_api(tap_service)}/software", timeout=10).json()
+    listing = httpx.get(f"{api_url}/software", timeout=10).json()
     (entry,) = [s for s in listing["software"] if s["uri"] == PAYLOAD["uri"]]
     assert entry["artifacts"] == 2
     assert entry["status"] == "STABLE"
 
 
-def test_software_queryable_via_tap_adql(tap_service):
-    httpx.post(f"{_api(tap_service)}/software", json=PAYLOAD, timeout=30)
+def test_software_queryable_via_tap_adql(tap_service, api_url):
+    httpx.post(f"{api_url}/software", json=PAYLOAD, timeout=30)
     sync = httpx.post(
         f"{tap_service}/sync",
         data={
@@ -92,9 +88,9 @@ def test_software_queryable_via_tap_adql(tap_service):
     assert "ska:dsc-037-delay-ps:0.1.3,STABLE,images.canfar.net" in sync.text
 
 
-def test_software_amend_flattened_column(tap_service):
-    httpx.post(f"{_api(tap_service)}/software", json=PAYLOAD, timeout=30)
-    url = f"{_api(tap_service)}/software/{PAYLOAD['uri']}"
+def test_software_amend_flattened_column(api_url):
+    httpx.post(f"{api_url}/software", json=PAYLOAD, timeout=30)
+    url = f"{api_url}/software/{PAYLOAD['uri']}"
     amended = httpx.patch(
         url, json={"table": "software", "values": {"status": "DEPRECATED"}}, timeout=10
     )
@@ -113,10 +109,10 @@ def test_software_amend_flattened_column(tap_service):
     assert bad_enum.status_code == 400
 
 
-def test_software_delete_cascades_to_artifacts(tap_service):
+def test_software_delete_cascades_to_artifacts(tap_service, api_url):
     payload = {**PAYLOAD, "uri": "ska:delete-demo:0.0.1"}
-    url = f"{_api(tap_service)}/software/{payload['uri']}"
-    created = httpx.post(f"{_api(tap_service)}/software", json=payload, timeout=30)
+    url = f"{api_url}/software/{payload['uri']}"
+    created = httpx.post(f"{api_url}/software", json=payload, timeout=30)
     assert created.status_code == 201, created.text
 
     deleted = httpx.delete(url, timeout=30)
@@ -140,7 +136,7 @@ def test_software_delete_cascades_to_artifacts(tap_service):
     assert artifacts.text.strip().splitlines() == ["uri"]
 
 
-def test_software_validation_rejected(tap_service):
+def test_software_validation_rejected(api_url):
     bad = dict(PAYLOAD, uri="not a uri")
-    response = httpx.post(f"{_api(tap_service)}/software", json=bad, timeout=10)
+    response = httpx.post(f"{api_url}/software", json=bad, timeout=10)
     assert response.status_code == 422

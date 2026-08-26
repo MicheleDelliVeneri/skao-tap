@@ -70,6 +70,12 @@ def database_url():
 
 
 @pytest.fixture(scope="session")
+def api_url(tap_service):
+    """The JSON API base URL of the running tap-api service."""
+    return tap_service.rsplit("/tap", 1)[0] + "/api/v1"
+
+
+@pytest.fixture(scope="session")
 def tap_service(database_url, tmp_path_factory):
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}/tap"

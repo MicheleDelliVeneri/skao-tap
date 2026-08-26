@@ -630,6 +630,32 @@ def _reset_api_auth():
 
 
 @pytest.fixture
+def secure(auth_settings, stub_iam, iam_issuer, iam_audience):
+    """Enable iam-groups auth against the stub IAM; kwargs are extra settings overrides."""
+
+    def apply(**overrides):
+        auth_settings(
+            auth_enabled=True,
+            auth_plugin="iam-groups",
+            iam_issuer=iam_issuer,
+            iam_audience=iam_audience,
+            **overrides,
+        )
+
+    return apply
+
+
+@pytest.fixture
+def bearer(make_token):
+    """An Authorization header for a token signed by the stub IAM."""
+
+    def build(private=None, **overrides):
+        return {"Authorization": f"Bearer {make_token(private, **overrides)}"}
+
+    return build
+
+
+@pytest.fixture
 def results_dir(tmp_path):
     """Point settings.results_dir at a temp dir (Settings is frozen)."""
     from egernia_core.config import settings

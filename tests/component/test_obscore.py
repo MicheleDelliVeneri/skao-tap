@@ -13,10 +13,6 @@ from ska_src_mm_notification.models.schemas.srcnet_ingestion import (
 pytestmark = pytest.mark.component
 
 
-def _api(tap_service: str) -> str:
-    return tap_service.rsplit("/tap", 1)[0] + "/api/v1"
-
-
 def _sync_csv(tap_service: str, adql: str) -> list[str]:
     response = httpx.post(
         f"{tap_service}/sync",
@@ -27,14 +23,14 @@ def _sync_csv(tap_service: str, adql: str) -> list[str]:
     return response.text.strip().splitlines()
 
 
-def test_obscore_view_serves_ingested_products(tap_service):
+def test_obscore_view_serves_ingested_products(tap_service, api_url):
     payload = copy.deepcopy(SRC_INGESTION_EXAMPLE)
     payload["project_id"] = "obscore-demo"
     product = payload["observations"][0]["scheduling_blocks"][0]["execution_blocks"][0][
         "data_products"
     ][0]
     product["s_region"] = "CIRCLE ICRS 150.0 -30.0 0.5"
-    created = httpx.post(f"{_api(tap_service)}/notifications", json=payload, timeout=30)
+    created = httpx.post(f"{api_url}/notifications", json=payload, timeout=30)
     assert created.status_code == 201, created.text
 
     obs_id = payload["observations"][0]["obs_id"]
@@ -58,7 +54,7 @@ def test_obscore_view_serves_ingested_products(tap_service):
     assert any("obscore-demo" in row for row in overlap[1:])
 
 
-def test_obscore_declarations_for_validators(tap_service):
+def test_obscore_declarations_for_validators(tap_service, api_url):
     capabilities = httpx.get(f"{tap_service}/capabilities", timeout=10).text
     assert (
         '<dataModel ivo-id="ivo://ivoa.net/std/ObsCore#core-1.1">ObsCore-1.1</dataModel>'
@@ -71,7 +67,7 @@ def test_obscore_declarations_for_validators(tap_service):
     assert 'extendedType="adql:REGION"' in tables
     assert "<utype>obscore:Curation.publisherDID</utype>" in tables
 
-    listing = httpx.get(f"{_api(tap_service)}/tables", timeout=10).json()
+    listing = httpx.get(f"{api_url}/tables", timeout=10).json()
     obscore = next(t for t in listing["tables"] if t["name"] == "ivoa.obscore")
     assert obscore["utype"] == "ivo://ivoa.net/std/ObsCore#core-1.1"
     names = [c["name"] for c in obscore["columns"]]
@@ -88,7 +84,7 @@ def test_obscore_declarations_for_validators(tap_service):
     assert "ivoa.obscore" in examples
 
 
-def test_obscore_publisher_did_percent_encodes_the_key_chain(tap_service):
+def test_obscore_publisher_did_percent_encodes_the_key_chain(tap_service, api_url):
     """The key columns are free text and a PublisherDID is permanent: a
     product_id carrying a space, a '/' and a '#' must not forge a sixth path
     segment or truncate the identifier at the fragment."""
@@ -98,7 +94,7 @@ def test_obscore_publisher_did_percent_encodes_the_key_chain(tap_service):
         "data_products"
     ][0]
     product["product_id"] = "cube 3/a#1"
-    created = httpx.post(f"{_api(tap_service)}/notifications", json=payload, timeout=30)
+    created = httpx.post(f"{api_url}/notifications", json=payload, timeout=30)
     assert created.status_code == 201, created.text
 
     lines = _sync_csv(

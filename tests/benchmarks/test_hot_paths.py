@@ -7,6 +7,7 @@ covered by the separate PostgreSQL performance workflow.
 
 import asyncio
 import datetime
+import itertools
 import types
 from decimal import Decimal
 from urllib.parse import urlencode
@@ -489,16 +490,10 @@ def test_benchmark_sync_request_normal_mix(benchmark, sync_request):
     comparison belongs in a finding beside the profile that says how large
     those two omissions are.
     """
-    cycle = iter(())
+    cycle = itertools.cycle(MIX_CYCLE)
 
     def one_request():
-        nonlocal cycle
-        try:
-            query_class = next(cycle)
-        except StopIteration:
-            cycle = iter(MIX_CYCLE)
-            query_class = next(cycle)
-        return sync_request(query_class)
+        return sync_request(next(cycle))
 
     status, size = benchmark(one_request)
     assert status == 200
