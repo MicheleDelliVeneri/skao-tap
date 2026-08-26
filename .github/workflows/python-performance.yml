@@ -31,6 +31,11 @@ jobs:
   benchmarks:
     name: Hot-path benchmarks and profiles
     runs-on: ubuntu-24.04
+    # The suite is seconds of work. A ceiling turns a pathological profiler
+    # into a failure instead of an expense: the whole-request benchmarks once
+    # took this job from 37 seconds to 2h29m and it still reported success, so
+    # nothing said anything was wrong.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,6 +63,22 @@ jobs:
       - name: Record Python flamegraph
         run: |
           svg=performance-results/python-hot-paths-flamegraph.svg
+          # --nonblocking is not optional here. py-spy's default pauses the
+          # process to walk its stacks, which is cheap on the function-level
+          # benchmarks and pathological once the suite drives an ASGI app with
+          # an event loop and a threadpool: measured at 2h29m against 15s, for
+          # 19s of actual benchmarking. The same mode costs a saturated
+          # tap-api worker 74% of its throughput (see the profile family in
+          # benchmarks/egernia-performance), so this is the same finding
+          # arriving in CI.
+          #
+          # What it costs is torn stacks — py-spy discards the reads it detects
+          # as inconsistent, about half of them here, leaving a few hundred
+          # samples. That is thin for shares and adequate for this artefact's
+          # purpose, which is spotting the widest frames by eye. Precise
+          # attribution comes from the cluster profile, which samples one
+          # worker for ten minutes.
+          #
           # py-spy sometimes exits non-zero *after* writing its output, having
           # lost the race to reap a short-lived child ("No child process").
           # The evidence is the flamegraph, so judge the step by whether the
@@ -65,7 +86,7 @@ jobs:
           status=0
           .venv/bin/py-spy record \
             --output "$svg" \
-            --format flamegraph --rate 100 \
+            --format flamegraph --rate 100 --nonblocking \
             -- .venv/bin/python -m pytest tests/benchmarks -q --benchmark-only || status=$?
           if [ ! -s "$svg" ]; then
             echo "::error::py-spy exited $status and produced no flamegraph"

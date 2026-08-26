@@ -43,7 +43,7 @@ Key values (see `values.yaml` for the full list):
 
 | Value | Default | Description |
 |---|---|---|
-| `image.registry` / `image.tag` | `ghcr.io/micheledelliveneri` / chart appVersion | Where CI publishes the service images |
+| `image.registry` / `image.tag` | `ghcr.io/ska-telescope` / chart appVersion | Where CI publishes the service images |
 | `tapApi.replicas` | `1` | API replicas (stateless) |
 | `tapApi.baseUrl` | in-cluster service URL | External base URL written into capabilities and result links |
 | `tapExecutor.replicas` | `1` | Executor replicas; safe to scale out (jobs claimed with `SKIP LOCKED`) |
