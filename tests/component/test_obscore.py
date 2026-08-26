@@ -109,3 +109,50 @@ def test_obscore_publisher_did_percent_encodes_the_key_chain(tap_service, api_ur
         assert did.endswith("/cube%203%2Fa%231")
         # the raw characters never reach the identifier
         assert " " not in did and "#" not in did
+
+
+def test_a_geometry_predicate_over_the_text_column_is_a_usage_error(tap_service):
+    """`s_region` is the column every ObsCore tutorial names, and it holds
+    STC-S text: the queryable companion is the non-standard `s_region_geom`.
+
+    Translation is pure and consults no schema, so the standard spelling used
+    to translate happily and die inside PostgreSQL as
+    `operator does not exist: text && scircle` — a 500-shaped answer to what
+    is a usage error, naming neither the column at fault nor the one to use.
+    """
+    response = httpx.post(
+        f"{tap_service}/sync",
+        data={
+            "LANG": "ADQL",
+            "QUERY": (
+                "SELECT obs_publisher_did FROM ivoa.obscore "
+                "WHERE 1 = INTERSECTS(s_region, CIRCLE('ICRS', 150.0, -30.0, 0.5))"
+            ),
+            "RESPONSEFORMAT": "csv",
+        },
+        timeout=30,
+    )
+    assert response.status_code == 400, response.text
+    body = response.text
+    assert "s_region" in body
+    assert "s_region_geom" in body, "the usable column has to be named"
+    assert "NULL" in body, "the companion is nullable; a caller must know that"
+    # the failure a client used to get, and must not get any more
+    assert "operator does not exist" not in body
+
+
+def test_the_geometry_companion_is_still_accepted(tap_service):
+    """The check must refuse only what PostgreSQL would refuse."""
+    response = httpx.post(
+        f"{tap_service}/sync",
+        data={
+            "LANG": "ADQL",
+            "QUERY": (
+                "SELECT obs_publisher_did FROM ivoa.obscore "
+                "WHERE 1 = INTERSECTS(s_region_geom, CIRCLE('ICRS', 150.0, -30.0, 0.5))"
+            ),
+            "RESPONSEFORMAT": "csv",
+        },
+        timeout=30,
+    )
+    assert response.status_code == 200, response.text

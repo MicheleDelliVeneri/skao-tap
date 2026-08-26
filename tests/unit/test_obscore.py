@@ -115,7 +115,7 @@ def test_the_did_percent_encodes_every_key_component():
     assert did.lstrip().startswith("'ivo://skao.int/~?' || ")
     # the separators stay literal; the components do not
     assert did.count(" || '/' || ") == 4
-    for column in obscore.DID_KEY_COLUMNS:
+    for column in obscore.did_key_columns():
         assert f"regexp_split_to_table(p.{column}, '')" in did, column
         assert f"CASE WHEN p.{column} ~ '^[{obscore.DID_SAFE_CLASS}]*$'" in did, column
     # unreserved characters survive; anything else becomes %XX per UTF-8 byte
@@ -284,3 +284,55 @@ def test_an_unrelated_database_error_is_not_swallowed_as_a_shape_change():
 
     with pytest.raises(RuntimeError, match="connection lost"):
         obscore.ensure_obscore(_Boom("v", comment="stale"))
+
+
+def test_the_did_chain_is_configurable_from_the_model_hierarchy(auth_settings):
+    """A deployment whose ODP model nests differently has a different
+    identity chain, so the DID path is configured rather than compiled in."""
+    auth_settings(obscore_did_columns="project_id.obs_id.product_id")
+    assert obscore.did_key_columns() == ("project_id", "obs_id", "product_id")
+    did = next(
+        line for line in obscore.view_sql().splitlines() if line.endswith(" AS obs_publisher_did,")
+    )
+    assert did.count(" || '/' || ") == 2  # three components, two separators
+    assert "p.sbd_id" not in did and "p.eb_id" not in did
+    for column in ("project_id", "obs_id", "product_id"):
+        # each component still percent-encoded, not interpolated raw
+        assert f"regexp_split_to_table(p.{column}, '')" in did
+
+
+def test_the_default_chain_is_the_data_products_primary_key():
+    """The default is not an arbitrary list: it is what makes a DID unique."""
+    from egernia_api.plugins.odp import PLUGIN
+
+    data_products = next(t for t in PLUGIN.tables if t.name == "data_products")
+    assert obscore.did_key_columns() == tuple(c.name for c in data_products.columns if c.is_key)
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        "project_id; DROP VIEW ivoa.obscore --",
+        "project_id, obs_id",
+        "Project_ID",
+        "'project_id'",
+        "project_id.obs id",
+        "",
+        "   ",
+    ],
+)
+def test_a_did_column_outside_the_identifier_alphabet_is_refused(auth_settings, configured):
+    """These names are interpolated into a CREATE VIEW, where nothing can be
+    bound, so the alphabet is closed rather than escaped."""
+    auth_settings(obscore_did_columns=configured)
+    with pytest.raises(ValueError, match="TAP_OBSCORE_DID_COLUMNS"):
+        obscore.view_sql()
+
+
+def test_a_qualified_name_is_read_as_two_components(auth_settings):
+    """The separator is a dot, so `p.project_id` — the spelling the view's own
+    SQL uses — is a two-column chain, not one qualified column. It is refused
+    by PostgreSQL at bootstrap rather than here, because `p` is a syntactically
+    valid column name that simply does not exist."""
+    auth_settings(obscore_did_columns="p.project_id")
+    assert obscore.did_key_columns() == ("p", "project_id")
