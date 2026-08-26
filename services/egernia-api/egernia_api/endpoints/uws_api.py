@@ -35,6 +35,14 @@ def _job_url(job_id: str) -> str:
     return f"{settings.base_url}/async/{job_id}"
 
 
+def fetch_job(job_id: str) -> dict:
+    """The job, on a connection held only for the read. The mutating
+    endpoints keep their own ``with`` block on purpose: they read and update
+    inside one transaction, so their read must not become this one."""
+    with db_connection() as conn:
+        return uws.get_job(conn, job_id)
+
+
 def parse_iso(raw: str, param: str) -> datetime.datetime:
     try:
         return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
@@ -93,16 +101,14 @@ async def wait_for_phase(job_id: str, wait_s: int, expected: str | None = None) 
     reference phase (``expected``, or the phase first observed), until the
     phase changes or the wait time expires.
     """
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
+    job = fetch_job(job_id)
     if wait_s <= 0 or job["phase"] in uws.FINAL_PHASES:
         return job
     reference = expected or job["phase"]
     deadline = time.monotonic() + wait_s
     while job["phase"] == reference and time.monotonic() < deadline:
         await asyncio.sleep(min(WAIT_POLL_S, max(0.0, deadline - time.monotonic())))
-        with db_connection() as conn:
-            job = uws.get_job(conn, job_id)
+        job = fetch_job(job_id)
     return job
 
 
@@ -196,8 +202,7 @@ async def run_or_abort(job_id: str, phase: str) -> dict:
     prepared = None
     if phase == "RUN":
         # the job's own parameters, translated off the event loop
-        with db_connection() as conn:
-            stored = uws.get_job(conn, job_id)
+        stored = fetch_job(job_id)
         prepared = await run_in_threadpool(prepare_query, stored["parameters"])
     with db_connection() as conn:
         job = uws.get_job(conn, job_id)
@@ -219,8 +224,7 @@ async def post_phase(job_id: str, request: Request):
 
 @router.get("/{job_id}/executionduration")
 async def get_execution_duration(job_id: str):
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
+    job = fetch_job(job_id)
     return PlainTextResponse(str(job["execution_duration"]))
 
 
@@ -241,8 +245,7 @@ async def post_execution_duration(job_id: str, request: Request):
 
 @router.get("/{job_id}/destruction")
 async def get_destruction(job_id: str):
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
+    job = fetch_job(job_id)
     return PlainTextResponse(uws.iso_utc(job["destruction"]) or "")
 
 
@@ -258,22 +261,19 @@ async def post_destruction(job_id: str, request: Request):
 
 @router.get("/{job_id}/quote")
 async def get_quote(job_id: str):
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
+    job = fetch_job(job_id)
     return PlainTextResponse(uws.iso_utc(job["quote"]) or "")
 
 
 @router.get("/{job_id}/owner")
 async def get_owner(job_id: str):
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
+    job = fetch_job(job_id)
     return PlainTextResponse(job["owner_id"] or "")
 
 
 @router.get("/{job_id}/parameters")
 async def get_parameters(job_id: str):
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
+    job = fetch_job(job_id)
     return Response(uws.job_xml(job), media_type=XML)
 
 
@@ -292,8 +292,7 @@ async def post_parameters(job_id: str, request: Request):
 
 @router.get("/{job_id}/results")
 async def get_results(job_id: str):
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
+    job = fetch_job(job_id)
     return Response(uws.job_xml(job), media_type=XML)
 
 
@@ -317,15 +316,13 @@ def result_file_response(job: dict, job_id: str) -> FileResponse:
 
 @router.get("/{job_id}/results/result")
 async def get_result(job_id: str):
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
+    job = fetch_job(job_id)
     return result_file_response(job, job_id)
 
 
 @router.get("/{job_id}/error")
 async def get_error(job_id: str):
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
+    job = fetch_job(job_id)
     return Response(
         error_votable(job["error_message"] or "no error"),
         media_type="application/x-votable+xml",

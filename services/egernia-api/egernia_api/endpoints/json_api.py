@@ -32,6 +32,7 @@ from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from ..auth import auth_summary, gated, owner_of, require
 from ..queries.query import prepare_query, run_sync
 from .uws_api import (
+    fetch_job,
     parse_job_filters,
     queue_job,
     result_file_response,
@@ -227,9 +228,7 @@ async def delete_job(job_id: str):
 
 @router.get("/jobs/{job_id}/result")
 async def get_result(job_id: str):
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
-    return result_file_response(job, job_id)
+    return result_file_response(fetch_job(job_id), job_id)
 
 
 # ---------------------------------------------------------------------------
