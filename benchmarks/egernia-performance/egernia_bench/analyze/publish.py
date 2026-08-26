@@ -38,6 +38,7 @@ FEATURED = (
     ("errors_vs_concurrency", "Errors against concurrency"),
     ("rps_vs_replicas", "Throughput against replica count"),
     ("scaling_efficiency", "Scaling efficiency"),
+    ("rps_vs_workers", "Throughput against workers and replicas"),
     ("rps_vs_size", "Throughput against database size"),
     ("latency_vs_size", "Latency against database size"),
     ("cache_hit_vs_size", "Buffer cache hit ratio against database size"),
@@ -150,6 +151,55 @@ def _replica_table(summary: dict) -> str:
             "p95 (ms)",
             "ceiling",
             "efficiency",
+            "bottleneck",
+        ],
+        rows,
+    )
+
+
+def _worker_table(summary: dict) -> str:
+    """One row per (workers, replicas) point, connection arithmetic included.
+
+    The pool ceiling is printed with every capacity because the axes are not
+    interchangeable at the database: a worker costs no pod but holds its own
+    pool, and the grid deliberately includes shapes the configured
+    max_connections cannot honour.
+    """
+    capacities = summary.get("worker_capacity") or []
+    by_key = {r["key"]: r for r in summary.get("runs", []) if r.get("kind") == "worker_sweep"}
+    if not capacities or not by_key:
+        return ""
+    rows = []
+    for capacity in sorted(capacities, key=lambda c: (c["workers"], c["replicas"])):
+        run = by_key.get(capacity["key"])
+        if run is None:
+            continue
+        ceiling = str(capacity["connection_ceiling"])
+        if capacity.get("exceeds_max_connections"):
+            ceiling += " ⚠ exceeds max_connections"
+        rows.append(
+            [
+                capacity["workers"],
+                capacity["replicas"],
+                capacity["worker_processes"],
+                _fmt(capacity["rps"]),
+                _fmt(capacity["rps"] / capacity["worker_processes"]),
+                _fmt(run["http"]["latency"]["p95_s"] * 1000, 0),
+                "reached" if capacity["bracketed"] else "not reached",
+                ceiling,
+                f"`{run['bottleneck'][0]['classification']}`",
+            ]
+        )
+    return _table(
+        [
+            "workers",
+            "replicas",
+            "processes",
+            "successful rps",
+            "rps/process",
+            "p95 (ms)",
+            "ceiling",
+            "pool ceiling (connections)",
             "bottleneck",
         ],
         rows,
@@ -455,6 +505,21 @@ def _render(summary: dict, run_id: str, published: list[tuple[str, str]]) -> str
             "ceiling — otherwise the ratio would describe the rates offered, not",
             "the ones the service could not exceed. Where it is filled in, the",
             "shortfall is what the replicas contend over: one PostgreSQL.",
+            "",
+        ]
+
+    workers = _worker_table(summary)
+    if workers:
+        parts += [
+            "## Workers against replicas",
+            "",
+            workers,
+            "The same closed-loop ladder at every (workers, replicas) point —",
+            "same host, same corpus, same seeds — so two rows differ in the",
+            "fleet's shape and nothing else. A worker costs no pod but holds its",
+            "own connection pool: the **pool ceiling** column is",
+            "`replicas x workers x dbPoolMax`, which is what the shape can open",
+            "against the database's `max_connections`.",
             "",
         ]
 

@@ -13,6 +13,7 @@
 #   make benchmark-shedding               held overload: 503s versus socket drops
 #   make benchmark-profile                per-request CPU by subsystem, and a token's cost
 #   make benchmark-replicas               a bracketed capacity per replica count
+#   make benchmark-workers                a bracketed capacity per (workers, replicas) point
 #   make benchmark-serialize              writers only, in process, no cluster
 #   make benchmark-full                   every family, every dataset
 #   make benchmark-report                 redraw plots and HTML for a run
@@ -29,7 +30,7 @@ RESUME_ARG := $(if $(RESUME),--resume $(RESUME),)
 NO_BUILD_ARG := $(if $(NO_BUILD),--no-build,)
 
 .PHONY: benchmark-smoke benchmark-db-scaling benchmark-fixed-scaling \
-        benchmark-keda benchmark-result-formats benchmark-stress benchmark-shedding benchmark-replicas benchmark-serialize \
+        benchmark-keda benchmark-result-formats benchmark-stress benchmark-shedding benchmark-replicas benchmark-workers benchmark-serialize \
         benchmark-profile \
         benchmark-full benchmark-report benchmark-setup \
         benchmark-teardown benchmark-publish benchmark-help
@@ -63,6 +64,9 @@ benchmark-shedding:
 
 benchmark-replicas:
 	$(BENCH) replicas $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASET),--dataset $(DATASET),)
+
+benchmark-workers:
+	$(BENCH) workers $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASET),--dataset $(DATASET),)
 
 # Package 18. Needs py-spy on this interpreter and passwordless sudo: the
 # worker runs in the node's namespaces, so reading its stacks is a root

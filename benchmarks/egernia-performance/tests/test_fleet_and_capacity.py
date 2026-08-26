@@ -195,6 +195,19 @@ def test_an_invalid_measurement_cannot_be_the_capacity_it_reports():
     assert runner.sustainable_capacity(results, 2.0) == 114.7
 
 
+def test_c1_is_the_deployed_shape_not_the_worker_sweeps_off_default_points():
+    """C1 anchors the autoscaling multiples, which run at the values-file
+    defaults — so a single replica on a raised CPU limit (the limit probe)
+    or with extra workers must not be read as the deployed capacity."""
+    deployed = _point(1, 100.0, 99.1)
+    probe = _point(1, 340.0, 338.1)
+    probe["pod_cpu_limit"] = 4.0
+    probe["kind"] = "worker_limit_probe"
+    two_workers = _point(1, 190.0, 189.0)
+    two_workers["workers"] = 2
+    assert runner.sustainable_capacity([deployed, probe, two_workers], 2.0) == 99.1
+
+
 # -- stage timings across clocks of different resolution ---------------------
 
 
