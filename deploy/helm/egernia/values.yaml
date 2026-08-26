@@ -8,6 +8,16 @@ tapApi:
   # -- Safe to scale out; pair >1 with a ReadWriteMany results volume.
   replicas: 1
   port: 8080
+  service:
+    # -- ClusterIP is right for a deployment behind an ingress. NodePort
+    # exposes the API on every node, which is what a demo reached over an SSH
+    # tunnel needs — one forwarded port and no ingress controller, no DNS and
+    # no certificate.
+    type: ClusterIP
+    # -- Only used with NodePort. Fixed rather than assigned so the tunnel
+    # command can be written down; must be inside the cluster's node-port
+    # range (30000-32767 by default).
+    nodePort: null
   # -- Uvicorn worker processes per pod. ADQL translation is pure-Python
   # ANTLR and holds the GIL, so one process cannot use more than one core
   # whatever the pod's CPU limit says.
@@ -426,6 +436,8 @@ prometheus:
   retention: 24h
   service:
     type: ClusterIP
+    # -- Only used with NodePort; see tapApi.service.nodePort.
+    nodePort: null
   rbac:
     # Needed for the pod discovery that finds executors, which have no
     # Service. Turn off if the cluster provisions RBAC separately.
@@ -569,3 +581,8 @@ ingress:
   host: tap.example.org
   annotations: {}
   tls: []
+  # -- Also route `/prometheus` to the bundled Prometheus. Off by default:
+  # Prometheus has no authentication of its own, so publishing it is a
+  # decision to take rather than inherit. The multi-machine demo turns it on
+  # so a notebook elsewhere can read the same series the operator sees.
+  exposePrometheus: false
