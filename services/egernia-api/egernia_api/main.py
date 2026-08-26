@@ -77,6 +77,12 @@ def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
                 uws.ensure_job_columns(conn)
                 for plugin in plugins:
                     ingest.ensure_schema(conn, plugin)
+                # Last, so it sees the finished schema. Reported rather than
+                # enforced: a divergence usually means this service shares a
+                # database with something that owns some of those relations,
+                # which is legitimate — but a client cannot tell, and finds
+                # out as a 500 on a query our own metadata recommended.
+                ingest.warn_tap_schema_divergence(conn)
             return
         except Exception as exc:
             if attempt == attempts:
