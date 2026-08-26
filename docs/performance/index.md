@@ -11,10 +11,11 @@ accumulate rather than replace, so a regression has somewhere to show up.
 
 ## Latest
 
-[20260825T163627Z-034d69ba-profile](20260825T163627Z-034d69ba-profile/index.md) · [CSV](20260825T163627Z-034d69ba-profile/summary.csv)
+[20260825T180219Z-f8b21fc4-worker-sweep](20260825T180219Z-f8b21fc4-worker-sweep/index.md) · [CSV](20260825T180219Z-f8b21fc4-worker-sweep/summary.csv)
 
 ## Earlier runs
 
+- [20260825T163627Z-034d69ba-profile](20260825T163627Z-034d69ba-profile/index.md)
 - [20260825T005436Z-b450b0a9-db-scaling](20260825T005436Z-b450b0a9-db-scaling/index.md)
 - [20260824T140134Z-bf7e4b24-keda](20260824T140134Z-bf7e4b24-keda/index.md)
 - [20260824T102832Z-29507cbb-keda](20260824T102832Z-29507cbb-keda/index.md)

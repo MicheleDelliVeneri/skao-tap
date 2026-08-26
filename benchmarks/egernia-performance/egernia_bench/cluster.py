@@ -457,6 +457,126 @@ def set_limit_concurrency(value: int) -> None:
     install_chart({"tapApi.limitConcurrency": str(value)})
 
 
+def set_workers(value: int) -> None:
+    """Set uvicorn worker processes per tap-api pod; the chart's own knob.
+
+    Same route and same caveats as `set_limit_concurrency`: the values file
+    stays the single authority on what is deployed, a helm upgrade resets
+    every override the previous one set, and it reverts the replica count to
+    the values file's — so the caller must re-apply `scale()` after every
+    call. The value reaches the pods through the ConfigMap, and the pod
+    template hashes the ConfigMap (checksum/config), so the upgrade is a
+    rollout `--wait` waits out rather than a config change no running pod has
+    read.
+    """
+    configure_api(workers=value)
+
+
+def configure_api(
+    *,
+    workers: int,
+    cpu_limit_cores: float | None = None,
+    memory_limit: str | None = None,
+) -> None:
+    """One upgrade carrying every tap-api override this point needs.
+
+    One upgrade, not one per knob: a helm upgrade resets every override the
+    previous one set, so two sequential calls would deploy only the second
+    knob. Same caveats as set_limit_concurrency otherwise — the replica count
+    reverts to the values file's, so the caller re-applies scale() after.
+    """
+    overrides = {"tapApi.workers": str(workers)}
+    if cpu_limit_cores is not None:
+        overrides["tapApi.resources.limits.cpu"] = str(cpu_limit_cores)
+    if memory_limit is not None:
+        overrides["tapApi.resources.limits.memory"] = memory_limit
+    install_chart(overrides)
+    verify_workers(workers)
+    verify_api_limits(cpu=cpu_limit_cores, memory=memory_limit)
+
+
+def verify_api_limits(*, cpu: float | str | None, memory: str | None) -> None:
+    """The deployed tap-api limits are what this call meant to deploy.
+
+    Read back from the Deployment rather than assumed from a successful
+    upgrade, and asserted on the *revert* as much as on the probe: the limit
+    probe raises CPU and memory through overrides, and the family that runs
+    after this one would silently inherit them — an executor-cost measurement
+    against a differently-sized API, with nothing in its results saying so.
+    None means "whatever the suite values file says", read from the file so
+    the expectation moves with it.
+    """
+    import yaml
+
+    if cpu is None or memory is None:
+        values = yaml.safe_load((SUITE / "config/chart-values.yaml").read_text())
+        file_limits = ((values.get("tapApi") or {}).get("resources") or {}).get("limits") or {}
+        cpu = file_limits.get("cpu") if cpu is None else cpu
+        memory = file_limits.get("memory") if memory is None else memory
+    deployed = json.loads(
+        kubectl(
+            "get",
+            "deploy",
+            f"{RELEASE}-tap-api",
+            "-o",
+            "jsonpath={.spec.template.spec.containers[0].resources.limits}",
+        )
+    )
+    expected = {"cpu": str(cpu), "memory": str(memory)}
+    actual = {key: str(deployed.get(key)) for key in expected}
+    if actual != expected:
+        raise RuntimeError(f"tap-api limits are {actual}, expected {expected}")
+
+
+def verify_workers(expected: int, timeout_s: float = 120.0) -> None:
+    """Every ready tap-api pod started with `expected` in TAP_API_WORKERS.
+
+    Asked of the pods rather than read back from the ConfigMap, because the
+    failure this guards against is exactly the config saying one thing while
+    the running processes say another: the pods read TAP_API_WORKERS once, at
+    startup (it is uvicorn's `--workers`), so before the pod template hashed
+    the ConfigMap a workers change was an upgrade helm reported successful
+    and no running pod had read — a whole grid would have measured workers=1
+    twelve times over.
+    """
+    deadline = time.time() + timeout_s
+    last = ""
+    while time.time() < deadline:
+        pods = json.loads(
+            kubectl(
+                "get",
+                "pods",
+                "-l",
+                f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=tap-api",
+                "-o",
+                "json",
+            )
+        )["items"]
+        ready = [
+            p["metadata"]["name"]
+            for p in pods
+            if not p["metadata"].get("deletionTimestamp")
+            and any(
+                c["type"] == "Ready" and c["status"] == "True"
+                for c in p["status"].get("conditions", [])
+            )
+        ]
+        seen = {
+            name: kubectl(
+                "exec", name, "-c", "tap-api", "--", "printenv", "TAP_API_WORKERS"
+            ).strip()
+            for name in ready
+        }
+        stale = {name: value for name, value in seen.items() if value != str(expected)}
+        if ready and not stale:
+            return
+        last = f"ready={ready} TAP_API_WORKERS={seen}"
+        time.sleep(3)
+    raise RuntimeError(
+        f"tap-api pods did not come up with TAP_API_WORKERS={expected} within {timeout_s}s: {last}"
+    )
+
+
 def scale(component: str, replicas: int) -> None:
     """Fix a component's replica count, for the no-autoscaler runs."""
     kubectl("scale", f"deploy/{RELEASE}-{component}", f"--replicas={replicas}")
@@ -486,6 +606,28 @@ def _port_accepts(host: str = "127.0.0.1", port: int = 55433) -> bool:
         return probe.connect_ex((host, port)) == 0
 
 
+def _database_answers(timeout_s: float) -> bool:
+    """A real handshake through the forward, not just an accepting socket.
+
+    An accepting socket is not a serving database: a forwarder terminated by
+    a previous benchmark process keeps accepting for a moment while it dies,
+    and a run that adopted the port in that window opened its generation
+    connection into a proxy with no backend — "server closed the connection
+    unexpectedly", after helm had reported every pod ready.
+    """
+    import psycopg
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with psycopg.connect(database_dsn(), connect_timeout=5) as conn:
+                conn.execute("SELECT 1")
+            return True
+        except psycopg.OperationalError:
+            time.sleep(1.0)
+    return False
+
+
 def port_forward_database(timeout_s: float = 60.0) -> subprocess.Popen:
     """Ensure the database is reachable on the host, once per process.
 
@@ -508,10 +650,20 @@ def port_forward_database(timeout_s: float = 60.0) -> subprocess.Popen:
     if _port_accepts():
         # Something already forwards this port — another benchmark process, or
         # a forward this process started and lost track of. Spawning a second
-        # one would leave a doomed kubectl that cannot bind, so the open port
-        # is taken at face value.
-        log.debug("database port already forwarded by another process")
-        return subprocess.Popen(["true"])
+        # one would leave a doomed kubectl that cannot bind — but adopting the
+        # port is only safe once the database answers through it: a forwarder
+        # a finished process just terminated keeps accepting while it dies.
+        if _database_answers(10.0):
+            log.debug("database port already forwarded by another process")
+            return subprocess.Popen(["true"])
+        log.info("port 55433 accepts but the database does not answer; waiting for it to free")
+        deadline = time.monotonic() + timeout_s
+        while _port_accepts() and time.monotonic() < deadline:
+            time.sleep(1.0)
+        if _port_accepts():
+            raise RuntimeError(
+                "port 55433 is held by a forward the database does not answer through"
+            )
     _forward = subprocess.Popen(
         [
             "kubectl",
@@ -527,7 +679,9 @@ def port_forward_database(timeout_s: float = 60.0) -> subprocess.Popen:
     atexit.register(close_database_forward)
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        if _port_accepts():
+        # The handshake, not just the open port: our own fresh forward can
+        # also front a database that is still starting.
+        if _port_accepts() and _database_answers(min(10.0, deadline - time.monotonic())):
             log.debug("database port-forward ready")
             return _forward
         if _forward.poll() is not None:
