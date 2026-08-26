@@ -23,16 +23,35 @@ ACTIVE_PHASES = {"PENDING", "QUEUED", "EXECUTING", "HELD", "SUSPENDED"}
 FINAL_PHASES = {"COMPLETED", "ERROR", "ABORTED", "ARCHIVED"}
 ALL_PHASES = ACTIVE_PHASES | FINAL_PHASES
 
+#: the job row, in SELECT order. A tuple rather than a comma-joined string
+#: because it is read back per row: splitting and stripping nineteen names
+#: again for every job was the row loop's largest avoidable cost.
 JOB_COLUMNS = (
-    "job_id, phase, run_id, owner_id, quote, creation_time, start_time, end_time, "
-    "execution_duration, destruction, parameters, query_sql, query_tables, error_type, "
-    "error_message, result_mime, result_size, backend_pid, request_id"
+    "job_id",
+    "phase",
+    "run_id",
+    "owner_id",
+    "quote",
+    "creation_time",
+    "start_time",
+    "end_time",
+    "execution_duration",
+    "destruction",
+    "parameters",
+    "query_sql",
+    "query_tables",
+    "error_type",
+    "error_message",
+    "result_mime",
+    "result_size",
+    "backend_pid",
+    "request_id",
 )
+JOB_COLUMNS_SQL = ", ".join(JOB_COLUMNS)
 
 
 def _row_to_job(row) -> dict:
-    keys = [c.strip() for c in JOB_COLUMNS.split(",")]
-    return dict(zip(keys, row, strict=True))
+    return dict(zip(JOB_COLUMNS, row, strict=True))
 
 
 def new_job_id() -> str:
@@ -99,7 +118,7 @@ def create_job(conn, parameters: dict[str, str], owner_id: str | None = None) ->
 
 def get_job(conn, job_id: str) -> dict:
     row = conn.execute(
-        f"SELECT {JOB_COLUMNS} FROM uws.jobs WHERE job_id = %s", (job_id,)
+        f"SELECT {JOB_COLUMNS_SQL} FROM uws.jobs WHERE job_id = %s", (job_id,)
     ).fetchone()
     if row is None:
         raise NotFoundError(f"job {job_id} not found")
@@ -128,7 +147,7 @@ def list_jobs(
     last: int | None = None,
     after: datetime.datetime | None = None,
 ) -> list[dict]:
-    sql = f"SELECT {JOB_COLUMNS} FROM uws.jobs"
+    sql = f"SELECT {JOB_COLUMNS_SQL} FROM uws.jobs"
     args: list = []
     if phases:
         sql += " WHERE phase = ANY(%s)"
