@@ -1,6 +1,6 @@
 # -- Container images. CI publishes ghcr.io/<repo>/{tap-api,tap-executor,tap-db}.
 image:
-  registry: ghcr.io/micheledelliveneri/egernia
+  registry: ghcr.io/ska-telescope/egernia
   tag: latest
   pullPolicy: IfNotPresent
 
