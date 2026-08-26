@@ -196,3 +196,76 @@ def test_each_format_is_handed_the_same_queries():
     )
     assert source.count("SingleClass(") == 1
     assert "workload=load_mod.SingleClass" in source
+
+
+# ---------------------------------------------------------------------------
+# The two format plots (shared grouped-bar builder)
+# ---------------------------------------------------------------------------
+
+_COMPARISON = [
+    {
+        "query_class": "Q01",
+        "response_format": "csv",
+        "latency_p95_s": 0.11,
+        "mean_response_bytes": 2_500_000,
+    },
+    {
+        "query_class": "Q01",
+        "response_format": "votable",
+        "latency_p95_s": 0.25,
+        "mean_response_bytes": 5_000_000,
+    },
+    # Q02 was never measured against votable: the pair is absent, not zero
+    {
+        "query_class": "Q02",
+        "response_format": "csv",
+        "latency_p95_s": 0.90,
+        "mean_response_bytes": 20_000_000,
+    },
+]
+
+
+def _bar_heights(plotter_method, tmp_path, monkeypatch):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from egernia_bench.analyze import report as report_mod
+
+    (tmp_path / "plots").mkdir(parents=True, exist_ok=True)
+    plotter = report_mod.Plotter(tmp_path, {"format_comparison": _COMPARISON})
+    heights = []
+    original = report_mod.Plotter._axes  # a staticmethod: no self
+
+    def recording_axes(xlabel, ylabel, title):
+        fig, ax = original(xlabel, ylabel, title)
+        real_bar = ax.bar
+
+        def capture(positions, values, **kwargs):
+            heights.append(list(values))
+            return real_bar(positions, values, **kwargs)
+
+        ax.bar = capture
+        return fig, ax
+
+    monkeypatch.setattr(report_mod.Plotter, "_axes", staticmethod(recording_axes))
+    getattr(plotter, plotter_method)()
+    return heights
+
+
+def test_an_unmeasured_format_pair_is_a_gap_not_a_zero_bar(tmp_path, monkeypatch):
+    """Q02 was never run against votable. Drawing that as a zero bar would
+    claim the writer produced a zero-byte response in no time; it has to be
+    NaN so the bar is simply absent."""
+    import math
+
+    heights = _bar_heights("format_bytes", tmp_path, monkeypatch)
+    # one series per query class, one bar per format (csv, votable)
+    assert len(heights) == 2
+    assert heights[0] == [2_500_000 / 2**20, 5_000_000 / 2**20]
+    assert heights[1][0] == 20_000_000 / 2**20
+    assert math.isnan(heights[1][1])
+
+
+def test_latency_bars_are_milliseconds(tmp_path, monkeypatch):
+    heights = _bar_heights("format_latency", tmp_path, monkeypatch)
+    assert heights[0] == [110.0, 250.0]
