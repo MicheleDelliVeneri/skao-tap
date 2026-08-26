@@ -83,6 +83,69 @@ def _warn_legacy_tables(conn, plugin: MetadataPlugin) -> None:
         )
 
 
+def tap_schema_divergence(conn) -> tuple[list[str], list[str]]:
+    """What TAP_SCHEMA advertises that the database does not have.
+
+    Returns ``(tables, columns)``, each entry qualified, each one an entry a
+    client can read and act on and the database cannot honour.
+
+    TAP_SCHEMA is the contract: a client reads it *before* writing a query, so
+    an entry with no relation behind it is the service asserting something
+    untrue about itself. The client finds out as a 500 on a query the
+    service's own metadata recommended — which is how it was found, from a
+    notebook that read ``/api/v1/tables``, used ``s_region_geom``, and got
+    ``column "s_region_geom" does not exist``.
+
+    Reported, never repaired. The rows may describe a relation this service
+    does not own — the benchmark suite replaces ``ivoa.obscore`` with its own
+    table, and a deployment may publish tables the chart never created — and
+    deleting somebody else's metadata to tidy our own view of it is worse
+    than naming the problem.
+    """
+    missing_tables = [
+        row[0]
+        for row in conn.execute(
+            "SELECT t.table_name FROM tap_schema.tables t"
+            " WHERE to_regclass(t.table_name) IS NULL"
+            " ORDER BY t.table_name"
+        ).fetchall()
+    ]
+    # Columns of a table that is itself missing are left out: one line naming
+    # the absent table says it, and forty naming its columns bury it.
+    missing_columns = [
+        f"{row[0]}.{row[1]}"
+        for row in conn.execute(
+            "SELECT c.table_name, c.column_name FROM tap_schema.columns c"
+            " WHERE to_regclass(c.table_name) IS NOT NULL"
+            "   AND NOT EXISTS ("
+            "       SELECT 1 FROM information_schema.columns i"
+            "        WHERE format('%s.%s', i.table_schema, i.table_name) = c.table_name"
+            "          AND i.column_name = c.column_name)"
+            " ORDER BY c.table_name, c.column_name"
+        ).fetchall()
+    ]
+    return missing_tables, missing_columns
+
+
+def warn_tap_schema_divergence(conn) -> None:
+    """Log anything TAP_SCHEMA promises that the database cannot deliver."""
+    tables, columns = tap_schema_divergence(conn)
+    for name in tables:
+        log.warning(
+            "TAP_SCHEMA publishes table %s, which does not exist. Every client"
+            " that reads the table list will offer it and fail on use.",
+            name,
+        )
+    if columns:
+        log.warning(
+            "TAP_SCHEMA publishes %d column(s) their table does not have: %s."
+            " A client reading the column list will write a query the database"
+            " refuses.",
+            len(columns),
+            ", ".join(columns[:20]) + (" ..." if len(columns) > 20 else ""),
+        )
+
+
 def _log_safe(value: str, limit: int = 200) -> str:
     """Single-line, quoted, length-capped rendering of caller-supplied text."""
     flattened = " ".join(str(value).split())
