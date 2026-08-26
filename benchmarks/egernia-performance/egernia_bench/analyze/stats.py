@@ -15,6 +15,7 @@ throughputs differing by 3% with 8% run-to-run spread are the same throughput.
 
 from __future__ import annotations
 
+import collections
 import math
 import typing
 
@@ -123,10 +124,7 @@ def served_by(samples) -> dict:
     without re-running anything. Empty when the service did not say, which is
     every run before the generator started reading the right header.
     """
-    counts: dict[str, int] = {}
-    for sample in samples:
-        if sample.pod:
-            counts[sample.pod] = counts.get(sample.pod, 0) + 1
+    counts = collections.Counter(s.pod for s in samples if s.pod)
     total = sum(counts.values())
     if not total:
         return {"pods": {}, "distinct_pods": 0, "concentration": None}
@@ -149,15 +147,14 @@ def summarise(samples, window_seconds: float, *, with_ci: bool = True) -> dict:
     ok = np.asarray([200 <= s.status < 300 and not s.error for s in samples])
 
     successes = int(ok.sum())
-    errors_by_status: dict[str, int] = {}
-    errors_by_type: dict[str, int] = {}
+    errors_by_status: collections.Counter[str] = collections.Counter()
+    errors_by_type: collections.Counter[str] = collections.Counter()
     timeouts = 0
     for sample in samples:
         if 200 <= sample.status < 300 and not sample.error:
             continue
-        key = sample.error or str(sample.status)
-        errors_by_type[key] = errors_by_type.get(key, 0) + 1
-        errors_by_status[str(sample.status)] = errors_by_status.get(str(sample.status), 0) + 1
+        errors_by_type[sample.error or str(sample.status)] += 1
+        errors_by_status[str(sample.status)] += 1
         if "Timeout" in sample.error or sample.status == 504:
             timeouts += 1
 

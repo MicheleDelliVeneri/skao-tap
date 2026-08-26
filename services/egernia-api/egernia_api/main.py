@@ -8,6 +8,7 @@ import socket
 import time
 from contextlib import asynccontextmanager
 
+from egernia_core import uws
 from egernia_core.auth import invalid_token_challenge, verifier
 from egernia_core.config import settings
 from egernia_core.db import close_pool, pool
@@ -45,7 +46,7 @@ from .endpoints.json_api import router as json_router
 from .endpoints.uws_api import router as uws_router
 from .queries.params import gather_params
 from .queries.query import forget_published_tables, prepare_query, run_sync
-from .queries.uploads import gather_upload_files, parse_uploads, resolve_upload_sources
+from .queries.uploads import gather_upload_sources, parse_uploads
 
 # Structured records with SRCNet's shared fields, JSON in a container and
 # coloured console when a human is watching. This also configures uvicorn's
@@ -73,9 +74,7 @@ def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
                 # query_tables is ensured here as well as in the executor:
                 # the API writes it at queue time, and in a rolling upgrade a
                 # new API can queue a job before any new executor has started.
-                conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS backend_pid integer")
-                conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS request_id text")
-                conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS query_tables text[]")
+                uws.ensure_job_columns(conn)
                 for plugin in plugins:
                     ingest.ensure_schema(conn, plugin)
             return
@@ -324,8 +323,7 @@ async def sync(request: Request):
     params = await gather_params(request)
     if params.get("REQUEST") == "getCapabilities":  # TAP 1.0 compatibility
         return RedirectResponse(f"{settings.base_url}/capabilities", status_code=303)
-    files = await gather_upload_files(request)
-    uploads = parse_uploads(resolve_upload_sources(params.get("UPLOAD"), files))
+    uploads = parse_uploads(await gather_upload_sources(request, params))
     # ADQL translation is tens of milliseconds of pure-Python ANTLR work; on
     # the event loop it stalls every other request for that long, which is why
     # throughput stopped rising with concurrency

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 import time
-import typing
 
 import httpx
 
@@ -166,11 +165,6 @@ class Prometheus:
             time.sleep(2)
         return False
 
-    def instant(self, query: str) -> list[dict]:
-        response = self.client.get(f"{self.base_url}/api/v1/query", params={"query": query})
-        response.raise_for_status()
-        return response.json()["data"]["result"]
-
     def range(self, query: str, start: float, end: float, step: int = STEP_SECONDS) -> list[dict]:
         response = self.client.get(
             f"{self.base_url}/api/v1/query_range",
@@ -235,47 +229,17 @@ class Prometheus:
         }
         return rows, report
 
-    def write(self, rows: list[dict], path) -> None:
-        import pyarrow as pa
-        import pyarrow.parquet as pq
 
-        if not rows:
-            log.warning("no prometheus rows to write to %s", path)
-            return
-        columns: dict[str, list] = {k: [] for k in ("metric", "labels", "t", "value")}
-        for row in rows:
-            for key in columns:
-                columns[key].append(row[key])
-        pq.write_table(pa.table(columns), path, compression="zstd")
+def write(rows: list[dict], path) -> None:
+    """The collected rows to Parquet. Module-level: it needs no client."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
 
-    def series(
-        self, rows: list[dict], metric: str, label_filter: str | None = None
-    ) -> list[tuple[float, float]]:
-        """One metric as an ordered (t, value) list, for the timing maths."""
-        points = [
-            (r["t"], r["value"])
-            for r in rows
-            if r["metric"] == metric and (label_filter is None or label_filter in r["labels"])
-        ]
-        return sorted(points)
-
-
-def first_crossing(
-    points: typing.Sequence[tuple[float, float]], threshold: float, *, above: bool = True
-) -> float | None:
-    """When a series first crosses a threshold. None if it never does."""
-    for timestamp, value in points:
-        if (value > threshold) if above else (value < threshold):
-            return timestamp
-    return None
-
-
-def first_change(points: typing.Sequence[tuple[float, float]]) -> float | None:
-    """When a step series first changes value."""
-    if not points:
-        return None
-    initial = points[0][1]
-    for timestamp, value in points:
-        if value != initial:
-            return timestamp
-    return None
+    if not rows:
+        log.warning("no prometheus rows to write to %s", path)
+        return
+    columns: dict[str, list] = {k: [] for k in ("metric", "labels", "t", "value")}
+    for row in rows:
+        for key in columns:
+            columns[key].append(row[key])
+    pq.write_table(pa.table(columns), path, compression="zstd")

@@ -505,7 +505,7 @@ class Plotter:
     # -- resource vs throughput --------------------------------------------
 
     def _resource_vs_throughput(
-        self, metric: str, name: str, title: str, ylabel: str, caption: str, scale: float = 1.0
+        self, metric: str, name: str, title: str, ylabel: str, caption: str
     ) -> Figure:
         points = []
         for run in self.runs:
@@ -513,7 +513,7 @@ class Plotter:
             value = resources.get(metric)
             rps = (run.get("http") or {}).get("rps")
             if value is not None and rps:
-                points.append((rps, value * scale))
+                points.append((rps, value))
         if len(points) < 3:
             return self._skip(name, title, f"fewer than three measurements carry {metric}")
         points.sort()
@@ -924,20 +924,12 @@ class Plotter:
         # 2: latency
         ax = axes[1]
         if samples:
-            from types import SimpleNamespace
+            from ..runs import read_samples
+            from .keda import rolling_percentile
 
-            reconstructed = [
-                SimpleNamespace(t_start=t, latency_s=lat, status=st, error=err)
-                for t, lat, st, err in zip(
-                    samples["t_start"],
-                    samples["latency_s"],
-                    samples["status"],
-                    samples["error"],
-                    strict=True,
-                )
-            ]
+            reconstructed = read_samples(samples_file)
             for percentile, colour in ((95, PALETTE["secondary"]), (99, PALETTE["warn"])):
-                windows = rolling_percentile_local(reconstructed, percentile)
+                windows = rolling_percentile(reconstructed, percentile)
                 if windows:
                     ax.plot(
                         [w[0] - t0 for w in windows],
@@ -1093,12 +1085,6 @@ class Plotter:
                     f"plotting raised {type(exc).__name__}: {exc}",
                 )
         return self.figures
-
-
-def rolling_percentile_local(samples, percentile: float, window_s: float = 10.0):
-    from .keda import rolling_percentile
-
-    return rolling_percentile(samples, percentile, window_s)
 
 
 def profile_table(report: dict) -> str:

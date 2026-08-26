@@ -470,7 +470,7 @@ DESCRIPTIONS = {
     ),
 }
 
-TABLE_UTYPE = "ivo://ivoa.net/std/ObsCore#core-1.1"
+# doubles as the obscore table's utype in TAP_SCHEMA
 DATAMODEL_IVOID = "ivo://ivoa.net/std/ObsCore#core-1.1"
 
 # A PublisherDID lands inside a SQL string literal in the view definition,
@@ -654,7 +654,7 @@ def ensure_obscore(conn) -> None:
         " 'ObsCore 1.1: one row per data product of the ingested ODP metadata', 1)"
         " ON CONFLICT (table_name) DO UPDATE"
         " SET utype = EXCLUDED.utype, description = EXCLUDED.description",
-        (TABLE_UTYPE,),
+        (DATAMODEL_IVOID,),
     )
     for index, column in enumerate(OBSCORE_COLUMNS, start=1):
         name, datatype, arraysize, xtype, unit, ucd, utype, principal, std, _ = column

@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from ..auth import owner_of, require
 from ..queries.params import gather_params
 from ..queries.query import prepare_query
-from ..queries.uploads import gather_upload_files, parse_uploads, resolve_upload_sources
+from ..queries.uploads import gather_upload_sources, parse_uploads
 
 router = APIRouter()
 
@@ -35,11 +35,14 @@ def _job_url(job_id: str) -> str:
     return f"{settings.base_url}/async/{job_id}"
 
 
-def _iso(dt) -> str:
-    return dt.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+def parse_iso(raw: str, param: str) -> datetime.datetime:
+    try:
+        return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        raise UsageError(f"{param} must be an ISO-8601 timestamp") from None
 
 
-def _queue(conn, job: dict, prepared: dict) -> None:
+def queue_job(conn, job: dict, prepared: dict) -> None:
     """Move a job to QUEUED, using an already-translated query.
 
     ``prepared`` is required rather than optional: translating here would put
@@ -83,14 +86,13 @@ def _parse_wait(request: Request) -> tuple[int, str | None]:
     return min(wait, settings.wait_max_s), phase
 
 
-async def _get_job_waiting(job_id: str, request: Request) -> dict:
+async def wait_for_phase(job_id: str, wait_s: int, expected: str | None = None) -> dict:
     """Fetch the job, blocking per UWS 1.1 WAIT semantics.
 
     Blocks while the job is in an active phase and its phase equals the
-    reference phase (the PHASE parameter, or the phase first observed),
-    until the phase changes or the wait time expires.
+    reference phase (``expected``, or the phase first observed), until the
+    phase changes or the wait time expires.
     """
-    wait_s, expected = _parse_wait(request)
     with db_connection() as conn:
         job = uws.get_job(conn, job_id)
     if wait_s <= 0 or job["phase"] in uws.FINAL_PHASES:
@@ -104,13 +106,18 @@ async def _get_job_waiting(job_id: str, request: Request) -> dict:
     return job
 
 
-@router.get("")
-async def job_list(request: Request):
-    phases = [p.upper() for p in request.query_params.getlist("PHASE")]
+async def _get_job_waiting(job_id: str, request: Request) -> dict:
+    wait_s, expected = _parse_wait(request)
+    return await wait_for_phase(job_id, wait_s, expected)
+
+
+def parse_job_filters(
+    phases: list[str], last, after: str | None
+) -> tuple[list[str] | None, int | None, datetime.datetime | None]:
+    """Validate the UWS 1.1 job-list filters (PHASE / LAST / AFTER)."""
     for phase in phases:
         if phase not in uws.ALL_PHASES:
             raise UsageError(f"unknown PHASE {phase}")
-    last = request.query_params.get("LAST")
     if last is not None:
         try:
             last = int(last)
@@ -118,14 +125,19 @@ async def job_list(request: Request):
             raise UsageError("LAST must be a positive integer") from None
         if last < 1:
             raise UsageError("LAST must be a positive integer")
-    after = request.query_params.get("AFTER")
-    if after is not None:
-        try:
-            after = datetime.datetime.fromisoformat(after.replace("Z", "+00:00"))
-        except ValueError:
-            raise UsageError("AFTER must be an ISO-8601 timestamp") from None
+    since = parse_iso(after, "AFTER") if after is not None else None
+    return phases or None, last, since
+
+
+@router.get("")
+async def job_list(request: Request):
+    phases, last, since = parse_job_filters(
+        [p.upper() for p in request.query_params.getlist("PHASE")],
+        request.query_params.get("LAST"),
+        request.query_params.get("AFTER"),
+    )
     with db_connection() as conn:
-        jobs = uws.list_jobs(conn, phases or None, last, after)
+        jobs = uws.list_jobs(conn, phases, last, since)
     return Response(uws.joblist_xml(jobs), media_type=XML)
 
 
@@ -133,8 +145,7 @@ async def job_list(request: Request):
 async def create_job(request: Request):
     params = await gather_params(request)
     phase = params.pop("PHASE", None)
-    files = await gather_upload_files(request)
-    sources = resolve_upload_sources(params.get("UPLOAD"), files)
+    sources = await gather_upload_sources(request, params)
     parse_uploads(sources)  # reject malformed uploads before storing the job
     # One flag decides both the translation and the queueing, so the prepared
     # query cannot be missing where it is used. Not an assert: those vanish
@@ -147,7 +158,7 @@ async def create_job(request: Request):
         if sources:
             save_upload_sources(job["job_id"], sources)
         if run_now and prepared is not None:
-            _queue(conn, job, prepared)
+            queue_job(conn, job, prepared)
     return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
 
@@ -180,10 +191,8 @@ async def get_phase(job_id: str, request: Request):
     return PlainTextResponse(job["phase"])
 
 
-@router.post("/{job_id}/phase", dependencies=[Depends(require("jobs.mutate"))])
-async def post_phase(job_id: str, request: Request):
-    params = await gather_params(request)
-    phase = params.get("PHASE", "").upper()
+async def run_or_abort(job_id: str, phase: str) -> dict:
+    """Apply a UWS phase command (RUN or ABORT) and return the job."""
     prepared = None
     if phase == "RUN":
         # the job's own parameters, translated off the event loop
@@ -193,11 +202,18 @@ async def post_phase(job_id: str, request: Request):
     with db_connection() as conn:
         job = uws.get_job(conn, job_id)
         if prepared is not None:  # set exactly when the phase is RUN
-            _queue(conn, job, prepared)
+            queue_job(conn, job, prepared)
         elif phase == "ABORT":
             uws.abort_job(conn, job)
         else:
             raise UsageError("PHASE must be RUN or ABORT")
+        return uws.get_job(conn, job_id)
+
+
+@router.post("/{job_id}/phase", dependencies=[Depends(require("jobs.mutate"))])
+async def post_phase(job_id: str, request: Request):
+    params = await gather_params(request)
+    job = await run_or_abort(job_id, params.get("PHASE", "").upper())
     return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
 
@@ -227,17 +243,13 @@ async def post_execution_duration(job_id: str, request: Request):
 async def get_destruction(job_id: str):
     with db_connection() as conn:
         job = uws.get_job(conn, job_id)
-    return PlainTextResponse(_iso(job["destruction"]))
+    return PlainTextResponse(uws.iso_utc(job["destruction"]) or "")
 
 
 @router.post("/{job_id}/destruction", dependencies=[Depends(require("jobs.mutate"))])
 async def post_destruction(job_id: str, request: Request):
     params = await gather_params(request)
-    raw = params.get("DESTRUCTION", "")
-    try:
-        when = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        raise UsageError("DESTRUCTION must be an ISO-8601 timestamp") from None
+    when = parse_iso(params.get("DESTRUCTION", ""), "DESTRUCTION")
     with db_connection() as conn:
         job = uws.get_job(conn, job_id)
         uws.update_job(conn, job_id, destruction=when)
@@ -248,7 +260,7 @@ async def post_destruction(job_id: str, request: Request):
 async def get_quote(job_id: str):
     with db_connection() as conn:
         job = uws.get_job(conn, job_id)
-    return PlainTextResponse(_iso(job["quote"]) if job["quote"] else "")
+    return PlainTextResponse(uws.iso_utc(job["quote"]) or "")
 
 
 @router.get("/{job_id}/owner")
@@ -285,20 +297,29 @@ async def get_results(job_id: str):
     return Response(uws.job_xml(job), media_type=XML)
 
 
-@router.get("/{job_id}/results/result")
-async def get_result(job_id: str):
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
+def result_file_response(job: dict, job_id: str) -> FileResponse:
+    """The job's result file, or NotFoundError if it has none (yet)."""
     if job["phase"] != "COMPLETED":
         raise NotFoundError(f"job {job_id} has no result (phase {job['phase']})")
     result_dir = uws.job_results_dir(job_id)
-    for name in os.listdir(result_dir) if os.path.isdir(result_dir) else []:
+    try:
+        names = os.listdir(result_dir) if os.path.isdir(result_dir) else []
+    except OSError:
+        names = []
+    for name in names:
         if name.startswith("result."):
             return FileResponse(
                 os.path.join(result_dir, name),
                 media_type=job["result_mime"] or "application/octet-stream",
             )
     raise NotFoundError(f"result file for job {job_id} not found")
+
+
+@router.get("/{job_id}/results/result")
+async def get_result(job_id: str):
+    with db_connection() as conn:
+        job = uws.get_job(conn, job_id)
+    return result_file_response(job, job_id)
 
 
 @router.get("/{job_id}/error")

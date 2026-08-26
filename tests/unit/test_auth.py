@@ -18,16 +18,6 @@ def iam_verifier(stub_iam, iam_issuer, iam_audience):
     return IAMTokenVerifier(issuer=iam_issuer, audience=iam_audience, jwks_cache_s=300)
 
 
-@pytest.fixture
-def keypair(iam_keypair):
-    return iam_keypair
-
-
-@pytest.fixture
-def other_keypair(forged_keypair):
-    return forged_keypair
-
-
 # -- token verification -----------------------------------------------------
 
 
@@ -39,9 +29,9 @@ def test_valid_token_yields_a_principal(iam_verifier, make_token):
     assert not who.is_anonymous
 
 
-def test_token_signed_by_another_key_is_rejected(iam_verifier, other_keypair, make_token):
+def test_token_signed_by_another_key_is_rejected(iam_verifier, forged_keypair, make_token):
     """The whole point: a well-formed token the IAM never signed is not valid."""
-    forged = other_keypair[0]
+    forged = forged_keypair[0]
     with pytest.raises(AuthenticationError):
         iam_verifier.verify(make_token(forged))
 

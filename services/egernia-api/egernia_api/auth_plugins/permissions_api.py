@@ -31,12 +31,7 @@ log = logging.getLogger("egernia_api")
 class PermissionsApiPlugin(AuthPlugin):
     name = "permissions-api"
 
-    def __init__(
-        self,
-        url: str | None = None,
-        service: str | None = None,
-        version: str | None = None,
-    ):
+    def __init__(self, url: str | None = None, service: str | None = None):
         self.url = (url if url is not None else settings.permissions_api_url).rstrip("/")
         if not self.url:
             raise ServiceError(
@@ -44,7 +39,7 @@ class PermissionsApiPlugin(AuthPlugin):
                 " (Helm: auth.permissionsApi.url)"
             )
         self.service = service or settings.permissions_service_name
-        self.version = version or settings.permissions_service_version
+        self.version = settings.permissions_service_version
         self.timeout_s = settings.permissions_timeout_s
 
     def authorize(self, principal: Principal, operation: str, context: dict) -> bool:

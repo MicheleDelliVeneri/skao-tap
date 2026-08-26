@@ -88,42 +88,35 @@ class QueryClass:
     id: str
     name: str
     template: str
-    # What the class is for, in the report: a number is only interpretable
-    # next to the thing it was meant to exercise.
-    exercises: str
     stress: bool = False
 
     def render(self, params: dict) -> str:
         return " ".join(self.template.format(**params).split())
 
 
+# What each class exercises is documented in the README's corpus table.
 CLASSES: dict[str, QueryClass] = {
     "Q01": QueryClass(
         "Q01",
         "TAP_SCHEMA metadata",
         "SELECT table_name, description FROM tap_schema.tables",
-        "the service's own metadata path: no user table touched, so this is "
-        "the floor — parse, plan, serialise, respond",
     ),
     "Q02": QueryClass(
         "Q02",
         "indexed identifier lookup",
         f"SELECT {OBSCORE_COLUMNS} FROM ivoa.obscore WHERE obs_id = '{{obs_id}}'",
-        "primary-key-shaped btree lookup returning a handful of rows",
     ),
     "Q03": QueryClass(
         "Q03",
         "indexed categorical filter",
         "SELECT TOP 100 " + OBSCORE_COLUMNS + " FROM ivoa.obscore "
         "WHERE obs_collection = '{collection}' AND dataproduct_type = '{dptype}'",
-        "composite btree index with low cardinality on both columns",
     ),
     "Q04": QueryClass(
         "Q04",
         "temporal range",
         "SELECT TOP 200 " + OBSCORE_COLUMNS + " FROM ivoa.obscore "
         "WHERE t_min > {t_lo} AND t_max < {t_hi}",
-        "range scan on a two-column btree, selectivity set by the window",
     ),
     "Q05": QueryClass(
         "Q05",
@@ -131,8 +124,6 @@ CLASSES: dict[str, QueryClass] = {
         "SELECT TOP 100 " + OBSCORE_COLUMNS + " FROM ivoa.obscore "
         "WHERE 1 = CONTAINS(POINT('ICRS', s_ra, s_dec), "
         "CIRCLE('ICRS', {ra}, {dec}, {radius}))",
-        "pg_sphere GiST on the translated expression — the commonest real VO "
-        "query, and the one that needs an index on spoint(radians(...))",
     ),
     "Q06": QueryClass(
         "Q06",
@@ -140,8 +131,6 @@ CLASSES: dict[str, QueryClass] = {
         "SELECT TOP 500 " + OBSCORE_COLUMNS + " FROM ivoa.obscore "
         "WHERE 1 = CONTAINS(POINT('ICRS', s_ra, s_dec), "
         "CIRCLE('ICRS', {ra}, {dec}, {radius}))",
-        "the same index with a radius wide enough to make the heap fetch, "
-        "not the index probe, the cost",
     ),
     "Q07": QueryClass(
         "Q07",
@@ -150,7 +139,6 @@ CLASSES: dict[str, QueryClass] = {
         "WHERE 1 = CONTAINS(POINT('ICRS', s_ra, s_dec), "
         "CIRCLE('ICRS', {ra}, {dec}, {radius})) "
         "AND t_min > {t_lo} AND calib_level >= {calib}",
-        "three predicates over three indexes: which one the planner picks is the interesting part",
     ),
     "Q08": QueryClass(
         "Q08",
@@ -159,7 +147,6 @@ CLASSES: dict[str, QueryClass] = {
         "p.plane_id, p.calib_level, p.data_product_type "
         "FROM caom.observation AS o JOIN caom.plane AS p ON o.obs_id = p.obs_id "
         "WHERE o.collection = '{collection}' AND p.calib_level = {calib}",
-        "the CAOM join every archive client makes, two levels deep",
     ),
     "Q09": QueryClass(
         "Q09",
@@ -170,7 +157,6 @@ CLASSES: dict[str, QueryClass] = {
         "JOIN caom.artifact AS a ON p.plane_id = a.plane_id "
         "JOIN caom.part AS pt ON a.artifact_id = pt.artifact_id "
         "WHERE o.instrument_name = '{instrument}' AND p.calib_level = {calib}",
-        "join depth: four relations, fan-out at every level",
         stress=True,
     ),
     "Q10": QueryClass(
@@ -178,15 +164,12 @@ CLASSES: dict[str, QueryClass] = {
         "thousand-row result",
         "SELECT TOP 1000 " + OBSCORE_COLUMNS + " FROM ivoa.obscore "
         "WHERE obs_collection = '{collection}' AND t_min > {t_lo}",
-        "serialisation and streaming rather than lookup: 1k wide rows out",
     ),
     "Q11": QueryClass(
         "Q11",
         "ten-thousand-row result",
         "SELECT TOP 10000 " + OBSCORE_COLUMNS + " FROM ivoa.obscore "
         "WHERE obs_collection = '{collection}'",
-        "the same path an order of magnitude further out, where the response "
-        "body starts to dominate everything else",
         stress=True,
     ),
     "Q12": QueryClass(
@@ -195,8 +178,6 @@ CLASSES: dict[str, QueryClass] = {
         "SELECT TOP 100 " + OBSCORE_COLUMNS + " FROM ivoa.obscore "
         "WHERE 1 = CONTAINS(POINT('ICRS', s_ra, s_dec), "
         "CIRCLE('ICRS', {ra}, {dec}, 0.0002))",
-        "the cost of finding nothing: index probe, no heap fetch, no rows — "
-        "the floor for the spatial path",
     ),
     "Q13": QueryClass(
         "Q13",
@@ -205,8 +186,6 @@ CLASSES: dict[str, QueryClass] = {
         "MIN(t_min) AS first_obs, MAX(t_max) AS last_obs "
         "FROM ivoa.obscore WHERE calib_level >= {calib} "
         "GROUP BY obs_collection, dataproduct_type",
-        "a full aggregate over the largest table: no index helps, and the "
-        "answer is a handful of rows, so it is all scan and hash",
         stress=True,
     ),
     "Q14": QueryClass(
@@ -220,13 +199,9 @@ CLASSES: dict[str, QueryClass] = {
         "JOIN caom.chunk AS c ON pt.part_id = c.part_id "
         "WHERE o.target_name LIKE '{target_prefix}%' "
         "ORDER BY o.obs_id, p.plane_id, c.chunk_id",
-        "what a user should not be able to run unnoticed: five-way join, an "
-        "unanchored LIKE, and a sort the planner cannot avoid",
         stress=True,
     ),
 }
-
-NORMAL_CLASSES = tuple(q for q in CLASSES if not CLASSES[q].stress)
 
 
 def _parameters(rng: Deterministic, cls: str, seed: str, observations: int, cfg: dict) -> dict:

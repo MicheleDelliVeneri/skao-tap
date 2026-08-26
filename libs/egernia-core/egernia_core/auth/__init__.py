@@ -12,7 +12,6 @@ from .plugins import (
 )
 from .tokens import (
     ANONYMOUS,
-    DEFAULT_GROUP_CLAIMS,
     IAMTokenVerifier,
     Principal,
     reset_verifier,
@@ -21,7 +20,6 @@ from .tokens import (
 
 __all__ = [
     "ANONYMOUS",
-    "DEFAULT_GROUP_CLAIMS",
     "OPERATIONS",
     "QUERY_OPERATIONS",
     "AuthPlugin",

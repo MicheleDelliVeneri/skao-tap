@@ -16,22 +16,8 @@ nothing else can be trusted from a run where the client was the limit.
 from __future__ import annotations
 
 import dataclasses
-import typing
 
 import numpy as np
-
-CLASSES = (
-    "TAP_CPU_BOUND",
-    "EXECUTOR_CPU_BOUND",
-    "DATABASE_CPU_BOUND",
-    "DATABASE_IO_BOUND",
-    "CONNECTION_POOL_BOUND",
-    "MEMORY_BOUND",
-    "SERIALIZATION_BOUND",
-    "KEDA_SCALE_LAG",
-    "LOAD_GENERATOR_BOUND",
-    "UNKNOWN",
-)
 
 
 @dataclasses.dataclass
@@ -40,6 +26,18 @@ class Verdict:
     confidence: float  # fraction of the window the condition held
     evidence: dict
     explanation: str
+
+
+def tally(entries: list[dict]) -> dict[str, dict]:
+    """Count each classification across measurements' stored verdict dicts."""
+    counts: dict[str, dict] = {}
+    for entry in entries:
+        for verdict in entry.get("bottleneck") or []:
+            slot = counts.setdefault(
+                verdict["classification"], {"count": 0, "explanation": verdict["explanation"]}
+            )
+            slot["count"] += 1
+    return counts
 
 
 def _series(rows: list[dict], metric: str) -> np.ndarray:
@@ -459,7 +457,3 @@ def classify(
     # limit, the service's own numbers are not evidence about the service.
     verdicts.sort(key=lambda v: (v.classification != "LOAD_GENERATOR_BOUND", -v.confidence))
     return verdicts
-
-
-def primary(verdicts: typing.Sequence[Verdict]) -> str:
-    return verdicts[0].classification if verdicts else "UNKNOWN"

@@ -336,10 +336,10 @@ def test_a_scale_out_delay_is_named_rather_than_left_unknown():
         "recorder_cpu_peak": 0.07,
         "limits": LIMITS,
     }
-    assert bottleneck.primary(bottleneck.classify(**quiet)) != "KEDA_SCALE_LAG"
+    assert bottleneck.classify(**quiet)[0].classification != "KEDA_SCALE_LAG"
 
     lagging = bottleneck.classify(**quiet, keda={"latencies_s": {"total_scale_out": 352.0}})
-    assert bottleneck.primary(lagging) == "KEDA_SCALE_LAG"
+    assert lagging[0].classification == "KEDA_SCALE_LAG"
     evidence = next(v for v in lagging if v.classification == "KEDA_SCALE_LAG").evidence
     assert evidence["total_scale_out_s"] == 352.0
 

@@ -28,42 +28,23 @@ JOB_OPERATIONS = "jobs.create,jobs.mutate,jobs.delete,query.sync"
 
 
 @pytest.fixture
-def bearer(make_token):
-    def build(subject="alice", **overrides):
-        return {"Authorization": f"Bearer {make_token(sub=subject, **overrides)}"}
-
-    return build
-
-
-@pytest.fixture
-def default_gates(auth_settings, stub_iam, iam_issuer, iam_audience):
+def default_gates(secure):
     """Auth on, gate set left at its default, serving anonymous VO clients."""
-    auth_settings(
-        auth_enabled=True,
-        auth_plugin="iam-groups",
-        auth_roles=JOB_ROLES,
-        auth_anonymous_queries=True,
-        iam_issuer=iam_issuer,
-        iam_audience=iam_audience,
-    )
+    secure(auth_roles=JOB_ROLES, auth_anonymous_queries=True)
 
 
 @pytest.fixture
-def job_gates(auth_settings, stub_iam, iam_issuer, iam_audience):
+def job_gates(secure):
     """Auth on, with the job and query operations enforced too.
 
     Anonymous queries are allowed at the authentication layer, so what these
     tests observe is the *gate* refusing a token-less caller rather than the
     token requirement doing it first.
     """
-    auth_settings(
-        auth_enabled=True,
-        auth_plugin="iam-groups",
+    secure(
         auth_roles=JOB_ROLES,
         auth_gated_operations=JOB_OPERATIONS,
         auth_anonymous_queries=True,
-        iam_issuer=iam_issuer,
-        iam_audience=iam_audience,
     )
 
 
@@ -185,7 +166,7 @@ def test_job_creation_needs_the_configured_group(client, job_gates, fake_db, bea
 
 
 def test_job_creation_succeeds_with_the_group(client, job_gates, fake_db, bearer):
-    job_id = _create(client, headers=bearer(groups=[OPER]))
+    job_id = _create(client, headers=bearer(sub="alice", groups=[OPER]))
     assert fake_db.jobs[job_id]["owner_id"] == "alice"
 
 
@@ -250,17 +231,11 @@ def test_the_json_facade_is_gated_on_the_same_operations(client, job_gates, fake
     assert owned_delete.status_code == 204
 
 
-def test_an_unconfigured_job_role_denies(
-    client, auth_settings, stub_iam, iam_issuer, iam_audience, bearer, fake_db
-):
+def test_an_unconfigured_job_role_denies(client, secure, bearer, fake_db):
     """Enforcing an operation the policy never grants must deny, not open."""
-    auth_settings(
-        auth_enabled=True,
-        auth_plugin="iam-groups",
+    secure(
         auth_roles=json.dumps({"metadata.ingest": {"groups": [OPER]}}),
         auth_gated_operations=JOB_OPERATIONS,
-        iam_issuer=iam_issuer,
-        iam_audience=iam_audience,
     )
     response = client.post(
         "/tap/async",

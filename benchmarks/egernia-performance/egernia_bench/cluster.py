@@ -583,10 +583,6 @@ def scale(component: str, replicas: int) -> None:
     kubectl("rollout", "status", f"deploy/{RELEASE}-{component}", "--timeout=300s")
 
 
-def wait_ready(component: str, timeout_s: int = 300) -> None:
-    kubectl("rollout", "status", f"deploy/{RELEASE}-{component}", f"--timeout={timeout_s}s")
-
-
 def database_dsn() -> str:
     """A DSN reaching the in-cluster database from the host.
 
@@ -696,19 +692,6 @@ def close_database_forward() -> None:
     if _forward is not None and _forward.poll() is None:
         _forward.terminate()
     _forward = None
-
-
-def scaled_object_yaml() -> str:
-    """The ScaledObject and HPA as the cluster actually holds them.
-
-    Saved with every KEDA run: a scale-out timing means nothing without the
-    thresholds it was measured against, and "the chart's default" is not a
-    record of what was deployed.
-    """
-    out = []
-    for kind in ("scaledobject", "hpa"):
-        out.append(kubectl("get", kind, "-o", "yaml", check=False))
-    return "\n---\n".join(out)
 
 
 def versions() -> dict[str, str]:

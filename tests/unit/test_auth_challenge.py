@@ -16,22 +16,8 @@ QUERY = "SELECT source_id, ra FROM ska.continuum_sources"
 
 
 @pytest.fixture
-def secured(auth_settings, stub_iam, iam_issuer, iam_audience):
-    auth_settings(
-        auth_enabled=True,
-        auth_plugin="iam-groups",
-        auth_roles=ROLES,
-        iam_issuer=iam_issuer,
-        iam_audience=iam_audience,
-    )
-
-
-@pytest.fixture
-def bearer(make_token):
-    def build(**overrides):
-        return {"Authorization": f"Bearer {make_token(**overrides)}"}
-
-    return build
+def secured(secure):
+    secure(auth_roles=ROLES)
 
 
 # -- the challenge ----------------------------------------------------------
@@ -80,16 +66,12 @@ def test_an_explicit_well_known_url_wins(client, secured, auth_settings):
     assert 'discovery_url="https://iam.example.org/oidc/config"' in challenge
 
 
-def test_the_vo_error_document_carries_the_challenge_too(
-    client, auth_settings, stub_iam, iam_issuer, iam_audience, fake_db
-):
+def test_the_vo_error_document_carries_the_challenge_too(client, secure, fake_db):
     """The TAP endpoints answer DALI VOTables, not JSON — the challenge has to
     survive that rendering too. Reached by gating the query surface, the one
     way a TAP path answers 401."""
     oper = "/ska/science-metadata/oper"
-    auth_settings(
-        auth_enabled=True,
-        auth_plugin="iam-groups",
+    secure(
         auth_roles=json.dumps(
             {
                 "jobs.create": {"groups": [oper]},
@@ -99,8 +81,6 @@ def test_the_vo_error_document_carries_the_challenge_too(
             }
         ),
         auth_gated_operations="jobs.create,jobs.mutate,jobs.delete,query.sync",
-        iam_issuer=iam_issuer,
-        iam_audience=iam_audience,
     )
     response = client.post("/tap/sync", data={"LANG": "ADQL", "QUERY": QUERY})
     assert response.status_code == 401
@@ -201,15 +181,11 @@ def test_tap_1_0_capability_discovery_is_not_a_query(client, secured):
     assert response.headers["location"].endswith("/capabilities")
 
 
-def test_capability_discovery_survives_the_query_gate_too(
-    client, auth_settings, stub_iam, iam_issuer, iam_audience
-):
+def test_capability_discovery_survives_the_query_gate_too(client, secure):
     """Not just the token requirement: a site that gates the query surface
     must not lose capability discovery either."""
     oper = "/ska/science-metadata/oper"
-    auth_settings(
-        auth_enabled=True,
-        auth_plugin="iam-groups",
+    secure(
         auth_roles=json.dumps(
             {
                 "jobs.create": {"groups": [oper]},
@@ -219,8 +195,6 @@ def test_capability_discovery_survives_the_query_gate_too(
             }
         ),
         auth_gated_operations="jobs.create,jobs.mutate,jobs.delete,query.sync",
-        iam_issuer=iam_issuer,
-        iam_audience=iam_audience,
     )
     response = client.get(
         "/tap/sync", params={"REQUEST": "getCapabilities"}, follow_redirects=False
@@ -340,17 +314,8 @@ def test_nothing_needs_a_token_when_the_requirement_is_off(auth_settings):
     assert needs_token("/api/v1/software") is False
 
 
-def test_turning_the_requirement_off_restores_anonymous_reads(
-    client, auth_settings, stub_iam, iam_issuer, iam_audience
-):
-    auth_settings(
-        auth_enabled=True,
-        auth_plugin="iam-groups",
-        auth_roles=ROLES,
-        auth_require_token=False,
-        iam_issuer=iam_issuer,
-        iam_audience=iam_audience,
-    )
+def test_turning_the_requirement_off_restores_anonymous_reads(client, secure):
+    secure(auth_roles=ROLES, auth_require_token=False)
     assert client.get("/api/v1/software").status_code == 200
 
 

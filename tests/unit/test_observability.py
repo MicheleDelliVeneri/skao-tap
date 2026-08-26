@@ -63,9 +63,8 @@ def test_the_job_records_the_request_that_created_it(client, fake_db):
 
 @pytest.fixture
 def with_request_id():
-    obs.set_request_id("abc123")
-    yield "abc123"
-    obs.set_request_id(None)
+    with obs.request_context("abc123"):
+        yield "abc123"
 
 
 def test_a_statement_is_tagged_with_the_request(with_request_id):
@@ -83,8 +82,8 @@ def test_a_tagged_statement_still_starts_with_its_verb(with_request_id):
 
 
 def test_without_an_id_the_statement_is_untouched():
-    obs.set_request_id(None)
-    assert obs.tag_sql("SELECT 1;") == "SELECT 1;"
+    with obs.request_context(None):
+        assert obs.tag_sql("SELECT 1;") == "SELECT 1;"
 
 
 def test_the_query_carries_the_tag_to_the_database(client, fake_db):
@@ -179,11 +178,8 @@ def test_a_hostile_request_id_is_replaced_not_escaped(client, hostile, why):
 
 def test_tagging_refuses_an_unsafe_id_even_if_something_set_one(fake_db):
     """Defence in depth: the check does not rely on the middleware having run."""
-    obs.set_request_id("*/ DROP TABLE x; --")
-    try:
+    with obs.request_context("*/ DROP TABLE x; --"):
         assert obs.tag_sql("SELECT 1") == "SELECT 1"
-    finally:
-        obs.set_request_id(None)
 
 
 def test_a_hostile_id_never_reaches_the_database(client, fake_db):

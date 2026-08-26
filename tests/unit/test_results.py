@@ -8,7 +8,7 @@ from xml.etree import ElementTree as ET
 
 import pytest
 from egernia_core.query.results import ColumnMeta, RowLimiter, stream
-from egernia_core.query.votable import error_votable, normalize_format, serialize
+from egernia_core.query.votable import error_votable, normalize_format
 
 VOT_NS = {"v": "http://www.ivoa.net/xml/VOTable/v1.3"}
 
@@ -164,8 +164,8 @@ def test_arrow_ipc_stream_roundtrip():
     assert table.schema.field("flux").metadata[b"unit"] == b"mJy"
 
 
-def test_serialize_convenience_wrapper():
-    body = serialize(["a", "b"], [(1, "x")], "csv")
+def test_materializing_a_small_result():
+    body, _ = _materialize([ColumnMeta("a"), ColumnMeta("b")], [(1, "x")], "csv")
     assert body.decode().splitlines() == ["a,b", "1,x"]
 
 
@@ -215,12 +215,16 @@ KIND_ROWS = [
 def test_column_meta_defaults_to_opaque():
     """An undeclared column keeps the dynamic path.
 
-    `serialize()` builds these from bare column names for callers with rows of
-    mixed Python types, so the default has to be the kind that inspects every
-    cell rather than one that promises a type nobody stated.
+    A column declared by bare name alone carries rows of mixed Python types,
+    so the default has to be the kind that inspects every cell rather than
+    one that promises a type nobody stated.
     """
     assert ColumnMeta("x").kind == "opaque"
-    body = serialize(["n", "when"], [(Decimal("2.5"), datetime.date(2026, 1, 2))], "csv")
+    body, _ = _materialize(
+        [ColumnMeta("n"), ColumnMeta("when")],
+        [(Decimal("2.5"), datetime.date(2026, 1, 2))],
+        "csv",
+    )
     assert body.decode().splitlines()[1] == "2.5,2026-01-02"
 
 

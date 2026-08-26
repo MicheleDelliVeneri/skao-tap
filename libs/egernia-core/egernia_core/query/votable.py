@@ -1,12 +1,9 @@
 """RESPONSEFORMAT handling and DALI error documents.
 
 Result serialization itself lives in egernia_core.query.results (typed, streaming).
-The convenience serialize() here materializes a stream for small payloads.
 """
 
 from xml.sax.saxutils import escape
-
-from .results import ColumnMeta, RowLimiter, stream
 
 # RESPONSEFORMAT aliases -> (canonical key, mime type, file extension)
 FORMATS = {
@@ -39,22 +36,6 @@ def normalize_format(fmt: str | None) -> tuple[str, str, str]:
         return FORMATS[fmt.strip().lower()]
     except KeyError:
         raise ValueError(f"RESPONSEFORMAT={fmt} is not supported") from None
-
-
-def serialize(
-    columns: list[ColumnMeta] | list[str],
-    rows: list[tuple],
-    fmt_key: str,
-    maxrec: int | None = None,
-) -> bytes:
-    """Materialize a (small) result set in the given canonical format.
-
-    Accepts plain column names for convenience; MAXREC defaults to the row
-    count, i.e. no overflow.
-    """
-    metas = [ColumnMeta(name=c) if isinstance(c, str) else c for c in columns]
-    limiter = RowLimiter(rows, len(rows) if maxrec is None else maxrec)
-    return b"".join(stream(metas, limiter, fmt_key))
 
 
 def error_votable(message: str) -> bytes:

@@ -40,6 +40,7 @@ itself a measured question rather than a designed one:
 
 from __future__ import annotations
 
+import collections
 import dataclasses
 import logging
 import pathlib
@@ -268,7 +269,6 @@ def record(
     rate: int = 100,
     gil_only: bool = False,
     nonblocking: bool = True,
-    sudo: bool = True,
 ) -> tuple[int, int]:
     """Sample `pid` for `seconds`, writing folded stacks. Returns (samples, errors).
 
@@ -321,11 +321,10 @@ def record(
         args.append("--gil")
     if nonblocking:
         args.append("--nonblocking")
-    if sudo:
-        # The worker lives in another PID and mount namespace, so reading its
-        # memory needs root on the host. -n: a benchmark must never stop for a
-        # password prompt at hour three.
-        args = ["sudo", "-n", *args]
+    # The worker lives in another PID and mount namespace, so reading its
+    # memory needs root on the host. -n: a benchmark must never stop for a
+    # password prompt at hour three.
+    args = ["sudo", "-n", *args]
     log.info("py-spy: %s", " ".join(args))
     # Popen rather than run(), so a caller can stop it. py-spy under `sudo`
     # outlives the harness otherwise: when the first blocking pass was
@@ -541,8 +540,8 @@ def attribute(
     rounding — a share of "the CPU this profile saw", which is the only thing
     a sampling profiler can honestly report.
     """
-    bucket_counts: dict[str, int] = {}
-    frame_counts: dict[str, int] = {}
+    bucket_counts: collections.Counter[str] = collections.Counter()
+    frame_counts: collections.Counter[str] = collections.Counter()
     unattributed = 0
     corrupt = 0
     total = 0
@@ -575,8 +574,8 @@ def attribute(
         if bucket is None:
             unattributed += count
             continue
-        bucket_counts[bucket] = bucket_counts.get(bucket, 0) + count
-        frame_counts[frame] = frame_counts.get(frame, 0) + count
+        bucket_counts[bucket] += count
+        frame_counts[frame] += count
     if not total:
         return {}, [], 0.0
     if corrupt:

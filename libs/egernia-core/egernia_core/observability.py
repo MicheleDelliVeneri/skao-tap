@@ -130,19 +130,15 @@ def configure_logging(app_name: str) -> logging.Logger:
     still controls it, while the library's ``LOG_FORMAT``/``LOG_COLORIZE`` and
     redaction settings stay available for anyone who wants them.
     """
+    import sys
+
     from ska_src_logging import get_logger
 
     # JSON in a container, coloured console when a human is watching, unless
     # the operator has said otherwise
-    os.environ.setdefault("LOG_FORMAT", "console" if _looks_interactive() else "json")
+    os.environ.setdefault("LOG_FORMAT", "console" if sys.stderr.isatty() else "json")
     os.environ.setdefault("LOG_ENABLE_REDACTION", "true")
     return get_logger(app_name=app_name, level=settings.log_level.upper())
-
-
-def _looks_interactive() -> bool:
-    import sys
-
-    return sys.stderr.isatty()
 
 
 # -- request correlation ----------------------------------------------------
@@ -172,10 +168,6 @@ def safe_request_id(value: str | None) -> str | None:
     if value and SAFE_REQUEST_ID.fullmatch(value):
         return value
     return None
-
-
-def set_request_id(value: str | None) -> None:
-    _request_id.set(value)
 
 
 @contextlib.contextmanager
