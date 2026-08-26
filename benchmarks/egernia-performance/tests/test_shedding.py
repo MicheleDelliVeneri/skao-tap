@@ -185,3 +185,38 @@ def test_generator_cpu_peak_is_a_fraction_of_one_core():
     recorder = load_mod.Recorder()
     recorder.cpu_samples.append((0.0, 1.0, 0.2))  # process at 100% of a core
     assert recorder.generator_cpu_peak == 1.0
+
+
+def test_a_sharded_open_loop_forwards_the_bearer_token_to_every_share():
+    """A rung is labelled `authenticated` from the token the orchestrator
+    holds, not from what the generator sent. When the sharded open loop had
+    no `token` parameter at all, an authenticated open-loop rung with
+    generator_processes > 1 sent no Authorization header and was still
+    reported as authenticated — the unauthenticated service measured twice,
+    with the difference reported as zero."""
+    from egernia_bench.load import runner as load_mod
+
+    seen = []
+
+    def fake_share(payload):
+        seen.append(payload["token"])
+        return [], [], [], 1.0
+
+    # the child pool is bypassed: what matters is what reaches each payload
+    original = load_mod._open_loop_share
+    try:
+        load_mod._open_loop_share = fake_share
+        load_mod.open_loop_sharded(
+            "http://example",
+            entries=[],
+            mix={"Q01": 1.0},
+            query_class=None,
+            seed=1,
+            steps=[load_mod.Step(seconds=1.0, rate=2.0)],
+            processes=1,
+            token="secret-token",
+        )
+    finally:
+        load_mod._open_loop_share = original
+
+    assert seen == ["secret-token"]

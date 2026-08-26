@@ -196,11 +196,17 @@ PLAN_EXPLANATIONS = {
 # ---------------------------------------------------------------------------
 
 
+def _start(scenario: str, args) -> tuple[dict, runs_mod.Run, dict]:
+    """The three lines every measuring family opens with: the config, the run
+    directory (resumed when asked) and the images the cluster will serve."""
+    cfg = runner.load_config()
+    run = runs_mod.new_run(scenario, args.resume)
+    return cfg, run, runner.setup(cfg, rebuild_images=not args.no_build)
+
+
 def cmd_smoke(args) -> int:
     """A short end-to-end pass: everything wired, nothing measured for long."""
-    cfg = runner.load_config()
-    run = runs_mod.new_run("smoke", args.resume)
-    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    cfg, run, digests = _start("smoke", args)
     datasets = runner.ensure_dataset(cfg, ["D1"], run.path / "datasets")
     entries = build_corpus(cfg, datasets)
     run.write_json("corpus.json", [e.as_dict() for e in entries[:200]])
@@ -211,9 +217,7 @@ def cmd_smoke(args) -> int:
 
 
 def cmd_db_scaling(args) -> int:
-    cfg = runner.load_config()
-    run = runs_mod.new_run("db-scaling", args.resume)
-    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    cfg, run, digests = _start("db-scaling", args)
     names = args.datasets or [d["name"] for d in cfg["datasets"]["datasets"]]
     results: list[dict] = []
     datasets: dict = {}
@@ -237,9 +241,7 @@ def cmd_db_scaling(args) -> int:
 
 
 def cmd_fixed_scaling(args) -> int:
-    cfg = runner.load_config()
-    run = runs_mod.new_run("fixed-scaling", args.resume)
-    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    cfg, run, digests = _start("fixed-scaling", args)
     dataset = args.dataset or cfg["scenarios"]["fixed_replica_scaling"]["dataset"]
     datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
     entries = build_corpus(cfg, datasets)
@@ -263,9 +265,7 @@ def cmd_fixed_scaling(args) -> int:
 
 
 def cmd_keda(args) -> int:
-    cfg = runner.load_config()
-    run = runs_mod.new_run("keda", args.resume)
-    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    cfg, run, digests = _start("keda", args)
     dataset = args.dataset or "D1"
     datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
     entries = build_corpus(cfg, datasets)
@@ -294,9 +294,7 @@ def cmd_result_formats(args) -> int:
     load fixed on purpose, because the question is what a large result costs
     to produce and not where the service gives up producing them.
     """
-    cfg = runner.load_config()
-    run = runs_mod.new_run("result-formats", args.resume)
-    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    cfg, run, digests = _start("result-formats", args)
     dataset = args.dataset or cfg["scenarios"]["result_formats"]["dataset"]
     datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
     entries = build_corpus(cfg, datasets)
@@ -318,9 +316,7 @@ def cmd_stress(args) -> int:
     11's full-table aggregate, say) can be measured in minutes instead of
     re-running a whole family for four numbers.
     """
-    cfg = runner.load_config()
-    run = runs_mod.new_run("stress", args.resume)
-    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    cfg, run, digests = _start("stress", args)
     dataset = args.dataset or "D1"
     datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
     entries = build_corpus(cfg, datasets)
@@ -338,9 +334,7 @@ def cmd_replicas(args) -> int:
     rungs never measured any: this is the bounded-concurrency shape that
     does.
     """
-    cfg = runner.load_config()
-    run = runs_mod.new_run("replica-sweep", args.resume)
-    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    cfg, run, digests = _start("replica-sweep", args)
     dataset = args.dataset or "D1"
     datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
     entries = build_corpus(cfg, datasets)
@@ -366,9 +360,7 @@ def cmd_workers(args) -> int:
     workers x dbPoolMax and the two axes are therefore not interchangeable at
     the database.
     """
-    cfg = runner.load_config()
-    run = runs_mod.new_run("worker-sweep", args.resume)
-    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    cfg, run, digests = _start("worker-sweep", args)
     dataset = args.dataset or "D1"
     datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
     entries = build_corpus(cfg, datasets)
@@ -400,9 +392,7 @@ def cmd_shedding(args) -> int:
     transport (see runner.TRANSPORT_DROP_ERRORS) — with and without
     `tapApi.limitConcurrency`.
     """
-    cfg = runner.load_config()
-    run = runs_mod.new_run("shedding", args.resume)
-    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    cfg, run, digests = _start("shedding", args)
     dataset = args.dataset or cfg["scenarios"]["shedding"]["dataset"]
     datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
     entries = build_corpus(cfg, datasets)
@@ -522,9 +512,7 @@ def cmd_serialize(args) -> int:
 
 
 def cmd_full(args) -> int:
-    cfg = runner.load_config()
-    run = runs_mod.new_run("full", args.resume)
-    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    cfg, run, digests = _start("full", args)
     names = args.datasets or [d["name"] for d in cfg["datasets"]["datasets"]]
     results: list[dict] = []
     datasets: dict = {}
