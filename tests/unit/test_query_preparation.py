@@ -190,3 +190,80 @@ def test_queueing_a_job_cannot_translate_on_the_event_loop():
     assert json_api.queue_job is uws_api.queue_job  # one shared implementation
     parameter = inspect.signature(uws_api.queue_job).parameters["prepared"]
     assert parameter.default is inspect.Parameter.empty
+
+
+# ---------------------------------------------------------------------------
+# Package 22: a text column in a geometry predicate
+# ---------------------------------------------------------------------------
+
+# ivoa.obscore as PostgreSQL holds it: the standard column is STC-S text, the
+# queryable companion is a pgsphere spoly.
+_OBSCORE_COLUMNS = {
+    "ivoa.obscore.s_region": False,
+    "ivoa.obscore.s_region_geom": True,
+    "ivoa.obscore.obs_id": False,
+}
+
+
+@pytest.fixture
+def catalogue(monkeypatch):
+    """Stand in for the information_schema read, so these pin the decision
+    rather than the query that feeds it."""
+
+    def use(columns):
+        monkeypatch.setattr(query_module, "_column_is_geometry", lambda: columns)
+
+    return use
+
+
+def _refuse(references, tables=frozenset({"ivoa.obscore"}), uploads=frozenset()):
+    query_module._reject_text_geometry(frozenset(references), tables, set(uploads))
+
+
+def test_a_text_column_in_a_geometry_slot_names_the_companion(catalogue):
+    catalogue(_OBSCORE_COLUMNS)
+    with pytest.raises(UsageError) as excinfo:
+        _refuse({"s_region"})
+    message = str(excinfo.value)
+    assert "s_region_geom" in message
+    # the companion is nullable, so the two are not equivalent and a caller
+    # switching columns has to be told that
+    assert "NULL" in message
+
+
+def test_the_geometry_companion_itself_is_accepted(catalogue):
+    catalogue(_OBSCORE_COLUMNS)
+    _refuse({"s_region_geom"})  # no raise
+
+
+def test_a_qualified_reference_resolves_to_its_bare_column(catalogue):
+    catalogue(_OBSCORE_COLUMNS)
+    with pytest.raises(UsageError):
+        _refuse({"o.s_region"})
+
+
+def test_an_unresolvable_reference_is_left_alone(catalogue):
+    """An alias, a column added since the catalogue was read, or a table this
+    query does not read: translating it was already legal, and guessing would
+    refuse valid queries to catch a mistake PostgreSQL still reports."""
+    catalogue(_OBSCORE_COLUMNS)
+    _refuse({"footprint"})  # not a known column of ivoa.obscore
+    _refuse({"s_region"}, tables=frozenset({"ska.continuum_sources"}))
+
+
+def test_a_request_with_an_upload_is_not_second_guessed(catalogue):
+    """An uploaded table's columns are not in the catalogue at all, so the
+    check cannot tell a text column from one it simply cannot see."""
+    catalogue(_OBSCORE_COLUMNS)
+    _refuse({"s_region"}, uploads=frozenset({"mytable"}))
+
+
+def test_no_geometry_reference_reads_no_catalogue(monkeypatch):
+    """The common query touches no geometry slot, and must not pay for the
+    lookup that only a geometry predicate needs."""
+
+    def explode():
+        raise AssertionError("the catalogue was read for a query with no geometry")
+
+    monkeypatch.setattr(query_module, "_column_is_geometry", explode)
+    _refuse(frozenset())

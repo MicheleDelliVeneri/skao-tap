@@ -519,3 +519,91 @@ def test_the_shipped_dataset_config_keeps_d5_out_of_the_sweep():
     names = [d["name"] for d in cfg["datasets"]["datasets"]]
     assert "D5" in names, "the demo tier should be defined alongside the others"
     assert sweep_datasets(cfg) == ["D1", "D2", "D3", "D4"]
+
+
+# ---------------------------------------------------------------------------
+# The performance landing page
+# ---------------------------------------------------------------------------
+
+
+def _published_run(docs, name, datasets):
+    run = docs / name
+    run.mkdir(parents=True)
+    (run / "index.md").write_text(f"# {name}\n")
+    if datasets is not None:
+        (run / "dataset.json").write_text(json.dumps({d: {"rows": 1} for d in datasets}))
+    return run
+
+
+def test_the_index_keeps_a_row_per_family(tmp_path):
+    """Only db-scaling and full sweep the dataset tiers; every other family
+    pins one dataset on purpose. With a single global "latest", a worker sweep
+    published after a size sweep reads as though D2-D4 had been dropped."""
+    from egernia_bench.analyze import publish as publish_mod
+
+    docs = tmp_path / "performance"
+    _published_run(docs, "20260825T005436Z-b450b0a9-db-scaling", ["D1", "D2", "D3", "D4"])
+    _published_run(docs, "20260825T163627Z-034d69ba-profile", ["D1"])
+    _published_run(docs, "20260825T180219Z-f8b21fc4-worker-sweep", ["D1"])
+    _published_run(docs, "20260823T184745Z-b16f52f5-db-scaling", ["D1", "D2"])
+
+    text = publish_mod._write_index(docs).read_text()
+    family = text.split("## Latest by family")[1].split("## All runs")[0]
+
+    # the newest of each family, and only the newest
+    assert "20260825T005436Z-b450b0a9-db-scaling" in family
+    assert "20260823T184745Z-b16f52f5-db-scaling" not in family, "older db-scaling row"
+    assert "20260825T163627Z-034d69ba-profile" in family
+    assert "20260825T180219Z-f8b21fc4-worker-sweep" in family
+    # the size sweep's tiers are on the front page even though a single-dataset
+    # family ran more recently
+    assert "D1 D2 D3 D4" in family
+
+
+def test_the_index_still_lists_every_run(tmp_path):
+    """Runs accumulate rather than replace — that property is the reason a
+    regression has somewhere to show up, so grouping must not hide any."""
+    from egernia_bench.analyze import publish as publish_mod
+
+    docs = tmp_path / "performance"
+    names = [
+        "20260825T005436Z-b450b0a9-db-scaling",
+        "20260823T184745Z-b16f52f5-db-scaling",
+        "20260825T180219Z-f8b21fc4-worker-sweep",
+    ]
+    for name in names:
+        _published_run(docs, name, ["D1"])
+
+    listing = publish_mod._write_index(docs).read_text().split("## All runs")[1]
+    for name in names:
+        assert name in listing, name
+    # newest first
+    assert listing.index("20260825T180219Z") < listing.index("20260823T184745Z")
+
+
+def test_a_run_published_before_dataset_json_says_so(tmp_path):
+    """An older run has no dataset.json. It gets a dash rather than a tier it
+    may never have measured."""
+    from egernia_bench.analyze import publish as publish_mod
+
+    docs = tmp_path / "performance"
+    _published_run(docs, "20260101T000000Z-deadbeef-db-scaling", None)
+    family = publish_mod._write_index(docs).read_text().split("## Latest by family")[1]
+    assert "| `db-scaling` |" in family
+    assert "—" in family
+
+
+def test_a_family_name_keeps_its_own_hyphens():
+    from egernia_bench.analyze import publish as publish_mod
+
+    assert publish_mod._run_family("20260825T180219Z-f8b21fc4-worker-sweep") == "worker-sweep"
+    assert publish_mod._run_family("20260825T005436Z-b450b0a9-db-scaling") == "db-scaling"
+    assert publish_mod._run_family("nonsense") == "unknown"
+
+
+def test_an_empty_docs_directory_still_renders(tmp_path):
+    from egernia_bench.analyze import publish as publish_mod
+
+    docs = tmp_path / "performance"
+    docs.mkdir(parents=True)
+    assert "_No runs published yet._" in publish_mod._write_index(docs).read_text()

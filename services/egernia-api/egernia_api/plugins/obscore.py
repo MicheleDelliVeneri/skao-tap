@@ -376,7 +376,37 @@ def did_prefix() -> str:
 # back later.
 DID_SAFE_CLASS = "A-Za-z0-9._~-"
 
-DID_KEY_COLUMNS = ("project_id", "obs_id", "sbd_id", "eb_id", "product_id")
+# A configured column name is interpolated into the view's DDL, where no
+# parameter can be bound, so the alphabet is closed to plain lower-case SQL
+# identifiers. Anything else — a quote, a space, a parenthesis — is refused
+# before it reaches a CREATE VIEW.
+_DID_COLUMN_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def did_key_columns() -> tuple[str, ...]:
+    """The data_products columns whose values form the DID path, in order.
+
+    Configured (``TAP_OBSCORE_DID_COLUMNS``, dot-separated) because a
+    deployment whose ODP model nests differently has a different identity
+    chain. Two things are the operator's to get right and neither can be
+    checked here: the chain has to identify a data product *uniquely*, or two
+    products share a DID; and changing it changes every DID this service has
+    ever published, which a permanent identifier is not supposed to do.
+
+    A column that does not exist on srcnet.data_products fails at bootstrap,
+    where PostgreSQL names it.
+    """
+    raw = settings.obscore_did_columns
+    columns = tuple(part.strip() for part in raw.split(".") if part.strip())
+    if not columns:
+        raise ValueError("TAP_OBSCORE_DID_COLUMNS is empty; a DID needs at least one column")
+    for column in columns:
+        if not _DID_COLUMN_RE.match(column):
+            raise ValueError(
+                f"TAP_OBSCORE_DID_COLUMNS component {column!r} is not a plain SQL"
+                " identifier (lower-case letters, digits and underscores)"
+            )
+    return columns
 
 
 def _did_component(column: str) -> str:
@@ -404,7 +434,7 @@ def _did_component(column: str) -> str:
 
 def view_sql(or_replace: bool = False) -> str:
     did = f"'{did_prefix()}' || " + " || '/' || ".join(
-        _did_component(f"p.{column}") for column in DID_KEY_COLUMNS
+        _did_component(f"p.{column}") for column in did_key_columns()
     )
     selects = ",\n    ".join(
         f"{column.expression if column.expression is not None else did} AS {column.name}"

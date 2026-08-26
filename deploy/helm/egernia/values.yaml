@@ -488,6 +488,13 @@ config:
   # authority to match the registry authorityId before publishing anything
   # real, because a changed prefix re-identifies every dataset.
   obscoreDidPrefix: "ivo://skao.int/~?"
+  # -- Columns of srcnet.data_products whose values form the DID path, in
+  # order, dot-separated. The default is that table's primary key — one
+  # component per level of the ODP hierarchy — which is what identifies a
+  # data product uniquely. Set this only for a model that nests differently,
+  # and with the same care as the prefix: a chain that is not unique makes
+  # two products share a DID, and changing it re-identifies every dataset.
+  obscoreDidColumns: "project_id.obs_id.sbd_id.eb_id.product_id"
   # -- Metadata-domain plugins to activate: "all" or a comma-separated
   # subset (e.g. "odp" or "software") for dedicated per-model deployments.
   modelPlugins: all
