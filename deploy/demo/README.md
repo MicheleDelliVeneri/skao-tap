@@ -68,19 +68,44 @@ uv sync --group demo
 make demo-notebook HOST=tap.example.org
 ```
 
-marimo, so the sliders are live: change the cone radius or the concurrency and
-only the cells that depend on them re-run. It shows, in order —
+marimo, so the sliders are live: change the query, the cone radius or the
+concurrency and only the cells that depend on them re-run. Four parts:
 
-1. a spatial query over a hundred gigabytes answering in milliseconds, because
-   the footprint column is a GiST-indexed pgsphere geometry;
-2. a full-table aggregate that takes **seconds**, on purpose, because a demo
-   that only shows the fast case teaches the wrong lesson;
-3. both metadata models — observatory data products and software discovery —
-   under the same ADQL;
-4. thousands of requests at a chosen concurrency, with the latency
-   distribution;
-5. what the cluster did about it: pods ready, request rate and per-pod CPU,
-   read from the Prometheus the chart deploys.
+**1. What a client can discover.** Every discovery endpoint answered live —
+the service root, OpenAPI and Swagger, both health probes, VOSI availability,
+capabilities and tables, DALI examples, the VOResource record and the metrics
+exposition — with what each is for. Then the capabilities document reduced to
+what a client actually branches on (ADQL versions, output formats, upload
+methods, declared data models), and `/api/v1/auth`, which says what the
+deployment enforces so nobody has to discover it by trial.
+
+**2. Four ways to ask the same question.** One ADQL box drives all of them:
+
+- **PyVO** (`pyvo.dal.TAPService`) — the client an astronomer already has,
+  parsing the VOTable's units and UCDs knowing only a URL
+- **raw TAP** (`POST /tap/sync`) — what PyVO does underneath, available to any
+  language with an HTTP client
+- **the JSON API** (`POST /api/v1/query`) — no XML, no VO library, and column
+  metadata in the response so a caller still knows `s_ra` is degrees
+- **asynchronous** — the same query as a UWS job *and* as a JSON job, ending
+  by showing the JSON job's own `urls.uws`: one job store, two protocols
+
+Plus how it refuses. Three bad requests, each answered as a *usage* error
+rather than a 500 — including `INTERSECTS(s_region, ...)`, where the service
+names `s_region_geom` instead of letting PostgreSQL fail with
+`operator does not exist: text && scircle`.
+
+**3. Two metadata models, one query language.** A join up the ODP hierarchy
+and a query over the software records — different pydantic models, flattened
+by the same generator into `srcnet.*`, registered in the same `TAP_SCHEMA`,
+neither with a line of hand-written schema.
+
+**4. At scale.** A spatial query over a hundred gigabytes answering in
+milliseconds because the footprint is GiST-indexed; a full-table aggregate
+taking **seconds**, on purpose, because a demo that only shows the fast case
+teaches the wrong lesson; thousands of requests at a chosen concurrency with
+the latency distribution; and what the cluster did about it — pods up, request
+rate, per-pod CPU — from the Prometheus the chart deploys.
 
 ## Headlamp
 
