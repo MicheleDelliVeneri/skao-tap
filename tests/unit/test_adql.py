@@ -52,6 +52,43 @@ def test_touched_tables_geometry():
     assert touched_tables(sql) == {"ska.continuum_sources"}
 
 
+def test_coordinate_expression_evaluator_is_numeric_only():
+    """The geometry-coordinate evaluator replaces upstream's eval(): it
+    computes arithmetic on numeric literals and refuses anything that could
+    execute code (a call, name, attribute, or import)."""
+    from egernia_core.query._adql.translator import _eval_number
+
+    assert _eval_number("1+2") == 3.0
+    assert _eval_number("2 * 3.5") == 7.0
+    assert _eval_number("-4") == -4.0
+    assert _eval_number("10 % 3") == 1.0
+    for payload in (
+        "__import__('os').getcwd()",
+        "eval('1')",
+        "os.system('x')",
+        "open('/etc/passwd')",
+        "True",
+    ):
+        with pytest.raises(ValueError):
+            _eval_number(payload)
+
+
+def test_geometry_coordinate_cannot_execute_code(tmp_path):
+    """Regression: a coordinate slot of eval('...') used to run arbitrary
+    Python on the worker. It must not, however the query is handled."""
+    marker = tmp_path / "pwned"
+    payload = "eval('__import__(\"os\").system(\"touch %s\")')" % marker
+    query = (
+        "SELECT ra FROM ska.continuum_sources WHERE 1=CONTAINS("
+        "POINT('ICRS', %s, 0), CIRCLE('ICRS', 1, 2, 0.1))" % payload
+    )
+    try:
+        adql_to_postgresql(query)
+    except QueryParseError:
+        pass
+    assert not marker.exists()
+
+
 def test_apply_maxrec_wraps_with_one_extra_row():
     wrapped = apply_maxrec("SELECT 1;", 10)
     assert wrapped.startswith("SELECT * FROM (")

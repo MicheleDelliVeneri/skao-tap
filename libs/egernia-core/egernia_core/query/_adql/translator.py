@@ -26,12 +26,18 @@ Changes against upstream, all ADQL 2.1:
   (``^`` is exponentiation in PostgreSQL — passing it through computed
   powers instead of XOR);
 - hexadecimal literals render in decimal, which every PostgreSQL version
-  accepts (bare ``0x…`` needs 16+).
+  accepts (bare ``0x…`` needs 16+);
+- geometry-coordinate expressions are evaluated by a numeric-only parser
+  (``_eval_number``) instead of upstream's ``eval()`` — the raw ``eval``
+  ran arbitrary Python from the query string (e.g. a coordinate slot of
+  ``eval('__import__("os").system(...)')`` executed on the worker).
 
 Only the PostgreSQL output path is kept; upstream's MySQL branches were
 dropped with the fork since this service never emits MySQL.
 """
 
+import ast
+import operator
 import re
 
 import antlr4
@@ -65,6 +71,41 @@ def _remove_children(ctx, reverse=False):
             ctx.removeLastChild()
 
 
+_NUM_BINOPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+_NUM_UNARYOPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+
+
+def _eval_number(expr):
+    """Evaluate an arithmetic expression of numeric literals to a float.
+
+    A safe replacement for upstream's ``float(eval(expr))``: only numeric
+    constants and the ``+ - * / % **`` operators are permitted, so a
+    coordinate slot cannot smuggle in a call, name or attribute access.
+    Anything else raises ``ValueError``, which the caller treats the same
+    way it treated ``eval`` failing — a non-numeric coordinate falls through
+    to the column-name branch.
+    """
+    def _node(node):
+        if isinstance(node, ast.Constant) and isinstance(
+            node.value, (int, float)
+        ) and not isinstance(node.value, bool):
+            return node.value
+        if isinstance(node, ast.BinOp) and type(node.op) in _NUM_BINOPS:
+            return _NUM_BINOPS[type(node.op)](_node(node.left), _node(node.right))
+        if isinstance(node, ast.UnaryOp) and type(node.op) in _NUM_UNARYOPS:
+            return _NUM_UNARYOPS[type(node.op)](_node(node.operand))
+        raise ValueError('non-numeric coordinate expression')
+
+    return float(_node(ast.parse(expr, mode='eval').body))
+
+
 def _convert_values(ctx, cidx):
     """
     Values inside the ADQL functions can be floats, expressions, or
@@ -77,8 +118,8 @@ def _convert_values(ctx, cidx):
             val = float(i)
         except ValueError:
             try:
-                val = float(eval(i))
-            except (AttributeError, ValueError, NameError, SyntaxError):
+                val = _eval_number(i)
+            except (ValueError, SyntaxError, TypeError, ZeroDivisionError):
                 val = '.'.join('{0}'.format(v) for v in i.split('.'))
         vals.append(val)
     return vals
