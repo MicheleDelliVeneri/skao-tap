@@ -754,26 +754,6 @@ def open_loop_sharded(
     outstanding work stays what the config states.
     """
     processes = max(1, processes)
-    if processes == 1:
-        samples, cpu, timeline, elapsed = _open_loop_share(
-            {
-                "base_url": base_url,
-                "entries": entries,
-                "mix": mix,
-                "query_class": query_class,
-                "seed": seed,
-                "steps": [dataclasses.asdict(s) for s in steps],
-                "mode": mode,
-                "response_format": response_format,
-                "arrival_seed": arrival_seed,
-                "max_in_flight": max_in_flight,
-                "token": token,
-            }
-        )
-        merged = Recorder()
-        merged.samples.extend(samples)
-        merged.cpu_samples.extend(cpu)
-        return merged, timeline, elapsed
     payloads = [
         {
             "base_url": base_url,
@@ -800,6 +780,13 @@ def open_loop_sharded(
     merged = Recorder()
     merged_timeline: list[dict] = []
     elapsed = 0.0
+    if len(payloads) == 1:
+        # one shard: run it here rather than forking a pool to hold it, the
+        # same short-circuit the closed loop takes
+        samples, cpu, timeline, elapsed = _open_loop_share(payloads[0])
+        merged.samples.extend(samples)
+        merged.cpu_samples.extend(cpu)
+        return merged, timeline, elapsed
     # fork, not spawn, for the same reason as the closed-loop shards: the
     # children re-enter this module with the parent's imports already made,
     # and no asyncio loop is running in the parent at this point
