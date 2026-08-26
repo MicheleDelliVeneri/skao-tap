@@ -71,15 +71,19 @@ ceiling is a joint property of the service and a spin-polling client. The
 generator never sends UWS 1.1 `WAIT`: it polls each job's phase at 0.25 s
 backing off to 2 s, so one job costs the API roughly six to eight
 requests, and package 18 put this API at 10.5 ms of CPU per request
-(96–100 rps at one worker) — ~100 rps over ~7 requests per job is ~14
-jobs/s, consistent with where the failures set in (clean at 0.5×C1 ≈ 3.4
-jobs/s, failing at every rung from 3.5×C1 ≈ 24 jobs/s up; the family has
-no rung between). The service already carries the lever the generator did
-not use: `uws_api.py` implements the blocking `WAIT`, which would replace
-most of those requests with one held connection per job — so an operator
-hitting this ceiling may want a client change before more API replicas.
-Measuring the async ceiling under a `WAIT`-ing client was not exercised
-here and is a clean small follow-up.
+(96–100 rps at one worker) — ~100 rps over ~7 requests per job predicts a
+~14 jobs/s ceiling. The data cannot test that prediction, only fail to
+contradict it: the family is clean at 0.5×C1 ≈ 3.4 jobs/s and failing at
+every rung from 3.5×C1 ≈ 24 jobs/s up, a factor-of-seven bracket with no
+rung between, and the suite cannot count the requests that would settle it
+(the generator records one sample per job however many polls it made, and
+no collected Prometheus series counts API requests). The service already
+carries the lever the generator did not use: `uws_api.py` implements the
+blocking `WAIT`, which would replace most of those requests with one held
+connection per job — so an operator hitting this ceiling may want a client
+change before more API replicas. The follow-up is one package with a
+prerequisite, not two: teach the harness to count API requests per job,
+then measure the async ceiling under a `WAIT`-ing client.
 
 ### 2026-08-25 — the size sweep is finished, and size almost is not the story (packages 16 and 17, delivered)
 
