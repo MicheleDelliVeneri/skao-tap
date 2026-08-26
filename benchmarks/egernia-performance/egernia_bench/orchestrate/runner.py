@@ -400,6 +400,7 @@ def measure(
                         mode=request_mode,
                         response_format=response_format,
                         max_in_flight=max_in_flight,
+                        token=bearer_token,
                         **workload_ingredients,
                     )
                 else:
