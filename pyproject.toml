@@ -104,6 +104,18 @@ timeout = 120
 source_pkgs = ["egernia_core", "egernia_api", "egernia_executor"]
 parallel = true
 relative_files = true
+omit = [
+    # ANTLR-generated parser modules of the vendored ADQL 2.1 fork, excluded
+    # for the same reason [tool.ruff] extend-exclude skips them: they are
+    # machine output, not code anyone here writes or can meaningfully test.
+    # A generated recursive-descent parser carries a branch per grammar
+    # alternative, so most of it is unreachable for any real query — 7,396 of
+    # its statements were being measured, 2,984 of them missed, which was over
+    # 90% of every uncovered line in the project and put the 80% gate out of
+    # reach permanently. The hand-written translator.py beside them stays
+    # measured, exactly as ruff still lints it.
+    "*/egernia_core/query/_adql/ADQL*.py",
+]
 
 [tool.coverage.paths]
 sources = ["libs/egernia-core/egernia_core", "services/egernia-api/egernia_api", "services/egernia-executor/egernia_executor"]
