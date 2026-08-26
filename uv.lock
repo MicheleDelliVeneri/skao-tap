@@ -503,7 +503,6 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "pyvo" },
-    { name = "requests" },
     { name = "ruff" },
 ]
 docs = [
@@ -534,7 +533,6 @@ dev = [
     { name = "pytest-cov", specifier = ">=6.0" },
     { name = "pytest-timeout", specifier = ">=2.3" },
     { name = "pyvo", specifier = ">=1.5" },
-    { name = "requests", specifier = ">=2.31" },
     { name = "ruff", specifier = ">=0.8" },
 ]
 docs = [
