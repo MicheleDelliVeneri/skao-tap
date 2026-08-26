@@ -7,17 +7,17 @@
 </p>
 
 <p align="center">
-  <a href="https://micheledelliveneri.github.io/egernia/"><b>Documentation</b></a> ·
-  <a href="https://micheledelliveneri.github.io/egernia/quickstart/">Quickstart</a> ·
-  <a href="https://micheledelliveneri.github.io/egernia/architecture/">Architecture</a> ·
-  <a href="https://micheledelliveneri.github.io/egernia/roadmap/">Roadmap</a>
+  <a href="https://ska-telescope.github.io/egernia/"><b>Documentation</b></a> ·
+  <a href="https://ska-telescope.github.io/egernia/quickstart/">Quickstart</a> ·
+  <a href="https://ska-telescope.github.io/egernia/architecture/">Architecture</a> ·
+  <a href="https://ska-telescope.github.io/egernia/roadmap/">Roadmap</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/MicheleDelliVeneri/egernia/actions/workflows/ci.yml"><img src="https://github.com/MicheleDelliVeneri/egernia/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://github.com/MicheleDelliVeneri/egernia/actions/workflows/security.yml"><img src="https://github.com/MicheleDelliVeneri/egernia/actions/workflows/security.yml/badge.svg?branch=main" alt="Security"></a>
-  <a href="https://codecov.io/gh/MicheleDelliVeneri/egernia"><img src="https://codecov.io/gh/MicheleDelliVeneri/egernia/branch/main/graph/badge.svg" alt="Coverage"></a>
-  <a href="https://micheledelliveneri.github.io/egernia/"><img src="https://img.shields.io/badge/docs-github.io-blue" alt="Docs"></a>
+  <a href="https://github.com/ska-telescope/egernia/actions/workflows/ci.yml"><img src="https://github.com/ska-telescope/egernia/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/ska-telescope/egernia/actions/workflows/security.yml"><img src="https://github.com/ska-telescope/egernia/actions/workflows/security.yml/badge.svg?branch=main" alt="Security"></a>
+  <a href="https://codecov.io/gh/ska-telescope/egernia"><img src="https://codecov.io/gh/ska-telescope/egernia/branch/main/graph/badge.svg" alt="Coverage"></a>
+  <a href="https://ska-telescope.github.io/egernia/"><img src="https://img.shields.io/badge/docs-github.io-blue" alt="Docs"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.14%2B-blue" alt="Python 3.14+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
 </p>
@@ -130,7 +130,7 @@ PostgreSQL, PITR, restore and hardening are in the [deployment guide][deploy].
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
 development loop and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the standards
 we hold each other to. Questions and bug reports belong in
-[GitHub issues](https://github.com/MicheleDelliVeneri/egernia/issues).
+[GitHub issues](https://github.com/ska-telescope/egernia/issues).
 
 To report a security vulnerability, follow [SECURITY.md](SECURITY.md) rather
 than opening a public issue.
@@ -147,17 +147,17 @@ citation from [CITATION.cff](CITATION.cff) via *Cite this repository*.
 [tap-std]: https://www.ivoa.net/documents/TAP/
 [queryparser]: https://github.com/aipescience/queryparser
 [pgsphere]: https://pgsphere.github.io/
-[quickstart]: https://micheledelliveneri.github.io/egernia/quickstart/
-[arch]: https://micheledelliveneri.github.io/egernia/architecture/
-[api]: https://micheledelliveneri.github.io/egernia/api/
-[json-api]: https://micheledelliveneri.github.io/egernia/json-api/
-[deploy]: https://micheledelliveneri.github.io/egernia/deployment/
-[autoscaling]: https://micheledelliveneri.github.io/egernia/autoscaling/
-[auth]: https://micheledelliveneri.github.io/egernia/auth/
-[registry]: https://micheledelliveneri.github.io/egernia/registry/
-[plugins]: https://micheledelliveneri.github.io/egernia/plugins/
-[schemas]: https://micheledelliveneri.github.io/egernia/model-schemas/
-[obs]: https://micheledelliveneri.github.io/egernia/observability/
-[bench]: https://micheledelliveneri.github.io/egernia/benchmarking/
-[dev]: https://micheledelliveneri.github.io/egernia/development/
-[roadmap]: https://micheledelliveneri.github.io/egernia/roadmap/
+[quickstart]: https://ska-telescope.github.io/egernia/quickstart/
+[arch]: https://ska-telescope.github.io/egernia/architecture/
+[api]: https://ska-telescope.github.io/egernia/api/
+[json-api]: https://ska-telescope.github.io/egernia/json-api/
+[deploy]: https://ska-telescope.github.io/egernia/deployment/
+[autoscaling]: https://ska-telescope.github.io/egernia/autoscaling/
+[auth]: https://ska-telescope.github.io/egernia/auth/
+[registry]: https://ska-telescope.github.io/egernia/registry/
+[plugins]: https://ska-telescope.github.io/egernia/plugins/
+[schemas]: https://ska-telescope.github.io/egernia/model-schemas/
+[obs]: https://ska-telescope.github.io/egernia/observability/
+[bench]: https://ska-telescope.github.io/egernia/benchmarking/
+[dev]: https://ska-telescope.github.io/egernia/development/
+[roadmap]: https://ska-telescope.github.io/egernia/roadmap/
