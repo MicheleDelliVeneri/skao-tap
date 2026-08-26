@@ -1,6 +1,8 @@
 """Unit tests for ADQL translation (backed by the vendored ADQL 2.1 fork
 of queryparser in egernia_core.query._adql)."""
 
+import contextlib
+
 import pytest
 from egernia_core.errors import QueryParseError
 from egernia_core.query.adql import adql_to_postgresql, apply_maxrec, check_language, touched_tables
@@ -77,15 +79,13 @@ def test_geometry_coordinate_cannot_execute_code(tmp_path):
     """Regression: a coordinate slot of eval('...') used to run arbitrary
     Python on the worker. It must not, however the query is handled."""
     marker = tmp_path / "pwned"
-    payload = "eval('__import__(\"os\").system(\"touch %s\")')" % marker
+    payload = f'eval(\'__import__("os").system("touch {marker}")\')'
     query = (
         "SELECT ra FROM ska.continuum_sources WHERE 1=CONTAINS("
-        "POINT('ICRS', %s, 0), CIRCLE('ICRS', 1, 2, 0.1))" % payload
+        f"POINT('ICRS', {payload}, 0), CIRCLE('ICRS', 1, 2, 0.1))"
     )
-    try:
+    with contextlib.suppress(QueryParseError):
         adql_to_postgresql(query)
-    except QueryParseError:
-        pass
     assert not marker.exists()
 
 
