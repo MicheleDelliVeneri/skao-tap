@@ -65,6 +65,22 @@ republished from these runs. What one executor can do now has no measured
 ceiling: feeding it one would take an API that scales, which is not this
 package.
 
+One boundary before that ceiling is read as a service property. The
+executor numbers above are server-side and client-independent; the API
+ceiling is a joint property of the service and a spin-polling client. The
+generator never sends UWS 1.1 `WAIT`: it polls each job's phase at 0.25 s
+backing off to 2 s, so one job costs the API roughly six to eight
+requests, and package 18 put this API at 10.5 ms of CPU per request
+(96–100 rps at one worker) — ~100 rps over ~7 requests per job is ~14
+jobs/s, consistent with where the failures set in (clean at 0.5×C1 ≈ 3.4
+jobs/s, failing at every rung from 3.5×C1 ≈ 24 jobs/s up; the family has
+no rung between). The service already carries the lever the generator did
+not use: `uws_api.py` implements the blocking `WAIT`, which would replace
+most of those requests with one held connection per job — so an operator
+hitting this ceiling may want a client change before more API replicas.
+Measuring the async ceiling under a `WAIT`-ing client was not exercised
+here and is a clean small follow-up.
+
 ### 2026-08-25 — the size sweep is finished, and size almost is not the story (packages 16 and 17, delivered)
 
 One db-scaling run (`20260825T005436Z-b450b0a9`), one corpus, D1 through
