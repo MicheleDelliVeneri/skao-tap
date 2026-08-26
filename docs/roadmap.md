@@ -4,9 +4,9 @@ Follow-up work is organized in numbered packages, referenced by number in
 issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
-**Packages 18 through 21 are open.** Everything through package 17 is
-delivered and merged; what each one settled is recorded in the findings
-below.
+**Packages 18, 19 and 21 are open.** Everything through package 17 is
+delivered and merged, and package 20 is delivered with this change; what
+each one settled is recorded in the findings below.
 
 ## Measured findings
 
@@ -19,38 +19,51 @@ Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/egernia-performance/results/`.
 
-### 2026-08-25 — one async job was the parse, and almost nothing else (package 20)
+### 2026-08-26 — the parse removal, deployed: executors stopped being the async bottleneck (package 20, delivered)
 
-Not a suite run: measured by `tests/performance/profile_async_job.py`
-(committed with this finding), which replays the executor's stage sequence
-with a timer around each stage against the docker-compose database on the
-benchmark host, and cross-checks the stage sum against the real
-`execute_job()` wall time (they agree within 4%). Median of 200 jobs of the
-cone-search shape, everything after the claim:
+The autoscaling family (K1–K7), run twice on identical offered load — the
+ladder anchored at C1 = 6.83 jobs/s in both — differing only in whether the
+executor re-parses each job's query: run `20260826T013544Z-88d8c5e9` with
+the parse in the loop, run `20260826T050451Z-0f62a0fa` with the table list
+carried on the job row (`query_tables`, package 20's fix; the local profile
+behind it — 190 ms of per-job re-parse against ~6 ms for everything else,
+by `tests/performance/profile_async_job.py` — is in the 2026-08-25 entry in
+git history). Every validity guard passed in both runs. Completions are
+counted server-side: a `uws.jobs` row is inserted once and updated exactly
+four times on its way to COMPLETED, so per-window completions are the
+table's `n_tup_upd / 4` — the client's own success count is a casualty in
+both runs, for two different reasons below.
 
-| stage | ms |
-| --- | --- |
-| `touched_tables(query_sql)` — the per-job re-parse | **190.4** |
-| nine statements of bookkeeping (claim, metadata, PID publish, session setup, finalize) | 5.3 |
-| execute + serialize + write the result file | 0.7 |
+| | before (`88d8c5e9`) | after (`0f62a0fa`) |
+| --- | --- | --- |
+| executor CPU per completed job | 385–469 ms | **4.3–5.0 ms** |
+| per-executor drain, fleet saturated | 2.3–2.5 jobs/s at ~0.9 core/pod (K3, K6) | never saturated — ≥6.2 jobs/s at 2–3% CPU (K6) |
+| sustained 6×C1 — K6, ~41 jobs/s offered | 80% done in-window; queue peaks 20,870; oldest job 851 s | 100% done in-window; queue peaks 52; oldest job 1 s |
+| KEDA replicas | pegged at 8 | peak 5, mean 3.7 |
 
-The parse was 97% of a job's fixed overhead, and it is not the 39 ms the
-`adql.py` comment remembered: `PostgreSQLQueryProcessor.process_query()` costs
-101–193 ms across the four query shapes measured (aggregate 101, point lookup
-129, join 140, cone search 193) — it never got the SLL fast path that took the
-translator's own parse to 1–2 ms (`e38ed30`), and nothing had re-measured it
-since. The answer it computes was already known at submit: `translate()`
-returns the table list from the parse the API does anyway.
+The before run is the published ~2 jobs/s figure re-measured and confirmed:
+a pegged executor drains 2.3–2.5 jobs/s at ~0.9 cores — ~0.4 s of CPU per
+job — and a fleet of eight cannot hold 6×C1: the queue grows past twenty
+thousand, jobs wait fourteen minutes, and 94% of K6's clients gave up
+before their job ran. The after run is the local profile transferring to
+the deployed environment almost exactly: ~4.6 ms of executor CPU per job
+against the profile's ~6 ms, ninety times less than before. No scenario in
+the family can make the executor the bottleneck any more — every job every
+scenario offered completed inside that scenario's window, KEDA never ran
+more than five replicas, and the pods that did run sat 97% idle.
 
-The fix shipped with this finding: the API stores that list on the job row
-(`query_tables`), and the executor reads it instead of re-deriving it — the
-parse survives only as a fallback for jobs queued by an API that predates the
-column. After: a job's fixed overhead is ~5 ms wall against a local database,
-where before it was ~199 ms. What the local measurement cannot say is what
-this does to jobs-per-executor in the deployed environment, where the ~2
-jobs/s figure was measured — that number and every autoscaling default derived
-from it (`tapExecutor.replicas`, `queuedJobsPerReplica`) predate the parse
-removal and are re-measured under package 20's remaining work.
+What the after run surfaces instead is the async path's next ceiling: the
+API. From 3.5×C1 up, 17–57% of client conversations failed — with
+connection errors, on jobs the server had accepted and did complete —
+against the single API pod at ~85% of its one-core limit. A job is a
+submit plus phase polls plus a result fetch, and ~41 arrivals/s of that
+control traffic exceeds what one pod that also answers ~99 rps of sync
+queries can serve. The executor autoscaling defaults survive unchanged
+(`queuedJobsPerReplica: 10` — the queue simply never builds); the ~2
+jobs/s notes in `values.yaml`, `autoscaling.md` and `architecture.md` are
+republished from these runs. What one executor can do now has no measured
+ceiling: feeding it one would take an API that scales, which is not this
+package.
 
 ### 2026-08-25 — the size sweep is finished, and size almost is not the story (packages 16 and 17, delivered)
 
@@ -480,39 +493,6 @@ each bracketed by a saturated sweep the way the replica ladder now is; the
 stale notes in `autoscaling.md` and `deployment.md` replaced by those numbers;
 and a stated default for `tapApi.workers` that follows the pod's CPU limit if
 the measurement supports one.
-
-## Package 20 — What one async job actually costs
-
-The chart puts an executor at ~2 jobs/s (`values.yaml`, `tapExecutor.replicas`
-note) where the API serves ~98 rps of the same mix: a job costs about fifty
-times a sync request, and until this package no finding had ever profiled one.
-The autoscaling packages measured how many executors get scheduled and how
-fast a queue drains; none of them asked what the ~500 ms goes into. The answer
-decides whether "eight executors for ~22 jobs/s" is physics or overhead, and
-async is the path a client takes for exactly the queries where cost is real.
-
-**Done (see the 2026-08-25 finding above):** the job was profiled end to end,
-and the answer was overhead — the per-job `touched_tables` parse was 190 ms of
-a ~199 ms fixed cost, five times the 39 ms the `adql.py` comment remembered.
-The table list is now carried on the job row (`query_tables`, written at queue
-time from the parse the API already does at submit), the executor reads it
-instead of re-parsing, and the parse remains only as a fallback for jobs
-queued by an API that predates the column. Everything else a job pays —
-claim, metadata lookup, PID publish, session setup, the result-file write,
-the phase transitions — totals ~6 ms against a local database.
-
-Remaining work: the before/after jobs-per-executor figure from the
-autoscaling family on the same scenarios. Every published executor figure —
-~2 jobs/s per executor (`values.yaml`, `autoscaling.md`, `architecture.md`),
-`queuedJobsPerReplica`'s "10 ≈ 5 s of queue", "eight executors for ~22
-jobs/s" — was measured with the parse in the loop, and if the local profile
-transfers, an executor's fixed overhead just fell by more than an order of
-magnitude, which moves the defaults derived from those figures.
-
-**Resolution is shown by** ~~a per-job cost breakdown published as a
-finding~~, ~~the table list carried on the job rather than re-parsed~~, and a
-before/after jobs-per-executor figure from the autoscaling family on the same
-scenarios — plus the ~2 jobs/s figures above republished from that run.
 
 ## Package 21 — ADQL 2.1
 
