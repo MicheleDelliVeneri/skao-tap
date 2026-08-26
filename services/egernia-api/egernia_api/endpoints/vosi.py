@@ -9,7 +9,7 @@ at all.
 
 from xml.sax.saxutils import escape, quoteattr
 
-from egernia_core.config import settings
+from egernia_core.config import base_url, settings
 from egernia_core.db import connection as db_connection
 from egernia_core.errors import NotFoundError, ServiceError
 from egernia_core.metadata.plugins import active_plugins
@@ -85,7 +85,7 @@ def _adql_language_features() -> str:
 
 def _capability_elements() -> str:
     """The <capability> elements, indented two spaces, with no wrapper."""
-    base = settings.base_url
+    base = base_url()
     return f"""  <capability standardID="ivo://ivoa.net/std/TAP" xsi:type="tr:TableAccess">
     <interface xsi:type="vod:ParamHTTP" role="std" version="1.1">
       <accessURL use="base">{base}</accessURL>

@@ -33,6 +33,40 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 {{- end -}}
 
 {{- /*
+Every name this deployment is served under: the canonical ingress host, plus
+any extras. One list, because the ingress rules and the trusted-host list are
+two answers to the same question — a name the ingress routes but the app does
+not trust gets a 200 carrying URLs pointing somewhere else, and a name the app
+trusts but the ingress does not route never arrives at all.
+*/}}
+{{- define "egernia.serviceHosts" -}}
+{{- $hosts := .Values.ingress.extraHosts | default list -}}
+{{- if .Values.ingress.host -}}
+{{- $hosts = prepend $hosts .Values.ingress.host -}}
+{{- end -}}
+{{- join "," (uniq $hosts) -}}
+{{- end -}}
+
+{{- /*
+Hosts allowed to decide the URLs the service prints into its own job
+documents. The names above because they are the deployment's own, and loopback
+because a tunnel or a `kubectl port-forward` is how an operator and a demo
+audience reach it — a client arriving by any of them must be handed URLs it
+can resolve, not the canonical host it may have no DNS for.
+*/}}
+{{- define "egernia.trustedHosts" -}}
+{{- if .Values.tapApi.trustedHosts -}}
+{{- .Values.tapApi.trustedHosts -}}
+{{- else -}}
+{{- $hosts := list -}}
+{{- if .Values.ingress.enabled -}}
+{{- $hosts = include "egernia.serviceHosts" . | splitList "," -}}
+{{- end -}}
+{{- join "," (uniq (concat $hosts (list "localhost" "127.0.0.1"))) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
 Scheduling constraints spreading a component's replicas across nodes and
 zones (roadmap package 5). Preferred/ScheduleAnyway semantics, so single-node
 clusters (kind, minikube) schedule exactly as before. Explicit per-component
@@ -128,4 +162,45 @@ queue.
 {{- else -}}
 {{- printf "max(tap_jobs{phase=\"QUEUED\",namespace=\"%s\"})" .Release.Namespace -}}
 {{- end -}}
+{{- end -}}
+
+{{- /* The routes, identical for every name this deployment answers to. */}}
+{{- define "egernia.ingressPaths" -}}
+- path: /tap
+  pathType: Prefix
+  backend:
+    service:
+      name: {{ include "egernia.fullname" . }}-tap-api
+      port:
+        name: http
+# the JSON API: same service, own prefix — routed too, or a
+# deployment behind an ingress serves VO clients and refuses every
+# machine-to-machine caller
+- path: /api/v1
+  pathType: Prefix
+  backend:
+    service:
+      name: {{ include "egernia.fullname" . }}-tap-api
+      port:
+        name: http
+# the rest of the same service: OpenAPI, /docs, the health probes and
+# the metrics exposition. Last, and a bare prefix, so the two above
+# still win on longest-prefix match.
+- path: /
+  pathType: Prefix
+  backend:
+    service:
+      name: {{ include "egernia.fullname" . }}-tap-api
+      port:
+        name: http
+{{- if and .Values.prometheus.enabled .Values.ingress.exposePrometheus }}
+# unauthenticated: see ingress.exposePrometheus in values.yaml
+- path: /prometheus
+  pathType: Prefix
+  backend:
+    service:
+      name: {{ include "egernia.fullname" . }}-prometheus
+      port:
+        name: http
+{{- end }}
 {{- end -}}

@@ -7,10 +7,11 @@ resources /capabilities, /availability, /tables, plus DALI /examples.
 import socket
 import time
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 from egernia_core import uws
 from egernia_core.auth import invalid_token_challenge, verifier
-from egernia_core.config import settings
+from egernia_core.config import base_url, request_origin, settings, trusted_hosts
 from egernia_core.db import close_pool, pool
 from egernia_core.db import connection as db_connection
 from egernia_core.errors import AuthenticationError, OverloadedError, TAPError
@@ -121,6 +122,26 @@ app = FastAPI(
 )
 
 
+def client_origin(request: Request) -> str | None:
+    """``scheme://host`` as the client wrote it, when that host is trusted.
+
+    Host is client-controlled, so an unvetted one would let a caller choose
+    the URLs this service prints into its own job documents. An unlisted host
+    falls back to the configured base URL rather than being refused: the
+    kubelet probes reach the pod by IP and the executor by service name, and
+    neither should start failing over the URLs in a document it never reads.
+
+    The port is kept — a tunnel on :8080 is reachable only on :8080 — and the
+    scheme follows X-Forwarded-Proto, since TLS terminates at the ingress and
+    this process only ever sees http.
+    """
+    host = request.headers.get("host", "")
+    if (urlsplit(f"//{host}").hostname or "") not in trusted_hosts():
+        return None
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    return f"{scheme.split(',')[0].strip()}://{host}"
+
+
 @app.middleware("http")
 async def correlate(request: Request, call_next):
     """Give every request an id, and put it where the logs and the database
@@ -129,12 +150,19 @@ async def correlate(request: Request, call_next):
     An id supplied by the caller is kept — a client or gateway that already
     traces a request should not have that broken here — and returned on the
     response so a caller can quote it when reporting a problem.
+
+    The client's origin is bound here too, for the same reason and the same
+    lifetime: every URL this request prints has to be one it can fetch back.
     """
     # a caller's id is kept only if it is plainly an identifier: it is echoed
     # in a header, written into a SQL comment and logged, so anything else
     # gets replaced rather than escaped
     rid = safe_request_id(request.headers.get(REQUEST_ID_HEADER)) or new_request_id()
-    with request_context(rid), LogContext(request_id=rid, path=request.url.path):
+    with (
+        request_context(rid),
+        request_origin(client_origin(request)),
+        LogContext(request_id=rid, path=request.url.path),
+    ):
         response = await call_next(request)
     response.headers[REQUEST_ID_HEADER] = rid
     response.headers[SERVED_BY_HEADER] = SERVED_BY
@@ -328,7 +356,7 @@ async def tables():
 async def sync(request: Request):
     params = await gather_params(request)
     if params.get("REQUEST") == "getCapabilities":  # TAP 1.0 compatibility
-        return RedirectResponse(f"{settings.base_url}/capabilities", status_code=303)
+        return RedirectResponse(f"{base_url()}/capabilities", status_code=303)
     uploads = parse_uploads(await gather_upload_sources(request, params))
     # ADQL translation is tens of milliseconds of pure-Python ANTLR work; on
     # the event loop it stalls every other request for that long, which is why

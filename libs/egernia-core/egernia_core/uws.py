@@ -9,7 +9,7 @@ import time
 from xml.etree import ElementTree as ET
 
 from .auth.context import current_job_viewer
-from .config import settings
+from .config import base_url, settings
 from .errors import AuthorizationError, NotFoundError
 from .observability import request_id
 
@@ -286,7 +286,7 @@ def _el(parent, tag, text=None, nil=False, **attrs):
 
 
 def result_url(job_id: str) -> str:
-    return f"{settings.base_url}/async/{job_id}/results/result"
+    return f"{base_url()}/async/{job_id}/results/result"
 
 
 def job_xml(job: dict) -> bytes:
@@ -335,7 +335,7 @@ def joblist_xml(jobs: list[dict]) -> bytes:
     for job in jobs:
         ref = _el(root, "jobref")
         ref.set("id", job["job_id"])
-        ref.set(f"{{{XLINK_NS}}}href", f"{settings.base_url}/async/{job['job_id']}")
+        ref.set(f"{{{XLINK_NS}}}href", f"{base_url()}/async/{job['job_id']}")
         _el(ref, "phase", job["phase"])
     return _serialize(root)
 
