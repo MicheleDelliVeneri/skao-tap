@@ -441,13 +441,13 @@ class ADQLFunctionsTranslationVisitor(ADQLParserVisitor):
             self.visitIntersects(ctx.children[2])
             ctx_text = self.contexts[ctx.children[2]]
             if comp_value_l == '0':
-                ctx_text = ctx_text.replace('&&', '!&&')
+                ctx_text = _negate_intersects(ctx_text)
             _remove_children(ctx)
         elif comp_value_r == '1' or comp_value_r == '0':
             self.visitIntersects(ctx.children[0])
             ctx_text = self.contexts[ctx.children[0]]
             if comp_value_r == '0':
-                ctx_text = ctx_text.replace('&&', '!&&')
+                ctx_text = _negate_intersects(ctx_text)
             _remove_children(ctx, reverse=True)
         else:
             raise QueryError('The function INTERSECTS allows comparison to '
@@ -456,11 +456,45 @@ class ADQLFunctionsTranslationVisitor(ADQLParserVisitor):
         self.contexts[ctx] = ctx_text
 
     def visitIntersects(self, ctx):
-        arg = (self._geometry_argument(ctx.children[2]),
-               self._geometry_argument(ctx.children[4]))
-        ctx_text = '%s && %s' % arg
+        left = self._geometry_argument(ctx.children[2])
+        right = self._geometry_argument(ctx.children[4])
+        # pg_sphere defines no `&&` taking (spoint, scircle): the candidates
+        # are (spoint, spherekey) and (spoint, sbox), so the expression
+        # resolves by implicit cast to two of them and PostgreSQL refuses it
+        # as "operator is not unique". A point has no area, so intersecting
+        # one is containment in it -- and `@` has an exact operator for every
+        # geometry pgsphere defines. Same answer, one candidate.
+        #
+        # Only for a POINT *constructor*, which is the only argument whose
+        # type is known here: translation is pure and consults no TAP_SCHEMA,
+        # so a point-typed column (ADQL 2.1) is indistinguishable from any
+        # other column and keeps the `&&` it had.
+        if _is_point(left) != _is_point(right):
+            point, other = (left, right) if _is_point(left) else (right, left)
+            ctx_text = '%s @ %s' % (point, other)
+        else:
+            ctx_text = '%s && %s' % (left, right)
         _remove_children(ctx)
         self.contexts[ctx] = ctx_text
+
+
+def _is_point(sql):
+    """Whether this translated geometry argument is a POINT constructor."""
+    return sql.lstrip().startswith('spoint(')
+
+
+def _negate_intersects(sql):
+    """`0 = INTERSECTS(...)`, for whichever operator was emitted.
+
+    Not a blanket replace of '&&': visitIntersects emits '@' when one side is
+    a point, and a replace that found nothing would have quietly returned the
+    *positive* predicate -- a wrong answer rather than an error.
+    """
+    if ' && ' in sql:
+        return sql.replace(' && ', ' !&& ')
+    if ' @ ' in sql:
+        return sql.replace(' @ ', ' !@ ')
+    raise QueryError('cannot negate this INTERSECTS: no spatial operator found')
 
 
 class SelectQueryListener(ADQLParserListener):
