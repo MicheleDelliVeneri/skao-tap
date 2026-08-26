@@ -703,8 +703,23 @@ def sustainable_capacity(results: list[dict], slo_p95_s: float) -> float | None:
     distribution nobody would ship, and expressing the autoscaling scenarios
     as multiples of an unusable number would make every one of them a test of
     overload rather than of scaling.
+
+    C1 must describe the *deployed* single replica, because the autoscaling
+    families that express their rates as multiples of it run at the values
+    file's defaults. So the worker sweep's off-default points are excluded:
+    the limit probe (a raised ``pod_cpu_limit`` the values file does not set)
+    and the extra-worker grid points (``workers`` other than the default 1).
+    Both carry a non-None field precisely to be recognisable here; older
+    families leave both None and are unaffected.
     """
-    usable = [r for r in results if r.get("replicas") in (1, None) and _within_slo(r, slo_p95_s)]
+    usable = [
+        r
+        for r in results
+        if r.get("replicas") in (1, None)
+        and r.get("pod_cpu_limit") is None
+        and r.get("workers") in (None, 1)
+        and _within_slo(r, slo_p95_s)
+    ]
     if not usable:
         return None
     return max(r["http"]["successful_rps"] for r in usable)

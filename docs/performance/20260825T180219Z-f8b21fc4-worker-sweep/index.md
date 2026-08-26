@@ -2,17 +2,18 @@
 
 Run `20260825T180219Z-f8b21fc4-worker-sweep` · commit `68f47d7fcac6` · 2026-08-25 21:59 UTC
 
-!!! danger "This run is marked invalid"
+!!! danger "One rung of this run is marked invalid"
     wsweep-w4-n1-D1-c1-r0: prometheus_coverage
 
-    The numbers below are kept as evidence of what went wrong. They do
-    not describe the service under the conditions intended.
+    The invalidity is per-rung: this one measurement is excluded from the
+    capacity tables below (and from C1), which are computed over the valid
+    rungs only. It is kept on the page as evidence of what went wrong.
 
 ## Headline
 
 | finding | value | evidence |
 | --- | --- | --- |
-| sustainable single-replica capacity (C1) | **338.1** | highest successful rps over valid measurements with p95 within the 2.0s SLO and errors under 1% |
+| sustainable single-replica capacity (C1) | **99.1** | highest successful rps at the deployed shape (values-file workers and CPU limit), single replica, p95 within the 2.0s SLO and errors under 1% |
 
 ## What was measured
 
