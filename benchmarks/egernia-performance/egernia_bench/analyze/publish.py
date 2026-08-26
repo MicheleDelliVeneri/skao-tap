@@ -609,8 +609,32 @@ def _render(summary: dict, run_id: str, published: list[tuple[str, str]]) -> str
     return "\n".join(parts)
 
 
+def _run_family(name: str) -> str:
+    """The family a run belongs to, from its directory ``<stamp>-<sha>-<family>``.
+
+    Split at most twice, because family names carry their own hyphens
+    (``db-scaling``, ``worker-sweep``, ``result-formats``).
+    """
+    parts = name.split("-", 2)
+    return parts[2] if len(parts) == 3 else "unknown"
+
+
+def _run_datasets(run_dir: pathlib.Path) -> str:
+    """The dataset tiers a run measured, from the run's own dataset.json.
+
+    Read rather than inferred: it is the run's record of what it built, and a
+    run published before that file existed says so with a dash instead of
+    claiming a tier it may not have measured.
+    """
+    try:
+        measured = json.loads((run_dir / "dataset.json").read_text())
+    except OSError, ValueError:
+        return "—"
+    return " ".join(sorted(measured)) if isinstance(measured, dict) and measured else "—"
+
+
 def _write_index(docs_dir: pathlib.Path) -> pathlib.Path:
-    """The landing page: newest run first, older ones listed."""
+    """The landing page: the newest run, the newest of each family, then all."""
     runs = sorted(
         (p for p in docs_dir.glob("*/index.md")),
         key=lambda p: p.parent.name,
@@ -641,9 +665,33 @@ def _write_index(docs_dir: pathlib.Path) -> pathlib.Path:
             + (f" · [CSV]({newest.parent.name}/summary.csv)" if summary_path.exists() else ""),
             "",
         ]
+        # Only db-scaling and full sweep the dataset tiers; every other family
+        # pins one dataset on purpose, because varying a second axis would
+        # change two things at once. With a single global "latest", a profile
+        # or worker sweep published afterwards therefore reads as though the
+        # tiers had been dropped — so each family's newest keeps its own row,
+        # and the tiers it measured are stated rather than left to be guessed.
+        by_family: dict[str, pathlib.Path] = {}
+        for run in runs:  # newest first, so the first of each family wins
+            by_family.setdefault(_run_family(run.parent.name), run)
+        lines += [
+            "## Latest by family",
+            "",
+            _table(
+                ["family", "run", "datasets"],
+                [
+                    [
+                        f"`{family}`",
+                        f"[{run.parent.name}]({run.parent.name}/index.md)",
+                        _run_datasets(run.parent),
+                    ]
+                    for family, run in sorted(by_family.items())
+                ],
+            ),
+        ]
         if len(runs) > 1:
-            lines += ["## Earlier runs", ""]
-            for run in runs[1:]:
+            lines += ["## All runs", ""]
+            for run in runs:
                 lines.append(f"- [{run.parent.name}]({run.parent.name}/index.md)")
             lines.append("")
     lines += [
