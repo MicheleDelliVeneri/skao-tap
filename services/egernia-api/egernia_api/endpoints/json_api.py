@@ -47,7 +47,7 @@ log = logging.getLogger("egernia_api")
 
 class QueryRequest(BaseModel):
     query: str = Field(description="ADQL query", min_length=1)
-    lang: str = Field(default="ADQL", description="Query language (ADQL or ADQL-2.0)")
+    lang: str = Field(default="ADQL", description="Query language (ADQL, ADQL-2.0, or ADQL-2.1)")
     maxrec: int | None = Field(default=None, ge=0, description="Row limit (MAXREC)")
     format: str = Field(
         default="json",

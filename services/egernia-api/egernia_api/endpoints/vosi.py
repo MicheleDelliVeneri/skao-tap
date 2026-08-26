@@ -52,6 +52,37 @@ def _data_model_elements() -> str:
     return f'    <dataModel ivo-id="{ivoid}">ObsCore-1.1</dataModel>\n'
 
 
+# The ADQL 2.1 optional features this service implements, grouped by the
+# TAPRegExt feature-type ivo-id under which the REC defines them. Only what
+# the parser accepts AND the translation makes work in PostgreSQL is listed:
+# IN_UNIT and WITH are absent because they are refused, and CENTROID/REGION/
+# COORD1/COORD2/COORDSYS are absent because pgsphere translations for them
+# do not exist. The parser itself is the vendored ADQL 2.1 fork in
+# egernia_core.query._adql.
+_ADQL_FEATURES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "ivo://ivoa.net/std/TAPRegExt#features-adqlgeo",
+        ("AREA", "BOX", "CIRCLE", "CONTAINS", "DISTANCE", "INTERSECTS", "POINT", "POLYGON"),
+    ),
+    ("ivo://ivoa.net/std/TAPRegExt#features-adql-string", ("LOWER", "UPPER", "ILIKE")),
+    ("ivo://ivoa.net/std/TAPRegExt#features-adql-offset", ("OFFSET",)),
+    ("ivo://ivoa.net/std/TAPRegExt#features-adql-type", ("CAST",)),
+    ("ivo://ivoa.net/std/TAPRegExt#features-adql-sets", ("UNION", "EXCEPT", "INTERSECT")),
+    ("ivo://ivoa.net/std/TAPRegExt#features-adql-conditional", ("COALESCE",)),
+)
+
+
+def _adql_language_features() -> str:
+    """The <languageFeatures> elements, indented six spaces."""
+    blocks = []
+    for type_id, forms in _ADQL_FEATURES:
+        features = "".join(f"        <feature><form>{form}</form></feature>\n" for form in forms)
+        blocks.append(
+            f'      <languageFeatures type="{type_id}">\n{features}      </languageFeatures>\n'
+        )
+    return "".join(blocks)
+
+
 def _capability_elements() -> str:
     """The <capability> elements, indented two spaces, with no wrapper."""
     base = settings.base_url
@@ -62,8 +93,9 @@ def _capability_elements() -> str:
 {_data_model_elements()}    <language>
       <name>ADQL</name>
       <version ivo-id="ivo://ivoa.net/std/ADQL#v2.0">2.0</version>
-      <description>ADQL 2.0 translated to PostgreSQL/pg_sphere</description>
-    </language>
+      <version ivo-id="ivo://ivoa.net/std/ADQL#v2.1">2.1</version>
+      <description>ADQL translated to PostgreSQL/pg_sphere</description>
+{_adql_language_features()}    </language>
     <outputFormat><mime>application/x-votable+xml</mime><alias>votable</alias></outputFormat>
     <outputFormat><mime>text/csv</mime><alias>csv</alias></outputFormat>
     <outputFormat><mime>text/tab-separated-values</mime><alias>tsv</alias></outputFormat>
