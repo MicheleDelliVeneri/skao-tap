@@ -173,9 +173,9 @@ queue.
       name: {{ include "egernia.fullname" . }}-tap-api
       port:
         name: http
-{{- /* the JSON API: same service, own prefix — routed too, or a deployment
-       behind an ingress serves VO clients and refuses every
-       machine-to-machine caller */}}
+# the JSON API: same service, own prefix — routed too, or a
+# deployment behind an ingress serves VO clients and refuses every
+# machine-to-machine caller
 - path: /api/v1
   pathType: Prefix
   backend:
@@ -183,9 +183,9 @@ queue.
       name: {{ include "egernia.fullname" . }}-tap-api
       port:
         name: http
-{{- /* the rest of the same service: OpenAPI, /docs, the health probes and the
-       metrics exposition. Last, and a bare prefix, so the two above still win
-       on longest-prefix match. */}}
+# the rest of the same service: OpenAPI, /docs, the health probes and
+# the metrics exposition. Last, and a bare prefix, so the two above
+# still win on longest-prefix match.
 - path: /
   pathType: Prefix
   backend:
@@ -194,7 +194,7 @@ queue.
       port:
         name: http
 {{- if and .Values.prometheus.enabled .Values.ingress.exposePrometheus }}
-{{- /* unauthenticated: see ingress.exposePrometheus in values.yaml */}}
+# unauthenticated: see ingress.exposePrometheus in values.yaml
 - path: /prometheus
   pathType: Prefix
   backend:
