@@ -15,7 +15,7 @@ import egernia_core.db
 import pytest
 from egernia_core import uws
 
-JOB_KEYS = [c.strip() for c in uws.JOB_COLUMNS.split(",")]
+JOB_KEYS = list(uws.JOB_COLUMNS)
 
 
 class FakeColumn:

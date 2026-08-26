@@ -55,7 +55,7 @@ UPDATE uws.jobs
          ORDER BY creation_time
          FOR UPDATE SKIP LOCKED
          LIMIT 1)
-RETURNING {uws.JOB_COLUMNS}
+RETURNING {uws.JOB_COLUMNS_SQL}
 """
 
 
