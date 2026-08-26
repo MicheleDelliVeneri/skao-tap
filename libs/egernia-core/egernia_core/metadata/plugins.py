@@ -24,10 +24,10 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cache
-from importlib.metadata import entry_points
 
 from pydantic import BaseModel
 
+from .. import load_entry_points
 from ..config import settings
 from .schema_gen import TableSpec, build_tables
 
@@ -63,35 +63,28 @@ class MetadataPlugin:
 
     @property
     def tables(self) -> list[TableSpec]:
-        cached = _TABLES_CACHE.get(self.name)
-        if cached is None:
-            cached = build_tables(
-                self.model,
-                self.sql_schema,
-                self.root_table,
-                self.id_fields or None,
-                self.child_table_prefix,
-            )
-            _TABLES_CACHE[self.name] = cached
-        return cached
+        return _tables(self)
 
 
-_TABLES_CACHE: dict[str, list[TableSpec]] = {}
+# MetadataPlugin is eq=False, so instances hash by identity and cache safely.
+@cache
+def _tables(plugin: MetadataPlugin) -> list[TableSpec]:
+    return build_tables(
+        plugin.model,
+        plugin.sql_schema,
+        plugin.root_table,
+        plugin.id_fields or None,
+        plugin.child_table_prefix,
+    )
 
 
 @cache
 def discovered_plugins() -> dict[str, MetadataPlugin]:
     """All plugins installed in this environment, by name."""
     plugins: dict[str, MetadataPlugin] = {}
-    for entry in entry_points(group=ENTRY_POINT_GROUP):
-        try:
-            plugin = entry.load()
-        except Exception:
-            log.exception("failed to load metadata plugin %r", entry.name)
-            continue
-        if not isinstance(plugin, MetadataPlugin):
-            log.error("entry point %r is not a MetadataPlugin; ignoring", entry.name)
-            continue
+    for _, plugin in load_entry_points(
+        ENTRY_POINT_GROUP, lambda obj: isinstance(obj, MetadataPlugin), "metadata"
+    ):
         if plugin.name in plugins:
             log.error("duplicate metadata plugin name %r; keeping the first", plugin.name)
             continue

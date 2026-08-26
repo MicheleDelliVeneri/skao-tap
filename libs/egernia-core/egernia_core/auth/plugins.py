@@ -13,15 +13,12 @@ domains: a package registers an :class:`AuthPlugin` under the
 ``egernia.auth`` entry-point group and ``TAP_AUTH_PLUGIN`` selects it.
 """
 
-import logging
 from abc import ABC, abstractmethod
 from functools import cache
-from importlib.metadata import entry_points
 
+from .. import load_entry_points
 from ..config import settings
 from .tokens import Principal
-
-log = logging.getLogger("egernia_core")
 
 ENTRY_POINT_GROUP = "egernia.auth"
 
@@ -141,18 +138,13 @@ class AuthPlugin(ABC):
 @cache
 def discovered_auth_plugins() -> dict[str, type[AuthPlugin]]:
     """All authorisation plugins installed in this environment, by name."""
-    plugins: dict[str, type[AuthPlugin]] = {}
-    for entry in entry_points(group=ENTRY_POINT_GROUP):
-        try:
-            plugin = entry.load()
-        except Exception:  # a broken third-party plugin must not hide the rest
-            log.exception("auth plugin %r failed to load", entry.name)
-            continue
-        if not (isinstance(plugin, type) and issubclass(plugin, AuthPlugin)):
-            log.error("auth plugin %r is not an AuthPlugin subclass", entry.name)
-            continue
-        plugins[entry.name] = plugin
-    return plugins
+    return dict(
+        load_entry_points(
+            ENTRY_POINT_GROUP,
+            lambda obj: isinstance(obj, type) and issubclass(obj, AuthPlugin),
+            "auth",
+        )
+    )
 
 
 def active_auth_plugin() -> AuthPlugin | None:

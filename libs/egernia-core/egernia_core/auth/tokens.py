@@ -80,7 +80,7 @@ class IAMTokenVerifier:
         timeout_s: float = 5.0,
         well_known_url: str | None = None,
         allow_any_audience: bool = False,
-        group_claims: tuple[str, ...] = ("groups", "wlcg.groups"),
+        group_claims: tuple[str, ...] = DEFAULT_GROUP_CLAIMS,
     ):
         if not issuer:
             raise ServiceError("an IAM issuer is required to verify tokens (TAP_IAM_ISSUER)")
