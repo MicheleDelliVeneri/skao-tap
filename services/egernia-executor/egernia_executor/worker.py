@@ -112,11 +112,7 @@ class _AbortWatchdog:
                     # sent only while the backend still runs this job's
                     # cursor, so a reused PID is never hit.
                     if cancels < self.TERMINATE_AFTER_CANCELS:
-                        conn.execute(
-                            "SELECT pg_cancel_backend(pid) FROM pg_stat_activity"
-                            " WHERE pid = %s AND query LIKE %s",
-                            (self._pid, marker),
-                        )
+                        uws.signal_backend(conn, self._pid, marker)
                         cancels += 1
                     else:
                         log.warning(
@@ -125,11 +121,7 @@ class _AbortWatchdog:
                             self._pid,
                             cancels,
                         )
-                        conn.execute(
-                            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
-                            " WHERE pid = %s AND query LIKE %s",
-                            (self._pid, marker),
-                        )
+                        uws.signal_backend(conn, self._pid, marker, terminate=True)
             except Exception:  # never let monitoring kill the execution path
                 log.exception("abort watchdog check failed for job %s", self._job_id)
 
@@ -154,18 +146,10 @@ def _reap_backend(job_id: str, pid: int | None) -> None:
                 if row is None or row[0] != "active":
                     return
                 if attempt < 4:
-                    conn.execute(
-                        "SELECT pg_cancel_backend(pid) FROM pg_stat_activity"
-                        " WHERE pid = %s AND query LIKE %s",
-                        (pid, marker),
-                    )
+                    uws.signal_backend(conn, pid, marker)
                 else:
                     log.warning("backend %d survived cancels; terminating", pid)
-                    conn.execute(
-                        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
-                        " WHERE pid = %s AND query LIKE %s",
-                        (pid, marker),
-                    )
+                    uws.signal_backend(conn, pid, marker, terminate=True)
                 time.sleep(0.5)
     except Exception:
         log.exception("failed to reap backend %s", pid)

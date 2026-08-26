@@ -184,6 +184,22 @@ def job_query_marker(job_id: str) -> str:
     return f"%tap_job_{job_id}%"
 
 
+def signal_backend(conn, pid: int, marker: str, *, terminate: bool = False) -> None:
+    """Cancel — or terminate — the backend running this job's statement.
+
+    The ``query LIKE`` guard is the safety property, not decoration: the
+    signal lands only while that backend is still running the tagged
+    statement, so a PID PostgreSQL has since handed to somebody else is never
+    hit. Written once because it was written five times, and a call site that
+    forgot the guard would cancel an unrelated query.
+    """
+    action = "pg_terminate_backend" if terminate else "pg_cancel_backend"
+    conn.execute(
+        f"SELECT {action}(pid) FROM pg_stat_activity WHERE pid = %s AND query LIKE %s",
+        (pid, marker),
+    )
+
+
 def abort_job(conn, job: dict) -> None:
     """Move an active job to ABORTED and cancel its running statement.
 
@@ -208,10 +224,7 @@ def abort_job(conn, job: dict) -> None:
     pid = row[0]
     marker = job_query_marker(job["job_id"])
     for _ in range(CANCEL_RETRIES):
-        conn.execute(
-            "SELECT pg_cancel_backend(pid) FROM pg_stat_activity WHERE pid = %s AND query LIKE %s",
-            (pid, marker),
-        )
+        signal_backend(conn, pid, marker)
         conn.commit()
         time.sleep(CANCEL_RETRY_DELAY_S)
         active = conn.execute(
