@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import dataclasses
 import logging
 import math
@@ -25,6 +26,7 @@ import multiprocessing
 import os
 import time
 import typing
+import urllib.parse
 
 import httpx
 import psutil
@@ -207,6 +209,40 @@ async def _issue_sync(
     )
 
 
+async def _raw_phase(url: str) -> str | None:
+    """The job's phase, over a raw HTTP/1.1 GET — or None to use httpx.
+
+    The phase poll is >90% of every request an async scenario makes, and
+    httpx+httpcore cost ~1.6 ms of pure Python per request (pool scans,
+    socket-liveness checks, connection churn) — measured pinning a generator
+    process at ~600 polls/s where this path costs tens of microseconds. One
+    short-lived connection per poll: the response is a few bytes of
+    PlainTextResponse with a Content-Length, so Connection: close and
+    read-to-EOF is the whole protocol. Anything unexpected returns None and
+    that poll falls back to httpx, so correctness never rests on this path.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        reader, writer = await asyncio.open_connection(parsed.hostname, parsed.port or 80)
+        try:
+            writer.write(
+                f"GET {parsed.path} HTTP/1.1\r\nHost: {parsed.netloc}\r\n"
+                "Connection: close\r\n\r\n".encode()
+            )
+            await writer.drain()
+            data = await asyncio.wait_for(reader.read(65536), timeout=30.0)
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+        head, sep, body = data.partition(b"\r\n\r\n")
+        if not sep or not head.startswith(b"HTTP/1.1 200"):
+            return None
+        return body.decode("ascii", "replace").strip()
+    except Exception:
+        return None
+
+
 async def _issue_async(
     client: httpx.AsyncClient,
     base_url: str,
@@ -218,6 +254,7 @@ async def _issue_async(
     poll_fine_window_s: float = 5.0,
     poll_age_fraction: float = 0.1,
     timeout_s: float = 600.0,
+    poll_gate: asyncio.Semaphore | None = None,
 ) -> None:
     """One UWS job, timed from submission to a terminal phase.
 
@@ -232,6 +269,13 @@ async def _issue_async(
     ttfb = math.nan
     size = 0
     request_id = ""
+    # Polls (and the result fetch) pass through the gate; the submission does
+    # not, because it is the one request whose schedule the run promises to
+    # keep. Waiting on a semaphore costs O(1) per waiter, where letting the
+    # same excess queue inside httpcore's pool costs a rescan of the pool
+    # state per event — measured at 65% of the generator's whole CPU once a
+    # few hundred poll requests piled up.
+    gate = poll_gate if poll_gate is not None else contextlib.nullcontext()
     try:
         created = await client.post(
             f"{base_url}/tap/async",
@@ -261,8 +305,11 @@ async def _issue_async(
             # fine-grained because that is where the SLO is decided.
             interval = poll_interval
             while time.perf_counter() < deadline:
-                phase_response = await client.get(f"{location}/phase")
-                phase = phase_response.text.strip()
+                async with gate:
+                    phase = await _raw_phase(f"{location}/phase")
+                    if phase is None:
+                        phase_response = await client.get(f"{location}/phase")
+                        phase = phase_response.text.strip()
                 if phase in ("COMPLETED", "ERROR", "ABORTED"):
                     break
                 await asyncio.sleep(interval)
@@ -270,7 +317,8 @@ async def _issue_async(
                 if age > poll_fine_window_s:
                     interval = min(max(poll_interval, age * poll_age_fraction), poll_interval_max)
             if phase == "COMPLETED":
-                result = await client.get(f"{location}/results/result")
+                async with gate:
+                    result = await client.get(f"{location}/results/result")
                 size = len(result.content)
                 status = result.status_code
             else:
@@ -529,13 +577,18 @@ async def open_loop(
     in_flight: set[asyncio.Task] = set()
     dropped = 0
 
-    # Sized by what can be outstanding, not by the rate. The rate heuristic
-    # gave an async scenario offering 24 jobs/s a 112-connection pool while it
-    # held thousands of jobs at once, so the generator queued on its own pool —
-    # and a socket waiting for a slot is not busy, so the CPU guard cannot see
-    # it. These are ceilings rather than allocations: httpx opens what it needs,
-    # so a generous one costs nothing and removes a silent limiter.
-    async with _client(min(max_in_flight, 8192), timeout_s) as client:
+    # Sync mode holds one streaming request per outstanding item, so its pool
+    # is sized by what can be outstanding. Async mode is the opposite: a job
+    # in flight holds no connection between polls, so concurrent *requests*
+    # stay near (poll rate x round trip) — tens — and the pool must stay
+    # small, because httpcore rescans its pool state per event: sizing it by
+    # outstanding jobs let thousands of pooled connections and queued polls
+    # accumulate, and that rescan was 65% of the generator's CPU. The poll
+    # gate below keeps the excess in an O(1) semaphore instead; submissions
+    # bypass it, so the offered schedule is never gated.
+    pool = 128 if mode == "async" else min(max_in_flight, 8192)
+    poll_gate = asyncio.Semaphore(64) if mode == "async" else None
+    async with _client(pool, timeout_s) as client:
         watcher = asyncio.create_task(recorder.watch_self(stop))
         # A fixed seed, not hash("arrivals"): str hashing is randomised per
         # process, so that would have made the arrival pattern differ between
@@ -589,7 +642,9 @@ async def open_loop(
                     )
                 else:
                     task = asyncio.create_task(
-                        _issue_async(client, base_url, entry, offered, recorder)
+                        _issue_async(
+                            client, base_url, entry, offered, recorder, poll_gate=poll_gate
+                        )
                     )
                 in_flight.add(task)
                 task.add_done_callback(in_flight.discard)
