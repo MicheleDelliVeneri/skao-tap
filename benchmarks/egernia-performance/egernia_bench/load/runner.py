@@ -38,6 +38,24 @@ log = logging.getLogger("egernia_bench.load")
 # pg_stat_activity and a line in the executor's log.
 REQUEST_ID_HEADER = "X-Request-ID"
 
+# Which replica answered, in that replica's own words. The service has sent
+# this since it started setting `SERVED_BY_HEADER` — precisely so that "which
+# pod served this request" stops being an inference — and this generator spent
+# that whole time reading `X-Pod-Name`, a header nothing sends. So every sample
+# recorded an empty pod, the code here concluded "the service does not
+# advertise its pod name", and per-pod attribution was left to Prometheus,
+# which can say how busy each pod was but not which pod answered *this*
+# request. Two commits that never met.
+#
+# It matters most where it was missed: a closed-loop client holds keep-alive
+# connections, so kube-proxy assigns each client to a pod once per connection
+# and not per request. At low concurrency against several replicas that is a
+# coin flip which then persists for the whole window — two clients that land on
+# one pod measure one pod's throughput and the rung reads half. Populating this
+# makes that visible per measurement instead of something the median of three
+# repetitions absorbs.
+SERVED_BY_HEADER = "X-Served-By"
+
 
 @dataclasses.dataclass(slots=True)
 class Sample:
@@ -177,10 +195,7 @@ async def _issue_sync(
         ) as response:
             status = response.status_code
             request_id = response.headers.get(REQUEST_ID_HEADER, "")
-            # Only if the deployment chose to say; the service does not
-            # advertise its pod name, so this is usually empty and per-pod
-            # attribution comes from Prometheus instead.
-            pod = response.headers.get("X-Pod-Name", "")
+            pod = response.headers.get(SERVED_BY_HEADER, "")
             async for chunk in response.aiter_bytes():
                 if math.isnan(ttfb):
                     ttfb = time.perf_counter() - t0
@@ -231,6 +246,7 @@ async def _issue_async(
     ttfb = math.nan
     size = 0
     request_id = ""
+    pod = ""
     try:
         created = await client.post(
             f"{base_url}/tap/async",
@@ -239,6 +255,10 @@ async def _issue_async(
         )
         status = created.status_code
         request_id = created.headers.get(REQUEST_ID_HEADER, "")
+        # The pod that accepted the job, which is not necessarily the executor
+        # that ran it — the point of recording it is the same routing question
+        # the sync path asks.
+        pod = created.headers.get(SERVED_BY_HEADER, "")
         location = created.headers.get("location", "")
         if not location:
             error = "no-job-location"
@@ -283,14 +303,14 @@ async def _issue_async(
             ttfb_s=(0.0 if math.isnan(ttfb) else ttfb),
             response_bytes=size,
             rows=-1,
-            pod="",
+            pod=pod,
             mode="async",
             request_id=request_id,
         )
     )
 
 
-def _client(concurrency: int, timeout_s: float) -> httpx.AsyncClient:
+def _client(concurrency: int, timeout_s: float, token: str | None = None) -> httpx.AsyncClient:
     # Connection limits above the offered concurrency, and keep-alive on: a
     # generator that reconnects per request measures TCP setup, and one that
     # queues internally on a small pool measures its own pool.
@@ -299,7 +319,16 @@ def _client(concurrency: int, timeout_s: float) -> httpx.AsyncClient:
         max_keepalive_connections=max(concurrency * 2, 64),
         keepalive_expiry=60.0,
     )
-    return httpx.AsyncClient(limits=limits, timeout=httpx.Timeout(timeout_s), http2=False)
+    # One bearer token for the whole rung, on the client rather than per
+    # request. That is what a client does, and it is not a shortcut: the
+    # service caches signing keys but never principals, so every request still
+    # pays a full RS256 verification. Absent (the default) means the request
+    # carries no Authorization header at all, which is what every other family
+    # measures.
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    return httpx.AsyncClient(
+        limits=limits, timeout=httpx.Timeout(timeout_s), http2=False, headers=headers
+    )
 
 
 async def closed_loop(
@@ -312,6 +341,7 @@ async def closed_loop(
     mode: str = "sync",
     response_format: str = "csv",
     timeout_s: float = 120.0,
+    token: str | None = None,
 ) -> tuple[Recorder, float]:
     """N clients, each issuing the next request as soon as the last finishes.
 
@@ -326,7 +356,7 @@ async def closed_loop(
     warm = Recorder()  # discarded: it exists to fill caches and pools
     stop = asyncio.Event()
 
-    async with _client(concurrency, timeout_s) as client:
+    async with _client(concurrency, timeout_s, token) as client:
         watcher = asyncio.create_task(recorder.watch_self(stop))
 
         async def worker(target: Recorder, until: float) -> None:
@@ -398,6 +428,7 @@ def _closed_loop_share(payload: dict) -> tuple[list, list, float]:
             mode=payload["mode"],
             response_format=payload["response_format"],
             timeout_s=payload["timeout_s"],
+            token=payload["token"],
         )
     )
     return recorder.samples, recorder.cpu_samples, elapsed
@@ -417,6 +448,7 @@ def closed_loop_sharded(
     mode: str = "sync",
     response_format: str = "csv",
     timeout_s: float = 120.0,
+    token: str | None = None,
 ) -> tuple[Recorder, float]:
     """A closed loop split across processes, so the generator scales.
 
@@ -446,6 +478,7 @@ def closed_loop_sharded(
             "mode": mode,
             "response_format": response_format,
             "timeout_s": timeout_s,
+            "token": token,
         }
         for index, share in enumerate(shares)
         if share > 0
@@ -503,6 +536,7 @@ async def open_loop(
     timeout_s: float = 600.0,
     arrival_seed: int = 90210,
     max_in_flight: int = 4096,
+    token: str | None = None,
 ) -> tuple[Recorder, list[dict]]:
     """Arrivals at a schedule, whether or not the service keeps up.
 
@@ -528,7 +562,7 @@ async def open_loop(
     # and a socket waiting for a slot is not busy, so the CPU guard cannot see
     # it. These are ceilings rather than allocations: httpx opens what it needs,
     # so a generous one costs nothing and removes a silent limiter.
-    async with _client(min(max_in_flight, 8192), timeout_s) as client:
+    async with _client(min(max_in_flight, 8192), timeout_s, token) as client:
         watcher = asyncio.create_task(recorder.watch_self(stop))
         # A fixed seed, not hash("arrivals"): str hashing is randomised per
         # process, so that would have made the arrival pattern differ between

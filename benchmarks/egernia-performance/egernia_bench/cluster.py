@@ -174,6 +174,24 @@ def deployed_image_tag() -> str | None:
         return None
 
 
+def api_image() -> str:
+    """The image reference the API deployment is actually running.
+
+    Read from the deployment rather than reassembled from `image.registry` and
+    the pinned tag: anything else the run deploys beside the service (the OIDC
+    stub the authenticated rungs need a Python for) should reuse the image this
+    run built, and a second opinion about what that reference is would be one
+    more thing that can quietly disagree.
+    """
+    return kubectl(
+        "get",
+        "deploy",
+        f"{RELEASE}-tap-api",
+        "-o",
+        "jsonpath={.spec.template.spec.containers[0].image}",
+    ).strip()
+
+
 def verify_running_images(expected_tag: str, timeout_s: float = 180.0) -> None:
     """Refuse to measure pods that are not running the images just built.
 
@@ -357,12 +375,21 @@ def install_monitoring() -> None:
     kubectl("rollout", "status", "-n", "benchmon", "deploy/kube-state-metrics", "--timeout=180s")
 
 
-def install_chart(overrides: dict[str, str] | None = None) -> None:
+def install_chart(
+    overrides: dict[str, str] | None = None, values_files: list[str] | None = None
+) -> None:
     """Deploy the chart, always pinning the image tag this run is measuring.
 
     Injected here rather than left to the values file so that every later
     upgrade — switching an autoscaler on, changing a replica count — cannot
     quietly revert the deployment to a different build.
+
+    ``values_files`` layers whole values files over config/chart-values.yaml,
+    for a scenario that changes a *block* rather than a scalar: the
+    authenticated rungs need an `auth:` tree with a nested policy map, and
+    expressing that as `--set` flags would put a security policy in argv where
+    a typo is invisible. Like every override here it lasts exactly one upgrade,
+    so a caller that wants it to survive the next one has to pass it again.
     """
     overrides = dict(overrides or {})
     if _image_tag:
@@ -377,6 +404,7 @@ def install_chart(overrides: dict[str, str] | None = None) -> None:
         f"kind-{CLUSTER}",
         "--values",
         str(SUITE / "config/chart-values.yaml"),
+        *[arg for path in (values_files or []) for arg in ("--values", str(path))],
         "--wait",
         "--timeout",
         "10m",

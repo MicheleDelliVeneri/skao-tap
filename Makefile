@@ -11,6 +11,7 @@
 #   make benchmark-result-formats         every result writer over the same rows
 #   make benchmark-stress                 just the stress classes (Q09/Q11/Q13/Q14)
 #   make benchmark-shedding               held overload: 503s versus socket drops
+#   make benchmark-profile                per-request CPU by subsystem, and a token's cost
 #   make benchmark-replicas               a bracketed capacity per replica count
 #   make benchmark-workers                a bracketed capacity per (workers, replicas) point
 #   make benchmark-serialize              writers only, in process, no cluster
@@ -30,6 +31,7 @@ NO_BUILD_ARG := $(if $(NO_BUILD),--no-build,)
 
 .PHONY: benchmark-smoke benchmark-db-scaling benchmark-fixed-scaling \
         benchmark-keda benchmark-result-formats benchmark-stress benchmark-shedding benchmark-replicas benchmark-workers benchmark-serialize \
+        benchmark-profile \
         benchmark-full benchmark-report benchmark-setup \
         benchmark-teardown benchmark-publish benchmark-help
 
@@ -65,6 +67,16 @@ benchmark-replicas:
 
 benchmark-workers:
 	$(BENCH) workers $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASET),--dataset $(DATASET),)
+
+# Package 18. Needs py-spy on this interpreter and passwordless sudo: the
+# worker runs in the node's namespaces, so reading its stacks is a root
+# operation on the host.
+#   uv pip install --python .venv/bin/python py-spy==0.4.2
+# NO_AUTH=1 skips the authenticated rungs (no OIDC stub, no chart upgrades).
+# BLOCKING=1 pauses the worker to sample it: accurate, and measured here at
+# -74% throughput plus a liveness-probe restart. See config/scenarios.yaml.
+benchmark-profile:
+	$(BENCH) profile $(RESUME_ARG) $(NO_BUILD_ARG) $(if $(DATASET),--dataset $(DATASET),) $(if $(CONCURRENCY),--concurrency $(CONCURRENCY),) $(if $(NO_AUTH),--no-auth,) $(if $(BLOCKING),--blocking,)
 
 # No cluster: the writers on their own, so a change to the serialisation path
 # can be measured in seconds instead of an afternoon.

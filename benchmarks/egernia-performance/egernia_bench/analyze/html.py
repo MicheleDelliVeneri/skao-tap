@@ -259,6 +259,90 @@ def render(run_dir: pathlib.Path, summary: dict, figures: list) -> pathlib.Path:
             )
         )
 
+    # -- where the request's CPU goes (package 18) --------------------------
+    profile = summary.get("profile") or {}
+    if profile:
+        sections.append("<h2>Per-request CPU</h2>")
+        rungs = profile.get("rungs") or {}
+        sections.append(
+            _table(
+                [
+                    "rung",
+                    "authenticated",
+                    "rps",
+                    "p95 (ms)",
+                    "API CPU (cores)",
+                    "CPU ms/request",
+                    "errors",
+                ],
+                [
+                    [
+                        name,
+                        "yes" if rung["authenticated"] else "no",
+                        rung["rps"]["mean"],
+                        rung["p95_ms"],
+                        rung["api_cpu_cores"]["mean"],
+                        rung["cpu_ms_per_request"]["mean"],
+                        f"{100 * rung['error_fraction']:.2f}%",
+                    ]
+                    for name, rung in rungs.items()
+                ],
+                numeric={2, 3, 4, 5},
+            )
+        )
+        attribution = profile.get("attribution") or {}
+        if attribution:
+            total = sum((attribution.get("by_subsystem_ms") or {}).values()) or 1.0
+            sections.append(
+                f"<p>{attribution['samples']:,} GIL-held samples of the saturated worker; "
+                f"{100 * attribution['named_fraction']:.1f}% attributed to a named subsystem, "
+                f"{100 * attribution['application_fraction']:.1f}% of it in the application "
+                "rather than in the server, the router or the event loop.</p>"
+            )
+            sections.append(
+                _table(
+                    ["subsystem", "ms/request", "share"],
+                    [
+                        [name, ms, f"{100 * ms / total:.1f}%"]
+                        for name, ms in sorted(
+                            (attribution.get("by_subsystem_ms") or {}).items(),
+                            key=lambda kv: -kv[1],
+                        )
+                    ],
+                    numeric={1},
+                )
+            )
+            sections.append("<h3>Busiest named frames</h3>")
+            sections.append(
+                _table(
+                    ["frame", "share of GIL-held samples"],
+                    [
+                        [entry["frame"], f"{100 * entry['fraction']:.1f}%"]
+                        for entry in attribution.get("top_frames") or []
+                    ],
+                )
+            )
+        cost = profile.get("authentication_cost") or {}
+        if cost:
+            sections.append("<h3>What a verified bearer token costs</h3>")
+            sections.append(
+                _table(
+                    ["rung", "rps", "throughput cost", "CPU ms/request", "added ms/request"],
+                    [
+                        [
+                            name,
+                            entry["rps"],
+                            f"{100 * (entry['throughput_cost_fraction'] or 0.0):.1f}%",
+                            entry["cpu_ms_per_request"],
+                            entry["cpu_ms_added_per_request"],
+                        ]
+                        for name in ("authverify", "authgated")
+                        if (entry := cost.get(name))
+                    ],
+                    numeric={1, 3, 4},
+                )
+            )
+
     # -- environment --------------------------------------------------------
     sections.append("<h2>Environment</h2>")
     cluster = environment.get("cluster") or {}

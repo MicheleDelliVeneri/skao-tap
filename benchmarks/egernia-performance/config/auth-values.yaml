@@ -1,0 +1,49 @@
+# Chart values for the authenticated rungs (package 18), layered over
+# chart-values.yaml. Nothing else about the deployment changes: the whole
+# point is a rung that differs from the unauthenticated one in exactly one
+# thing, so the difference in throughput is the cost of authentication and
+# not the cost of a second configuration.
+#
+# The issuer is the in-cluster stub `egernia_bench.collect.oidc` deploys, and
+# these two strings have to agree with it: the verifier refuses a discovery
+# document that names a different issuer, and refuses a token addressed to a
+# different audience.
+auth:
+  enabled: true
+  plugin: iam-groups
+  # Every request needs a verified token — reads included. This is what makes
+  # /tap/sync pay for verification, which is the number being measured.
+  requireToken: true
+  # …and this is what stops it being reopened. With anonymousQueries on, the
+  # TAP paths are exempt from the token requirement and the rung would measure
+  # nothing at all.
+  anonymousQueries: false
+  iam:
+    issuer: http://egernia-oidc.default.svc.cluster.local:8080
+    audience: egernia-bench
+    groupClaims: groups,wlcg.groups
+    # The service's default. Left at it deliberately: a shorter cache would
+    # make the rung partly a measurement of the stub's HTTP server, and a
+    # longer one would hide a per-request cost that a real deployment pays
+    # once every five minutes.
+    jwksCacheSeconds: 300
+  # Overridden per rung by --set:
+  #   {none}  verify every token, enforce nothing  (authentication only)
+  #   the seven operations                          (authentication + a decision)
+  # Enforcing part of the query surface is refused by the chart, so the second
+  # rung takes all four query operations together, which is also what a
+  # deployment that gates querying has to do.
+  gatedOperations: ["none"]
+  # Present for both rungs, because the chart requires a policy from
+  # plugin=iam-groups whether or not anything is gated — and because the group
+  # below is the one the minted tokens carry, so the gated rung measures an
+  # authorisation decision that succeeds. A rung where every request is denied
+  # would measure the 403 path.
+  roles:
+    metadata.ingest: {groups: ["/egernia/bench"]}
+    metadata.amend: {groups: ["/egernia/bench"]}
+    metadata.delete: {groups: ["/egernia/bench"]}
+    jobs.create: {groups: ["/egernia/bench"]}
+    jobs.mutate: {groups: ["/egernia/bench"]}
+    jobs.delete: {groups: ["/egernia/bench"]}
+    query.sync: {groups: ["/egernia/bench"]}

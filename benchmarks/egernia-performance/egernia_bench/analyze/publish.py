@@ -206,6 +206,112 @@ def _worker_table(summary: dict) -> str:
     )
 
 
+def _profile_section(summary: dict) -> list[str]:
+    """Package 18: the per-request CPU attribution, for the public page.
+
+    Written as three tables rather than one, because they are three different
+    kinds of claim: what each rung measured, what a sampling profiler says the
+    CPU is spent on, and what enabling authentication cost. Collapsing them
+    would invite a reader to treat the profiler's shares as measured
+    throughput, which is exactly the mistake the family is arranged to avoid.
+    """
+    profile = summary.get("profile") or {}
+    if not profile:
+        return []
+    parts = [
+        "## Per-request CPU",
+        "",
+        f"One `tap-api` worker at `replicas: 1`, `workers: 1`, "
+        f"{profile.get('concurrency')} concurrent clients. `cpu ms/request` is the",
+        "pod's own CPU accounting over the window divided by the requests it",
+        "served, so it is a measured total and not a profiler's estimate.",
+        "",
+    ]
+    rungs = profile.get("rungs") or {}
+    parts.append(
+        _table(
+            [
+                "rung",
+                "token",
+                "requests/s",
+                "p95 (ms)",
+                "API CPU (cores)",
+                "cpu ms/request",
+                "errors",
+            ],
+            [
+                [
+                    f"`{name}`",
+                    "yes" if rung["authenticated"] else "no",
+                    _fmt(rung["rps"]["mean"]),
+                    _fmt(rung["p95_ms"], 0),
+                    _fmt(rung["api_cpu_cores"]["mean"], 3),
+                    _fmt(rung["cpu_ms_per_request"]["mean"], 2),
+                    f"{100 * rung['error_fraction']:.2f}%",
+                ]
+                for name, rung in rungs.items()
+            ],
+        )
+    )
+
+    attribution = profile.get("attribution") or {}
+    if attribution:
+        by_subsystem = attribution.get("by_subsystem_ms") or {}
+        total = sum(by_subsystem.values()) or 1.0
+        parts += [
+            "### Where it goes",
+            "",
+            f"{attribution['samples']:,} GIL-held stacks sampled at 100 Hz while the",
+            "worker was saturated. A sample is attributed to the innermost frame that",
+            "names a subsystem, so stdlib time rolls up to the part of the request",
+            f"that spent it. {100 * attribution['named_fraction']:.1f}% of samples reach a",
+            f"named subsystem and {100 * attribution['application_fraction']:.1f}% of the",
+            "total is the application's own work rather than the server, the router",
+            "or the event loop.",
+            "",
+            _table(
+                ["subsystem", "ms/request", "share"],
+                [
+                    [name, _fmt(ms, 2), f"{100 * ms / total:.1f}%"]
+                    for name, ms in sorted(by_subsystem.items(), key=lambda kv: -kv[1])
+                ],
+            ),
+        ]
+
+    cost = profile.get("authentication_cost") or {}
+    if cost:
+        parts += [
+            "### What a verified bearer token costs",
+            "",
+            f"Against {_fmt(cost['unauthenticated_rps'])} rps and",
+            f"{_fmt(cost['unauthenticated_cpu_ms'], 2)} ms/request unauthenticated — the mean",
+            "of the two unauthenticated rungs either side, because the authenticated",
+            "ones are separated from them by a chart upgrade and a pod restart.",
+            "",
+            _table(
+                ["rung", "requests/s", "throughput cost", "cpu ms/request", "added ms/request"],
+                [
+                    [
+                        f"`{name}`",
+                        _fmt(entry["rps"]),
+                        f"{100 * (entry['throughput_cost_fraction'] or 0.0):.1f}%",
+                        _fmt(entry["cpu_ms_per_request"], 2),
+                        _fmt(entry["cpu_ms_added_per_request"], 2),
+                    ]
+                    for name in ("authverify", "authgated")
+                    if (entry := cost.get(name))
+                ],
+            ),
+            "`authverify` verifies every token and enforces nothing; `authgated`",
+            "additionally takes an authorisation decision on the whole query surface.",
+            "Tokens are RS256, 2,048-bit, from an in-cluster issuer whose JWKS the",
+            "service caches for its configured five minutes — so this is the cost of",
+            "verifying a signature per request, not of reaching an IAM per request.",
+            "",
+        ]
+    return parts
+
+
 def _keda_table(summary: dict) -> str:
     scenarios = summary.get("keda") or []
     if not scenarios:
@@ -432,6 +538,8 @@ def _render(summary: dict, run_id: str, published: list[tuple[str, str]]) -> str
             "timings describe conditions other than the ones intended.",
             "",
         ]
+
+    parts += _profile_section(summary)
 
     bottlenecks = summary.get("bottleneck_tally") or {}
     if bottlenecks:

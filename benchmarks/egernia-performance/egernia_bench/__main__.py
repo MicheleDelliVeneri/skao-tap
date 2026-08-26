@@ -8,6 +8,7 @@
     python -m egernia_bench result-formats
     python -m egernia_bench full
     python -m egernia_bench report [<run-dir>]
+    python -m egernia_bench profile              # per-request CPU, and a token's cost
     python -m egernia_bench serialize            # writers only, no cluster
 
 Every command that measures anything accepts --resume <run-dir> and continues
@@ -76,6 +77,7 @@ def finalise(
     keda: list[dict] | None = None,
     plan_flags: dict | None = None,
     corpus_entries: list | None = None,
+    profile: dict | None = None,
 ) -> pathlib.Path:
     """Write summary.json/csv, draw the plots, render the report."""
 
@@ -151,6 +153,10 @@ def finalise(
         },
         "invalid": json.loads(invalid_path.read_text())["reasons"] if invalid_path.exists() else [],
         "sustainable_capacity_c1": c1,
+        # Package 18. Empty for every other family: a per-request CPU
+        # attribution needs a profiler attached to a saturated worker, which
+        # no other family runs.
+        "profile": profile or {},
     }
     run.write_json("summary.json", summary)
     run.write_json("environment.json", summary["environment"])
@@ -421,6 +427,98 @@ def cmd_shedding(args) -> int:
     return 0
 
 
+def cmd_profile(args) -> int:
+    """Package 18: attribute one worker's per-request CPU, and price a token.
+
+    The concurrency is the knee of a short ladder run to its top — the lowest
+    CPU-bound rung that reaches the ladder's best throughput — unless the
+    caller pins it. Each of the other candidates is wrong in its own
+    direction: an unsaturated point attributes an idle event loop, the
+    ladder's first plateau attributes a point below the ceiling, and its
+    busiest rung attributes the queue above it.
+    """
+    cfg = runner.load_config()
+    scenario = cfg["scenarios"]["profile"]
+    if args.blocking:
+        scenario["nonblocking"] = False
+    run = runs_mod.new_run("profile", args.resume)
+    digests = runner.setup(cfg, rebuild_images=not args.no_build)
+    dataset = args.dataset or scenario["dataset"]
+    datasets = runner.ensure_dataset(cfg, [dataset], run.path / "datasets")
+    entries = build_corpus(cfg, datasets)
+    run.write_json("corpus.json", [e.as_dict() for e in entries])
+
+    results: list[dict] = []
+    concurrency = args.concurrency or scenario.get("concurrency")
+    ladder: dict = {}
+    if not concurrency:
+        # The whole short ladder, no early stop. Not a default of 4: the number
+        # 4 is a property of one host and one build, and hard-coding last
+        # week's saturation point is how a profile ends up describing a service
+        # that is no longer CPU-bound there.
+        results = runner.concurrency_sweep(
+            run,
+            cfg,
+            dataset,
+            entries,
+            quick=True,
+            levels=[int(n) for n in scenario["ladder"]],
+            repetitions=1,
+            warmup_s=float(scenario["ladder_warmup_seconds"]),
+            measure_s=float(scenario["ladder_measure_seconds"]),
+            refine_saturation=False,
+            stop_on_saturation=False,
+        )
+        tolerance = float(
+            cfg["scenarios"]["concurrency_sweep"]["signals"]["throughput_gain_below_fraction"]
+        )
+        chosen, best = runner.choose_profile_concurrency(results, tolerance=tolerance)
+        if chosen is None:
+            print("no valid measurement to choose a concurrency from", file=sys.stderr)
+            return 2
+        concurrency = chosen["concurrency"]
+        # The whole ladder is kept, so the choice can be checked rather than
+        # trusted: which rungs were CPU-bound, which tripped what, and how much
+        # throughput separated the chosen rung from its neighbours.
+        ladder = {
+            "chosen_key": chosen["key"],
+            "chosen_rps": chosen["http"]["rps"],
+            "chosen_classification": chosen["bottleneck"][0]["classification"],
+            "rule": (
+                "lowest-concurrency CPU-bound rung within"
+                f" {100 * tolerance:.0f}% of the ladder's best throughput"
+            ),
+            "best_rps": best,
+            "tolerance_fraction": tolerance,
+            "cpu_bound_rungs": [
+                r["key"]
+                for r in results
+                if any(v["classification"] == "TAP_CPU_BOUND" for v in (r.get("bottleneck") or []))
+            ],
+            "rungs": [
+                {
+                    "key": r["key"],
+                    "concurrency": r["concurrency"],
+                    "rps": r["http"]["rps"],
+                    "p95_ms": 1000 * r["http"]["latency"]["p95_s"],
+                    "classification": r["bottleneck"][0]["classification"],
+                    "saturation_signals": (r.get("saturation") or {}).get("tripped", []),
+                }
+                for r in results
+            ],
+        }
+    run.write_json("profile-concurrency.json", {"concurrency": concurrency, "ladder": ladder})
+
+    measured, report = runner.profile_api_cpu(
+        run, cfg, dataset, entries, concurrency=concurrency, with_auth=not args.no_auth
+    )
+    results += measured
+    run.write_json("profile.json", report)
+    finalise(run, cfg, results, datasets, digests, corpus_entries=entries, profile=report)
+    print(report_mod.profile_table(report))
+    return 0
+
+
 def cmd_serialize(args) -> int:
     """The writers on their own: no cluster, no database, no HTTP."""
     payload = serialize_mod.report(
@@ -554,6 +652,22 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_argument("--dataset")
     sub = add("shedding", cmd_shedding, help="held overload: 503s versus socket drops")
     sub.add_argument("--dataset")
+    sub = add("profile", cmd_profile, help="per-request CPU by subsystem, and a token's cost")
+    sub.add_argument("--dataset")
+    sub.add_argument("--concurrency", type=int, help="profile here instead of at the sweep's stop")
+    sub.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="skip the authenticated rungs (no OIDC stub, no chart upgrades)",
+    )
+    sub.add_argument(
+        "--blocking",
+        action="store_true",
+        # No per-cent sign: argparse treats one in a help string as a format
+        # specifier and refuses to build the parser at all.
+        help="pause the worker to walk its stacks: accurate, and measured here at"
+        " a three-quarters throughput loss plus a liveness-probe restart",
+    )
     sub = add("replicas", cmd_replicas, help="a bracketed capacity per replica count")
     sub.add_argument("--dataset")
     sub = add("workers", cmd_workers, help="a bracketed capacity per (workers, replicas) point")

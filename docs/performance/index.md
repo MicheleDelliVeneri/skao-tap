@@ -15,6 +15,7 @@ accumulate rather than replace, so a regression has somewhere to show up.
 
 ## Earlier runs
 
+- [20260825T163627Z-034d69ba-profile](20260825T163627Z-034d69ba-profile/index.md)
 - [20260825T005436Z-b450b0a9-db-scaling](20260825T005436Z-b450b0a9-db-scaling/index.md)
 - [20260824T140134Z-bf7e4b24-keda](20260824T140134Z-bf7e4b24-keda/index.md)
 - [20260824T102832Z-29507cbb-keda](20260824T102832Z-29507cbb-keda/index.md)
