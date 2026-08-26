@@ -516,6 +516,33 @@ def test_register_columns_prunes_what_the_relation_no_longer_has():
     assert "information_schema.columns" in delete, "prune by what the relation actually has"
 
 
+def test_a_demo_only_tier_is_not_swept_by_default():
+    """D5 exists for deploy/demo. Sweeping it by default would add 55 GiB of
+    generation to every db-scaling and full run, for a curve D1-D4 already
+    gives the shape of — but naming it explicitly must still work."""
+    from egernia_bench.__main__ import sweep_datasets
+
+    cfg = {
+        "datasets": {
+            "datasets": [
+                {"name": "D1", "target_bytes": 1},
+                {"name": "D5", "target_bytes": 2, "demo_only": True},
+            ]
+        }
+    }
+    assert sweep_datasets(cfg) == ["D1"]
+
+
+def test_the_shipped_dataset_config_keeps_d5_out_of_the_sweep():
+    from egernia_bench.__main__ import sweep_datasets
+    from egernia_bench.orchestrate import runner as runner_mod
+
+    cfg = runner_mod.load_config()
+    names = [d["name"] for d in cfg["datasets"]["datasets"]]
+    assert "D5" in names, "the demo tier should be defined alongside the others"
+    assert sweep_datasets(cfg) == ["D1", "D2", "D3", "D4"]
+
+
 # ---------------------------------------------------------------------------
 # The performance landing page
 # ---------------------------------------------------------------------------
