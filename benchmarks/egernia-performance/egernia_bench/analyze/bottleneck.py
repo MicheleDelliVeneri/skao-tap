@@ -324,11 +324,28 @@ def classify(
             )
 
     # -- memory -------------------------------------------------------------
-    api_mem_limit = limits.get("tap_api_memory_limit_bytes", 1 << 30) * serving
+    # A memory limit is a per-container ceiling, so judge the busiest pod
+    # against the per-pod limit where the run recorded one. The fleet-sum
+    # fallback (older artefacts) is wrong in both directions and kept only
+    # so reclassify still works on them: it hides one pod near its limit
+    # inside a comfortable average, and during a rollout it counts the
+    # terminating pods of the previous configuration — the worker sweep's
+    # post-upgrade rungs summed nine pods against a one-pod allowance and
+    # were called MEMORY_BOUND at 130 MiB a worker.
+    api_mem_pod = _series(metrics_rows, "tap_api_memory_max_bytes")
+    per_pod_limit = limits.get("tap_api_memory_limit_bytes", 1 << 30)
+    if api_mem_pod.size:
+        api_mem_hot = _fraction_above(api_mem_pod, 0.90 * per_pod_limit) > 0.1
+        api_mem_peak = float(api_mem_pod.max())
+        api_mem_limit = per_pod_limit
+    else:
+        api_mem_limit = per_pod_limit * serving
+        api_mem_hot = bool(api_mem.size and _fraction_above(api_mem, 0.90 * api_mem_limit) > 0.1)
+        api_mem_peak = float(api_mem.max()) if api_mem.size else None
     pg_mem_limit = limits.get("postgres_memory_limit_bytes", 6 << 30)
     oom = _series(metrics_rows, "oom_events")
     if (
-        (api_mem.size and _fraction_above(api_mem, 0.90 * api_mem_limit) > 0.1)
+        api_mem_hot
         or (pg_mem.size and _fraction_above(pg_mem, 0.90 * pg_mem_limit) > 0.1)
         or (oom.size and oom.max() > 0)
     ):
@@ -337,8 +354,9 @@ def classify(
                 "MEMORY_BOUND",
                 1.0 if (oom.size and oom.max() > 0) else 0.5,
                 {
-                    "api_peak_bytes": float(api_mem.max()) if api_mem.size else None,
+                    "api_peak_bytes": api_mem_peak,
                     "api_limit_bytes": api_mem_limit,
+                    "api_peak_is_per_pod": bool(api_mem_pod.size),
                     "postgres_peak_bytes": float(pg_mem.max()) if pg_mem.size else None,
                     "oom_events": float(oom.max()) if oom.size else 0.0,
                     "api_replicas_serving": serving,

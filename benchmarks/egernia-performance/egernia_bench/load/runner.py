@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import dataclasses
 import logging
 import math
@@ -25,6 +26,7 @@ import multiprocessing
 import os
 import time
 import typing
+import urllib.parse
 
 import httpx
 import psutil
@@ -37,6 +39,24 @@ log = logging.getLogger("egernia_bench.load")
 # id it used, which is what ties a slow request here to a statement in
 # pg_stat_activity and a line in the executor's log.
 REQUEST_ID_HEADER = "X-Request-ID"
+
+# Which replica answered, in that replica's own words. The service has sent
+# this since it started setting `SERVED_BY_HEADER` — precisely so that "which
+# pod served this request" stops being an inference — and this generator spent
+# that whole time reading `X-Pod-Name`, a header nothing sends. So every sample
+# recorded an empty pod, the code here concluded "the service does not
+# advertise its pod name", and per-pod attribution was left to Prometheus,
+# which can say how busy each pod was but not which pod answered *this*
+# request. Two commits that never met.
+#
+# It matters most where it was missed: a closed-loop client holds keep-alive
+# connections, so kube-proxy assigns each client to a pod once per connection
+# and not per request. At low concurrency against several replicas that is a
+# coin flip which then persists for the whole window — two clients that land on
+# one pod measure one pod's throughput and the rung reads half. Populating this
+# makes that visible per measurement instead of something the median of three
+# repetitions absorbs.
+SERVED_BY_HEADER = "X-Served-By"
 
 
 @dataclasses.dataclass(slots=True)
@@ -177,10 +197,7 @@ async def _issue_sync(
         ) as response:
             status = response.status_code
             request_id = response.headers.get(REQUEST_ID_HEADER, "")
-            # Only if the deployment chose to say; the service does not
-            # advertise its pod name, so this is usually empty and per-pod
-            # attribution comes from Prometheus instead.
-            pod = response.headers.get("X-Pod-Name", "")
+            pod = response.headers.get(SERVED_BY_HEADER, "")
             async for chunk in response.aiter_bytes():
                 if math.isnan(ttfb):
                     ttfb = time.perf_counter() - t0
@@ -207,6 +224,40 @@ async def _issue_sync(
     )
 
 
+async def _raw_phase(url: str) -> str | None:
+    """The job's phase, over a raw HTTP/1.1 GET — or None to use httpx.
+
+    The phase poll is >90% of every request an async scenario makes, and
+    httpx+httpcore cost ~1.6 ms of pure Python per request (pool scans,
+    socket-liveness checks, connection churn) — measured pinning a generator
+    process at ~600 polls/s where this path costs tens of microseconds. One
+    short-lived connection per poll: the response is a few bytes of
+    PlainTextResponse with a Content-Length, so Connection: close and
+    read-to-EOF is the whole protocol. Anything unexpected returns None and
+    that poll falls back to httpx, so correctness never rests on this path.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        reader, writer = await asyncio.open_connection(parsed.hostname, parsed.port or 80)
+        try:
+            writer.write(
+                f"GET {parsed.path} HTTP/1.1\r\nHost: {parsed.netloc}\r\n"
+                "Connection: close\r\n\r\n".encode()
+            )
+            await writer.drain()
+            data = await asyncio.wait_for(reader.read(65536), timeout=30.0)
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+        head, sep, body = data.partition(b"\r\n\r\n")
+        if not sep or not head.startswith(b"HTTP/1.1 200"):
+            return None
+        return body.decode("ascii", "replace").strip()
+    except Exception:
+        return None
+
+
 async def _issue_async(
     client: httpx.AsyncClient,
     base_url: str,
@@ -214,9 +265,11 @@ async def _issue_async(
     offered_at: float,
     recorder: Recorder,
     poll_interval: float = 0.25,
-    poll_interval_max: float = 2.0,
+    poll_interval_max: float = 60.0,
     poll_fine_window_s: float = 5.0,
+    poll_age_fraction: float = 0.1,
     timeout_s: float = 600.0,
+    poll_gate: asyncio.Semaphore | None = None,
 ) -> None:
     """One UWS job, timed from submission to a terminal phase.
 
@@ -231,6 +284,14 @@ async def _issue_async(
     ttfb = math.nan
     size = 0
     request_id = ""
+    # Polls (and the result fetch) pass through the gate; the submission does
+    # not, because it is the one request whose schedule the run promises to
+    # keep. Waiting on a semaphore costs O(1) per waiter, where letting the
+    # same excess queue inside httpcore's pool costs a rescan of the pool
+    # state per event — measured at 65% of the generator's whole CPU once a
+    # few hundred poll requests piled up.
+    gate = poll_gate if poll_gate is not None else contextlib.nullcontext()
+    pod = ""
     try:
         created = await client.post(
             f"{base_url}/tap/async",
@@ -239,6 +300,10 @@ async def _issue_async(
         )
         status = created.status_code
         request_id = created.headers.get(REQUEST_ID_HEADER, "")
+        # The pod that accepted the job, which is not necessarily the executor
+        # that ran it — the point of recording it is the same routing question
+        # the sync path asks.
+        pod = created.headers.get(SERVED_BY_HEADER, "")
         location = created.headers.get("location", "")
         if not location:
             error = "no-job-location"
@@ -246,24 +311,34 @@ async def _issue_async(
             ttfb = time.perf_counter() - t0  # the job exists from here
             deadline = t0 + timeout_s
             phase = "PENDING"
-            # Fine-grained while the job is young, then backing off. Every job
-            # in flight holds one of these loops, so at a few thousand
-            # outstanding jobs a flat quarter-second poll is thousands of
-            # requests a second at the service being measured — the harness
-            # bidding against the workload for the same API. The first seconds
-            # stay fine because that is where the SLO is decided; a job already
-            # three minutes into a queue does not need 4 Hz resolution.
+            # Fine-grained while the job is young, then backing off in
+            # proportion to the job's age. Every job in flight holds one of
+            # these loops, and an overloaded fleet holds thousands of jobs at
+            # once: with the old fixed 2 s ceiling those loops alone were
+            # thousands of requests a second — enough to pin the generator's
+            # core, which is exactly what invalidated keda-K2 on
+            # 20260825T220317Z (the poll storm, not the offered load). An
+            # interval of a tenth of the job's age bounds every job's measured
+            # completion error at ~10% of its own latency while the total poll
+            # rate stays roughly (jobs in flight) / (10 x mean age) — bounded,
+            # because the ages grow with the queue. The first seconds stay
+            # fine-grained because that is where the SLO is decided.
             interval = poll_interval
             while time.perf_counter() < deadline:
-                phase_response = await client.get(f"{location}/phase")
-                phase = phase_response.text.strip()
+                async with gate:
+                    phase = await _raw_phase(f"{location}/phase")
+                    if phase is None:
+                        phase_response = await client.get(f"{location}/phase")
+                        phase = phase_response.text.strip()
                 if phase in ("COMPLETED", "ERROR", "ABORTED"):
                     break
                 await asyncio.sleep(interval)
-                if time.perf_counter() - t0 > poll_fine_window_s:
-                    interval = min(interval * 1.5, poll_interval_max)
+                age = time.perf_counter() - t0
+                if age > poll_fine_window_s:
+                    interval = min(max(poll_interval, age * poll_age_fraction), poll_interval_max)
             if phase == "COMPLETED":
-                result = await client.get(f"{location}/results/result")
+                async with gate:
+                    result = await client.get(f"{location}/results/result")
                 size = len(result.content)
                 status = result.status_code
             else:
@@ -283,14 +358,14 @@ async def _issue_async(
             ttfb_s=(0.0 if math.isnan(ttfb) else ttfb),
             response_bytes=size,
             rows=-1,
-            pod="",
+            pod=pod,
             mode="async",
             request_id=request_id,
         )
     )
 
 
-def _client(concurrency: int, timeout_s: float) -> httpx.AsyncClient:
+def _client(concurrency: int, timeout_s: float, token: str | None = None) -> httpx.AsyncClient:
     # Connection limits above the offered concurrency, and keep-alive on: a
     # generator that reconnects per request measures TCP setup, and one that
     # queues internally on a small pool measures its own pool.
@@ -299,7 +374,16 @@ def _client(concurrency: int, timeout_s: float) -> httpx.AsyncClient:
         max_keepalive_connections=max(concurrency * 2, 64),
         keepalive_expiry=60.0,
     )
-    return httpx.AsyncClient(limits=limits, timeout=httpx.Timeout(timeout_s), http2=False)
+    # One bearer token for the whole rung, on the client rather than per
+    # request. That is what a client does, and it is not a shortcut: the
+    # service caches signing keys but never principals, so every request still
+    # pays a full RS256 verification. Absent (the default) means the request
+    # carries no Authorization header at all, which is what every other family
+    # measures.
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    return httpx.AsyncClient(
+        limits=limits, timeout=httpx.Timeout(timeout_s), http2=False, headers=headers
+    )
 
 
 async def closed_loop(
@@ -312,6 +396,7 @@ async def closed_loop(
     mode: str = "sync",
     response_format: str = "csv",
     timeout_s: float = 120.0,
+    token: str | None = None,
 ) -> tuple[Recorder, float]:
     """N clients, each issuing the next request as soon as the last finishes.
 
@@ -326,7 +411,7 @@ async def closed_loop(
     warm = Recorder()  # discarded: it exists to fill caches and pools
     stop = asyncio.Event()
 
-    async with _client(concurrency, timeout_s) as client:
+    async with _client(concurrency, timeout_s, token) as client:
         watcher = asyncio.create_task(recorder.watch_self(stop))
 
         async def worker(target: Recorder, until: float) -> None:
@@ -398,6 +483,7 @@ def _closed_loop_share(payload: dict) -> tuple[list, list, float]:
             mode=payload["mode"],
             response_format=payload["response_format"],
             timeout_s=payload["timeout_s"],
+            token=payload["token"],
         )
     )
     return recorder.samples, recorder.cpu_samples, elapsed
@@ -417,6 +503,7 @@ def closed_loop_sharded(
     mode: str = "sync",
     response_format: str = "csv",
     timeout_s: float = 120.0,
+    token: str | None = None,
 ) -> tuple[Recorder, float]:
     """A closed loop split across processes, so the generator scales.
 
@@ -446,6 +533,7 @@ def closed_loop_sharded(
             "mode": mode,
             "response_format": response_format,
             "timeout_s": timeout_s,
+            "token": token,
         }
         for index, share in enumerate(shares)
         if share > 0
@@ -503,6 +591,7 @@ async def open_loop(
     timeout_s: float = 600.0,
     arrival_seed: int = 90210,
     max_in_flight: int = 4096,
+    token: str | None = None,
 ) -> tuple[Recorder, list[dict]]:
     """Arrivals at a schedule, whether or not the service keeps up.
 
@@ -522,13 +611,18 @@ async def open_loop(
     in_flight: set[asyncio.Task] = set()
     dropped = 0
 
-    # Sized by what can be outstanding, not by the rate. The rate heuristic
-    # gave an async scenario offering 24 jobs/s a 112-connection pool while it
-    # held thousands of jobs at once, so the generator queued on its own pool —
-    # and a socket waiting for a slot is not busy, so the CPU guard cannot see
-    # it. These are ceilings rather than allocations: httpx opens what it needs,
-    # so a generous one costs nothing and removes a silent limiter.
-    async with _client(min(max_in_flight, 8192), timeout_s) as client:
+    # Sync mode holds one streaming request per outstanding item, so its pool
+    # is sized by what can be outstanding. Async mode is the opposite: a job
+    # in flight holds no connection between polls, so concurrent *requests*
+    # stay near (poll rate x round trip) — tens — and the pool must stay
+    # small, because httpcore rescans its pool state per event: sizing it by
+    # outstanding jobs let thousands of pooled connections and queued polls
+    # accumulate, and that rescan was 65% of the generator's CPU. The poll
+    # gate below keeps the excess in an O(1) semaphore instead; submissions
+    # bypass it, so the offered schedule is never gated.
+    pool = 128 if mode == "async" else min(max_in_flight, 8192)
+    poll_gate = asyncio.Semaphore(64) if mode == "async" else None
+    async with _client(pool, timeout_s, token) as client:
         watcher = asyncio.create_task(recorder.watch_self(stop))
         # A fixed seed, not hash("arrivals"): str hashing is randomised per
         # process, so that would have made the arrival pattern differ between
@@ -582,7 +676,9 @@ async def open_loop(
                     )
                 else:
                     task = asyncio.create_task(
-                        _issue_async(client, base_url, entry, offered, recorder)
+                        _issue_async(
+                            client, base_url, entry, offered, recorder, poll_gate=poll_gate
+                        )
                     )
                 in_flight.add(task)
                 task.add_done_callback(in_flight.discard)
@@ -599,6 +695,124 @@ async def open_loop(
         log.warning("generator could not offer %d arrivals (in-flight cap)", dropped)
     timeline.append({"step": -1, "t": time.time(), "dropped_arrivals": dropped})
     return recorder, timeline
+
+
+def _open_loop_share(payload: dict) -> tuple[list, list, list, float]:
+    """One process's share of a sharded open loop (runs in a child).
+
+    Rebuilds its own workload from the picklable ingredients with a distinct
+    seed, exactly as the closed-loop shares do, so the shares draw different
+    query streams and their union is one workload rather than N copies.
+    """
+    if payload["query_class"] is not None:
+        workload = SingleClass(payload["entries"], payload["query_class"], seed=payload["seed"])
+    else:
+        workload = Workload(payload["entries"], payload["mix"], seed=payload["seed"])
+    steps = [Step(**s) for s in payload["steps"]]
+    started = time.time()
+    recorder, timeline = asyncio.run(
+        open_loop(
+            payload["base_url"],
+            workload,
+            steps,
+            mode=payload["mode"],
+            response_format=payload["response_format"],
+            arrival_seed=payload["arrival_seed"],
+            max_in_flight=payload["max_in_flight"],
+        )
+    )
+    return recorder.samples, recorder.cpu_samples, timeline, time.time() - started
+
+
+def open_loop_sharded(
+    base_url: str,
+    *,
+    entries: list,
+    mix: dict | None,
+    query_class: str | None,
+    seed: int,
+    steps: list[Step],
+    processes: int,
+    mode: str = "sync",
+    response_format: str = "csv",
+    arrival_seed: int = 90210,
+    max_in_flight: int = 4096,
+) -> tuple[Recorder, list[dict], float]:
+    """An open loop split across processes, so the generator scales.
+
+    The async scenarios need this even at modest offered rates: every job in
+    flight holds a phase-poll loop, so a scenario that queues thousands of
+    jobs makes the generator's real request rate the poll rate, not the
+    arrival rate — one asyncio loop pinned its core exactly that way while
+    offering 24 jobs/s. Each process runs the plain open loop with an equal
+    share of every step's rate; the sum of N thinned Poisson processes at
+    rate/N is the same Poisson process at the full rate, so the offered load
+    is statistically unchanged. Distinct arrival seeds keep the shards from
+    submitting in lockstep, and the in-flight cap is split so the total
+    outstanding work stays what the config states.
+    """
+    processes = max(1, processes)
+    if processes == 1:
+        samples, cpu, timeline, elapsed = _open_loop_share(
+            {
+                "base_url": base_url,
+                "entries": entries,
+                "mix": mix,
+                "query_class": query_class,
+                "seed": seed,
+                "steps": [dataclasses.asdict(s) for s in steps],
+                "mode": mode,
+                "response_format": response_format,
+                "arrival_seed": arrival_seed,
+                "max_in_flight": max_in_flight,
+            }
+        )
+        merged = Recorder()
+        merged.samples.extend(samples)
+        merged.cpu_samples.extend(cpu)
+        return merged, timeline, elapsed
+    payloads = [
+        {
+            "base_url": base_url,
+            "entries": entries,
+            "mix": mix,
+            "query_class": query_class,
+            "seed": seed + 100 * index,
+            "steps": [
+                dataclasses.asdict(s)
+                | {
+                    "rate": s.rate / processes,
+                    "rate_end": None if s.rate_end is None else s.rate_end / processes,
+                }
+                for s in steps
+            ],
+            "mode": mode,
+            "response_format": response_format,
+            "arrival_seed": arrival_seed + 137 * index,
+            "max_in_flight": max(1, max_in_flight // processes),
+        }
+        for index in range(processes)
+    ]
+    merged = Recorder()
+    merged_timeline: list[dict] = []
+    elapsed = 0.0
+    # fork, not spawn, for the same reason as the closed-loop shards: the
+    # children re-enter this module with the parent's imports already made,
+    # and no asyncio loop is running in the parent at this point
+    ctx = multiprocessing.get_context("fork")
+    with concurrent.futures.ProcessPoolExecutor(len(payloads), mp_context=ctx) as pool:
+        for samples, cpu, timeline, share_elapsed in pool.map(_open_loop_share, payloads):
+            merged.samples.extend(samples)
+            merged.cpu_samples.extend(cpu)
+            merged_timeline.extend(timeline)
+            elapsed = max(elapsed, share_elapsed)
+    log.info(
+        "sharded open loop over %d processes: %d requests, busiest process at %.0f%% of one core",
+        len(payloads),
+        len(merged.samples),
+        100 * merged.generator_cpu_peak,
+    )
+    return merged, merged_timeline, elapsed
 
 
 def samples_to_arrow(samples: typing.Sequence[Sample]):

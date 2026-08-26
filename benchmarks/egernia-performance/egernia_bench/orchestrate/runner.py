@@ -13,6 +13,7 @@ dies at hour nine resumes at hour nine.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -29,8 +30,10 @@ from ..analyze import keda as keda_analysis
 from ..analyze import stats as stats_mod
 from ..collect import guards as guards_mod
 from ..collect import kube
+from ..collect import oidc as oidc_mod
 from ..collect import postgres as pg_mod
 from ..collect import prometheus as prom_mod
+from ..collect import pyspy as pyspy_mod
 from ..dataset import generate as dataset_mod
 from ..load import runner as load_mod
 
@@ -178,6 +181,44 @@ def limits(cfg: dict) -> dict:
     }
 
 
+def limits_with_workers(
+    limits_map: dict,
+    workers: int | None,
+    *,
+    pod_cpu: float | None = None,
+    pod_memory_bytes: int | None = None,
+) -> dict:
+    """The per-pod ceilings for the pod actually deployed.
+
+    The worker sweep deploys counts the values file does not state, and
+    `limits()` reads the file. Grading those measurements against the file's
+    count would repeat the mistake the min(cpu, workers) ceiling exists to
+    prevent: a two-worker pod judged against a one-worker ceiling reads as
+    past its limit at half load, and a four-worker pod's pool arithmetic
+    would be counted at a quarter of its real connections. The limit probe
+    also raises the pod's CPU and memory limits past the file's, for the
+    same reason in the other direction: a probe pod graded against the
+    file's limits would read as impossibly past them.
+    """
+    if (
+        pod_cpu is None
+        and pod_memory_bytes is None
+        and (workers is None or workers == limits_map.get("tap_api_workers"))
+    ):
+        return limits_map
+    out = dict(limits_map)
+    if pod_cpu is not None:
+        out["tap_api_pod_cpu_limit_cores"] = pod_cpu
+    if pod_memory_bytes is not None:
+        out["tap_api_memory_limit_bytes"] = pod_memory_bytes
+    if workers is not None:
+        out["tap_api_workers"] = workers
+    out["tap_api_cpu_limit_cores"] = min(
+        out["tap_api_pod_cpu_limit_cores"], float(out["tap_api_workers"])
+    )
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
@@ -268,6 +309,9 @@ def measure(
     concurrency: int | None = None,
     steps: list[load_mod.Step] | None = None,
     replicas: int | None = None,
+    workers: int | None = None,
+    pod_cpu_limit: float | None = None,
+    pod_memory_limit_bytes: int | None = None,
     offered_rps: float | None = None,
     repetition: int = 0,
     warmup_s: float | None = None,
@@ -276,8 +320,23 @@ def measure(
     response_format: str = "csv",
     generator_processes: int = 1,
     workload_ingredients: dict | None = None,
+    bearer_token: str | None = None,
+    during_load: contextlib.AbstractContextManager | None = None,
 ) -> dict | None:
-    """Run one load window and record everything about it."""
+    """Run one load window and record everything about it.
+
+    ``bearer_token`` makes this an authenticated measurement: the generator
+    presents it on every request, and the service verifies it on every
+    request. Recorded on the result, because "98 rps" means two different
+    things with and without it and nothing in the artefacts said which one a
+    figure was.
+
+    ``during_load`` is entered around the load phase and exited when it
+    finishes — where a profiler belongs, since a py-spy pass has to cover the
+    measured window and nothing else. It is not entered at all when the
+    measurement is skipped as already done, so a caller reading results off it
+    must cope with an empty one.
+    """
     if run.done(key):
         log.info("%s already measured, skipping", key)
         return json.loads((run.path / "state" / f"{key}.done").read_text()).get("result")
@@ -307,31 +366,54 @@ def measure(
         pg_mod.reset_statements(conn)
         before = pg_mod.snapshot(conn)
         activity_samples = [pg_mod.activity(conn)]
+        # The restart baseline, so the guard judges restarts *during* this
+        # window rather than the pods' whole history: restartCount is
+        # cumulative, and a pod that crashed once before a sweep would
+        # otherwise invalidate every later measurement it appears in.
+        restarts_before = {
+            p["pod"]: p.get("restarts") or 0
+            for p in kube.pod_timings("tap-api") + kube.pod_timings("tap-executor")
+        }
         phase("statistics snapshot")
 
         measured_elapsed = float(measure_s)
         watcher_path = run.kube_dir / f"{key}-state.jsonl"
         started = time.time()
-        with kube.StateWatcher(watcher_path):
+        with kube.StateWatcher(watcher_path), during_load or contextlib.nullcontext():
             if steps is not None:
-                recorder, timeline = asyncio.run(
-                    load_mod.open_loop(
-                        BASE_URL,
-                        workload,
-                        steps,
-                        mode=request_mode,
-                        response_format=response_format,
-                        max_in_flight=int(
-                            timing.get(
-                                "max_in_flight_async"
-                                if request_mode == "async"
-                                else "max_in_flight",
-                                4096,
-                            )
-                        ),
+                max_in_flight = int(
+                    timing.get(
+                        "max_in_flight_async" if request_mode == "async" else "max_in_flight",
+                        4096,
                     )
                 )
-                measured_elapsed = time.time() - started
+                if generator_processes > 1:
+                    # sharded for the same reason as the closed loop below —
+                    # and the async scenarios need it at even modest offered
+                    # rates, because every queued job holds a phase-poll loop
+                    assert workload_ingredients is not None
+                    recorder, timeline, measured_elapsed = load_mod.open_loop_sharded(
+                        BASE_URL,
+                        steps=steps,
+                        processes=generator_processes,
+                        mode=request_mode,
+                        response_format=response_format,
+                        max_in_flight=max_in_flight,
+                        **workload_ingredients,
+                    )
+                else:
+                    recorder, timeline = asyncio.run(
+                        load_mod.open_loop(
+                            BASE_URL,
+                            workload,
+                            steps,
+                            mode=request_mode,
+                            response_format=response_format,
+                            max_in_flight=max_in_flight,
+                            token=bearer_token,
+                        )
+                    )
+                    measured_elapsed = time.time() - started
             elif generator_processes > 1:
                 # sharded across processes: one asyncio loop tops out around
                 # one core, and the fleet under test serves more than that
@@ -344,6 +426,7 @@ def measure(
                     processes=generator_processes,
                     mode=request_mode,
                     response_format=response_format,
+                    token=bearer_token,
                     **workload_ingredients,
                 )
                 timeline = []
@@ -357,6 +440,7 @@ def measure(
                         measure_s,
                         mode=request_mode,
                         response_format=response_format,
+                        token=bearer_token,
                     )
                 )
                 timeline = []
@@ -394,6 +478,7 @@ def measure(
     window = window_end - measured_from
     http = stats_mod.summarise(recorder.samples, window)
     by_class = stats_mod.by_query_class(recorder.samples, window)
+    routing = stats_mod.served_by(recorder.samples)
     resources = aggregate_resources(metrics_rows)
     pg_summary = pg_mod.summarise(delta)
 
@@ -404,12 +489,17 @@ def measure(
         pod_timings=pod_timings,
         metrics_rows=metrics_rows,
         dropped_arrivals=dropped_arrivals,
+        restarts_before=restarts_before,
     )
     failed = [r for r in guard_results if not r.ok]
     for failure in failed:
         run.invalidate(f"{key}: {failure.name}", {"detail": failure.detail, **failure.measured})
 
-    limits_map = limits(cfg)
+    # The worker sweep deploys a count the values file does not state; every
+    # ceiling below has to be the deployed pod's, not the file's.
+    limits_map = limits_with_workers(
+        limits(cfg), workers, pod_cpu=pod_cpu_limit, pod_memory_bytes=pod_memory_limit_bytes
+    )
     # The per-pod ceilings go in as they are: classify() multiplies each of
     # them by the replicas the run actually had ready, which is the only count
     # that is also right when an autoscaler moved it mid-window. The same
@@ -430,6 +520,13 @@ def measure(
         "mode": mode,
         "concurrency": concurrency,
         "replicas": replicas,
+        # None means "whatever the values file says" — only the worker sweep
+        # varies it, and a recorded 1 on every older measurement would claim a
+        # certainty about deployments this field did not exist to observe.
+        "workers": workers,
+        # Same convention: recorded only where a measurement deployed a limit
+        # the values file does not state (the limit probe).
+        "pod_cpu_limit": pod_cpu_limit,
         "offered_rps": offered_rps,
         "repetition": repetition,
         "request_mode": request_mode,
@@ -437,12 +534,20 @@ def measure(
         # only the ones that vary it: the suite defaulted to CSV silently, so
         # every published latency was a CSV latency and nothing said so.
         "response_format": response_format,
+        # Whether the requests carried a verified bearer token. Every family
+        # but the profile one measures an unauthenticated service, and for a
+        # long time nothing said so.
+        "authenticated": bool(bearer_token),
         "window_seconds": window,
         "measured_phase_overrun_s": measured_elapsed - float(measure_s),
         "started_at": started,
         "ended_at": window_end,
         "http": http,
         "by_class": by_class,
+        # Which replicas actually answered. A rung whose clients collapsed onto
+        # one pod is a measurement of one pod, and nothing in the throughput
+        # figure says so.
+        "served_by": routing,
         "resources": {
             **resources,
             "tap_api_cpu_fraction_of_limit": resources.get("tap_api_cpu_cores_p95", 0.0)
@@ -498,9 +603,14 @@ def concurrency_sweep(
     *,
     quick: bool = False,
     replicas: int = 1,
+    workers: int | None = None,
+    pod_cpu_limit: float | None = None,
+    pod_memory_limit_bytes: int | None = None,
     kind: str = "concurrency",
     key_prefix: str = "conc",
     refine_saturation: bool = True,
+    stop_on_saturation: bool = True,
+    levels: list[int] | None = None,
     repetitions: int | None = None,
     warmup_s: float | None = None,
     measure_s: float | None = None,
@@ -525,7 +635,8 @@ def concurrency_sweep(
     baseline: dict | None = None
     previous: dict | None = None
 
-    levels = sweep["levels"][:3] if quick else sweep["levels"]
+    if levels is None:
+        levels = sweep["levels"][:3] if quick else sweep["levels"]
     for concurrency in levels:
         saturated_here = False
         reps = repetitions if repetitions is not None else (1 if quick else timing["repetitions"])
@@ -533,6 +644,11 @@ def concurrency_sweep(
         for repetition in range(reps):
             workload = load_mod.Workload(entries, mix, seed=1000 + repetition)
             key = f"{key_prefix}-{dataset}-c{concurrency}-r{repetition}"
+            # The settle pause exists so a run does not inherit its
+            # predecessor's state — a rung replayed from cache ran nothing, so
+            # there is nothing to settle, and a resumed grid would otherwise
+            # spend minutes sleeping between measurements that never happened.
+            cached = run.done(key)
             ingredients = {
                 "entries": entries,
                 "mix": mix,
@@ -549,6 +665,9 @@ def concurrency_sweep(
                 mode="closed",
                 concurrency=concurrency,
                 replicas=replicas,
+                workers=workers,
+                pod_cpu_limit=pod_cpu_limit,
+                pod_memory_limit_bytes=pod_memory_limit_bytes,
                 repetition=repetition,
                 warmup_s=warmup_s
                 if warmup_s is not None
@@ -562,7 +681,8 @@ def concurrency_sweep(
             if result:
                 measured.append(result)
                 results.append(result)
-            time.sleep(timing["settle_seconds"] if not quick else 2)
+            if not cached:
+                time.sleep(timing["settle_seconds"] if not quick else 2)
 
         if not measured:
             continue
@@ -588,6 +708,14 @@ def concurrency_sweep(
         if signals["count"] >= sweep["saturation_signals_required"]:
             saturated_here = True
 
+        if saturated_here and not stop_on_saturation:
+            # Climb anyway. The stop rule answers "has the ladder stopped
+            # rising?", which is what a capacity sweep needs; a caller that has
+            # to *choose* a rung needs to see the rungs above the first
+            # plateau, because on short windows the plateau signal fires on
+            # noise — measured: c=2 tripped it while c=4 was 10% faster.
+            previous = current
+            continue
         if saturated_here and not refine_saturation:
             break
         if saturated_here and not quick:
@@ -599,6 +727,7 @@ def concurrency_sweep(
             for repetition in range(timing["saturation_repetitions"]):
                 workload = load_mod.Workload(entries, mix, seed=2000 + repetition)
                 key = f"sat-{dataset}-c{concurrency}-r{repetition}"
+                cached = run.done(key)
                 result = measure(
                     run,
                     cfg,
@@ -615,7 +744,8 @@ def concurrency_sweep(
                 )
                 if result:
                     results.append(result)
-                time.sleep(timing["settle_seconds"])
+                if not cached:
+                    time.sleep(timing["settle_seconds"])
             break
         previous = current
     return results
@@ -628,8 +758,23 @@ def sustainable_capacity(results: list[dict], slo_p95_s: float) -> float | None:
     distribution nobody would ship, and expressing the autoscaling scenarios
     as multiples of an unusable number would make every one of them a test of
     overload rather than of scaling.
+
+    C1 must describe the *deployed* single replica, because the autoscaling
+    families that express their rates as multiples of it run at the values
+    file's defaults. So the worker sweep's off-default points are excluded:
+    the limit probe (a raised ``pod_cpu_limit`` the values file does not set)
+    and the extra-worker grid points (``workers`` other than the default 1).
+    Both carry a non-None field precisely to be recognisable here; older
+    families leave both None and are unaffected.
     """
-    usable = [r for r in results if r.get("replicas") in (1, None) and _within_slo(r, slo_p95_s)]
+    usable = [
+        r
+        for r in results
+        if r.get("replicas") in (1, None)
+        and r.get("pod_cpu_limit") is None
+        and r.get("workers") in (None, 1)
+        and _within_slo(r, slo_p95_s)
+    ]
     if not usable:
         return None
     return max(r["http"]["successful_rps"] for r in usable)
@@ -651,6 +796,7 @@ def bracketed_capacity(
     *,
     kind: str,
     replicas: int,
+    workers: int | None = None,
     slo_p95_s: float,
     signals_required: int = SATURATION_SIGNALS_REQUIRED_DEFAULT,
 ) -> dict | None:
@@ -673,7 +819,16 @@ def bracketed_capacity(
     is only for callers that have none, and a copy of it here that drifted
     from the ladder's would report a bracket for a ladder that never stopped.
     """
-    at = [r for r in results if r.get("kind") == kind and r.get("replicas") == replicas]
+    # `workers=None` means the caller's family does not vary the worker
+    # count, not "match rows without one": the replica families predate the
+    # field, and filtering them on it would empty every ladder they measured.
+    at = [
+        r
+        for r in results
+        if r.get("kind") == kind
+        and r.get("replicas") == replicas
+        and (workers is None or r.get("workers") == workers)
+    ]
     met = [r for r in at if _within_slo(r, slo_p95_s)]
     if not met:
         return None
@@ -873,6 +1028,81 @@ def replica_capacities(
     return out
 
 
+def connection_arithmetic(values: dict) -> dict:
+    """What a (workers, replicas) point costs the database, from the chart.
+
+    Read from the deployed values rather than restated, for the same reason
+    limits() reads them: a constant matching the values file at the time it
+    was written goes wrong silently when the file moves.
+    """
+    pool_max = int((values.get("config") or {}).get("dbPoolMax") or 8)
+    tuning = (values.get("postgresql") or {}).get("tuning") or {}
+    return {
+        "pool_max": pool_max,
+        "max_connections": int(tuning.get("max_connections") or 0) or None,
+        # The executors' own pools sit on the same server, so the API fleet's
+        # ceiling has to fit around them.
+        "executor_pool": pool_max * int((values.get("tapExecutor") or {}).get("replicas") or 1),
+    }
+
+
+def worker_capacities(
+    results: list[dict],
+    slo_p95_s: float,
+    signals_required: int = SATURATION_SIGNALS_REQUIRED_DEFAULT,
+    *,
+    pool_max: int = 8,
+    max_connections: int | None = None,
+    executor_pool: int = 0,
+) -> list[dict]:
+    """Per (workers, replicas) point: the capacity, and its price at the database.
+
+    The two axes are not interchangeable there. Every worker process holds
+    its own pool, so a point's connection ceiling is
+    ``replicas x workers x dbPoolMax`` — stated beside each capacity because
+    the grid deliberately contains shapes (4 workers on 8 replicas at
+    dbPoolMax 8 is 256 connections) that a 200-connection server cannot
+    honour, and a capacity published without its arithmetic reads as a shape
+    an operator could pick.
+
+    ``executor_pool`` is the executors' own connections, which the API fleet's
+    ceiling has to fit around; PostgreSQL additionally holds 3 back for
+    superusers, the same accounting the chart's HPA guard applies.
+    """
+    points = sorted(
+        {
+            (r["workers"], r["replicas"])
+            for r in results
+            if r.get("kind") == "worker_sweep" and r.get("workers") and r.get("replicas")
+        }
+    )
+    usable = (max_connections - 3 - executor_pool) if max_connections else None
+    out = []
+    for workers, replicas in points:
+        found = bracketed_capacity(
+            results,
+            kind="worker_sweep",
+            replicas=replicas,
+            workers=workers,
+            slo_p95_s=slo_p95_s,
+            signals_required=signals_required,
+        )
+        if not found:
+            continue
+        ceiling = replicas * workers * pool_max
+        out.append(
+            {
+                "workers": workers,
+                "replicas": replicas,
+                "worker_processes": replicas * workers,
+                "connection_ceiling": ceiling,
+                "exceeds_max_connections": bool(usable is not None and ceiling > usable),
+                **found,
+            }
+        )
+    return out
+
+
 def capacity_headline(
     results: list[dict],
     slo_p95_s: float,
@@ -994,6 +1224,103 @@ def replica_sweep(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
     return results
 
 
+def worker_sweep(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
+    """Package 19: the replica ladder's sweep, once per (workers, replicas).
+
+    The replica ladder was measured at one worker per pod against a pod whose
+    CPU limit is 2, so every point in it was half-idle by construction. This
+    grid varies both axes — same host, same corpus, same workload seeds, same
+    stop rule — so a worker and a replica can be compared as two prices of
+    the same capacity: one costs a pod, the other costs nothing but
+    connections. Workers 1/2/4 against the 2-core pod is under-, at- and
+    over-subscribed, which measures the chart's "set workers to the pod's CPU
+    limit and no higher" rather than repeating it.
+
+    Workers is the outer loop because changing it is a helm upgrade rolling
+    every pod, where a replica change is one write to the scale subresource —
+    and every upgrade resets the replica count to the values file's, so
+    scale() is re-applied per point either way. No set_autoscaling() call:
+    each set_workers() upgrade re-asserts the whole values file, which has
+    both autoscalers off, and a flag set before the loop would not survive
+    the first one.
+    """
+    plan = cfg["scenarios"]["worker_sweep"]
+    values = cfg["chart_values"]
+    pool = int((values.get("config") or {}).get("dbPoolMax") or 8)
+    default_workers = int((values.get("tapApi") or {}).get("workers") or 1)
+    results: list[dict] = []
+    try:
+        for workers in plan["workers"]:
+            cluster.set_workers(workers)
+            for replicas in plan["replicas"]:
+                log.info(
+                    "worker sweep point: workers=%d replicas=%d (pool ceiling %d connections)",
+                    workers,
+                    replicas,
+                    workers * replicas * pool,
+                )
+                cluster.scale("tap-api", replicas)
+                results += concurrency_sweep(
+                    run,
+                    cfg,
+                    dataset,
+                    entries,
+                    replicas=replicas,
+                    workers=workers,
+                    kind="worker_sweep",
+                    key_prefix=f"wsweep-w{workers}-n{replicas}",
+                    refine_saturation=False,
+                    repetitions=plan["repetitions"],
+                    warmup_s=plan["warmup_seconds"],
+                    measure_s=plan["measure_seconds"],
+                    generator_processes=int(plan.get("generator_processes", 1)),
+                )
+        probe = plan.get("limit_probe")
+        if probe:
+            # The grid's own top worker count cannot answer the question it
+            # looks like it answers: one worker costs ~1.05 cores, so at the
+            # suite's 2-core limit every count past 2 measures the cgroup.
+            # This point deploys the same workers against a raised limit —
+            # its own kind, so worker_capacities() cannot merge it with the
+            # grid point that shares its (workers, replicas).
+            memory_bytes = _memory_bytes(probe.get("memory_limit"), 1 << 30)
+            log.info(
+                "limit probe: workers=%d replicas=%d at cpu=%s memory=%s",
+                probe["workers"],
+                probe["replicas"],
+                probe["cpu_limit_cores"],
+                probe.get("memory_limit"),
+            )
+            cluster.configure_api(
+                workers=probe["workers"],
+                cpu_limit_cores=probe["cpu_limit_cores"],
+                memory_limit=probe.get("memory_limit"),
+            )
+            cluster.scale("tap-api", probe["replicas"])
+            results += concurrency_sweep(
+                run,
+                cfg,
+                dataset,
+                entries,
+                replicas=probe["replicas"],
+                workers=probe["workers"],
+                pod_cpu_limit=float(probe["cpu_limit_cores"]),
+                pod_memory_limit_bytes=memory_bytes,
+                kind="worker_limit_probe",
+                key_prefix=f"wprobe-w{probe['workers']}cpu{probe['cpu_limit_cores']}"
+                f"-n{probe['replicas']}",
+                refine_saturation=False,
+                repetitions=plan["repetitions"],
+                warmup_s=plan["warmup_seconds"],
+                measure_s=plan["measure_seconds"],
+                generator_processes=int(plan.get("generator_processes", 1)),
+            )
+    finally:
+        cluster.set_workers(default_workers)
+        cluster.scale("tap-api", 1)
+    return results
+
+
 def fixed_replica_scaling(run, cfg: dict, dataset: str, entries: list, c1: float) -> list[dict]:
     """Replica counts against offered rates, with both autoscalers off."""
     plan = cfg["scenarios"]["fixed_replica_scaling"]
@@ -1088,6 +1415,15 @@ def keda_scenarios(
             steps=steps,
             offered_rps=None,
             request_mode="async",
+            generator_processes=int(
+                cfg["scenarios"].get("keda_load", {}).get("generator_processes", 1)
+            ),
+            workload_ingredients={
+                "entries": entries,
+                "mix": mix,
+                "query_class": None,
+                "seed": 4000,
+            },
         )
         if not result:
             continue
@@ -1308,6 +1644,561 @@ def shedding_summary(results: list[dict]) -> list[dict]:
         )
     rows.sort(key=lambda r: (r["key"].split("-c")[0], r["held_concurrency"] or 0))
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Package 18: where the API's per-request CPU goes
+# ---------------------------------------------------------------------------
+
+#: The gated set for the authorised rung. All four query operations together,
+#: because the chart (and the service) refuse a partial query surface: a caller
+#: refused at POST /tap/async runs the same query at /tap/sync. The metadata
+#: operations come along because they are the service's own default and cost a
+#: /tap/sync request nothing.
+GATED_OPERATIONS = (
+    "metadata.ingest",
+    "metadata.amend",
+    "metadata.delete",
+    "jobs.create",
+    "jobs.mutate",
+    "jobs.delete",
+    "query.sync",
+)
+
+
+def choose_profile_concurrency(
+    results: list[dict], *, tolerance: float
+) -> tuple[dict | None, float]:
+    """The knee of a ladder: what to profile, and the best throughput on it.
+
+    The lowest-concurrency rung the classifier called `TAP_CPU_BOUND` whose
+    throughput is within `tolerance` of the ladder's best — `tolerance` being
+    the suite's own `throughput_gain_below_fraction`, the threshold the
+    saturation stop already uses for the judgement "these two throughputs are
+    the same one".
+
+    Every other candidate is wrong in a direction this ladder has actually
+    demonstrated:
+
+    * the **saturation stop** picked c=2, which tripped `throughput_plateau`
+      while c=4 served 10% more;
+    * the **busiest** rung picked c=8 — 95.5 rps at p95 131 ms against c=4's
+      95.1 rps at p95 66 ms, so everything it added over the knee was queue,
+      and a profile there attributes event-loop and threadpool work that only
+      exists past it;
+    * an **unsaturated** rung attributes an idle event loop.
+
+    Returns (None, 0.0) when the ladder produced nothing measurable.
+    """
+    usable = [r for r in results if not r.get("invalid") and (r.get("http") or {}).get("rps")]
+    cpu_bound = [
+        r
+        for r in usable
+        if any(v["classification"] == "TAP_CPU_BOUND" for v in (r.get("bottleneck") or []))
+    ]
+    pool = cpu_bound or usable
+    if not pool:
+        return None, 0.0
+    best = max(r["http"]["rps"] for r in pool)
+    chosen = min(
+        (r for r in pool if r["http"]["rps"] >= (1.0 - tolerance) * best),
+        key=lambda r: r["concurrency"],
+    )
+    return chosen, best
+
+
+def deployed_auth_policy(*, attempts: int = 10, delay_s: float = 3.0) -> dict:
+    """What the pods now serving traffic say they enforce.
+
+    Read from the service's own `/api/v1/auth`, not from the values file and
+    not from the ConfigMap. Configuration reaches these pods through a
+    ConfigMap, which a container reads once at startup — so a `helm upgrade`
+    that changes only ConfigMap data is a successful upgrade that no running
+    pod has read. (The chart now hashes the ConfigMap into both pod templates,
+    which makes such a change a rollout; this is the check that the rollout
+    happened, because the failure it guards against is silent: an
+    "authenticated" rung served by pods with authentication off is a rung that
+    measures the unauthenticated service twice and reports the difference as
+    zero.)
+
+    Retried, because the first request after a rollout can arrive while the
+    Service still has an old endpoint in it.
+    """
+    import httpx
+
+    last = ""
+    for attempt in range(attempts):
+        try:
+            response = httpx.get(f"{BASE_URL}/api/v1/auth", timeout=10.0)
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            last = f"{type(exc).__name__}: {exc}"
+            if attempt < attempts - 1:
+                time.sleep(delay_s)
+    raise RuntimeError(f"could not read the deployed auth policy: {last}")
+
+
+def require_auth_policy(*, enabled: bool, gated: tuple[str, ...] = ()) -> dict:
+    """Refuse to measure a rung the pods are not configured for."""
+    policy = deployed_auth_policy()
+    if bool(policy.get("enabled")) != enabled:
+        raise RuntimeError(
+            f"the deployed pods report authentication enabled={policy.get('enabled')},"
+            f" this rung needs {enabled}: the rollout did not happen"
+        )
+    if enabled:
+        if policy.get("anonymous_tap_queries"):
+            raise RuntimeError(
+                "the deployed pods let anonymous callers query TAP, so /tap/sync"
+                " would not verify a token and the rung would measure nothing"
+            )
+        deployed = tuple(sorted((policy.get("gated_operations") or {}).keys()))
+        if deployed != tuple(sorted(gated)):
+            raise RuntimeError(
+                f"the deployed pods enforce {deployed or '()'}, this rung needs"
+                f" {tuple(sorted(gated)) or '()'}"
+            )
+    log.info("deployed auth policy: %s", policy)
+    return policy
+
+
+def _profile_rung(
+    run,
+    cfg: dict,
+    dataset: str,
+    entries: list,
+    *,
+    key: str,
+    concurrency: int,
+    repetitions: int,
+    warmup_s: float,
+    measure_s: float,
+    token: str | None = None,
+    gil_only: bool | None = None,
+    reference_rps: float | None = None,
+) -> list[dict]:
+    """One rung of the profile family: N repetitions at a fixed concurrency.
+
+    ``gil_only`` not None makes it a profiled rung — one repetition, sampled by
+    py-spy for the length of the measured window. Profiled windows are single
+    repetitions on purpose: the throughput they report is only used to check
+    the profiler's own overhead against the unprofiled rung beside them, and
+    the samples are what the repetition would have been spent on.
+    """
+    settle = cfg["scenarios"]["timing"]["settle_seconds"]
+    mix = cfg["scenarios"]["query_mix"]["normal"]
+    results: list[dict] = []
+    for repetition in range(repetitions):
+        rung_key = f"{key}-r{repetition}"
+        sampler = None
+        if gil_only is not None:
+            sampler = pyspy_mod.Pass(
+                out_path=run.path / "profiles" / f"{rung_key}.folded",
+                seconds=measure_s,
+                rate=int(cfg["scenarios"]["profile"]["sample_rate_hz"]),
+                gil_only=gil_only,
+                nonblocking=bool(cfg["scenarios"]["profile"].get("nonblocking")),
+            )
+        result = measure(
+            run,
+            cfg,
+            key=rung_key,
+            kind="profile",
+            dataset=dataset,
+            workload=load_mod.Workload(entries, mix, seed=3000 + repetition),
+            mode="closed",
+            concurrency=concurrency,
+            replicas=1,
+            repetition=repetition,
+            warmup_s=warmup_s,
+            measure_s=measure_s,
+            bearer_token=token,
+            during_load=sampler,
+        )
+        if result:
+            profile = sampler.profile if sampler is not None else None
+            if profile is None and sampler is not None:
+                # A replayed measurement: `measure()` returned its cached result
+                # without entering the sampler, but the stacks from the pass
+                # that produced it are still on disk. Re-derive from them rather
+                # than report a ten-minute pass as missing.
+                profile = pyspy_mod.from_folded(
+                    sampler.out_path,
+                    gil_only=sampler.gil_only,
+                    nonblocking=sampler.nonblocking,
+                    rate=sampler.rate,
+                    duration_s=sampler.seconds,
+                )
+                if profile is not None:
+                    log.info("%s: profile recovered from %s", rung_key, sampler.out_path.name)
+            if profile is not None:
+                result["profile"] = pyspy_mod.summarise(
+                    profile,
+                    requests=result["http"]["requests"],
+                    window_s=result["window_seconds"],
+                    cpu_cores_mean=result["resources"].get("tap_api_cpu_cores_mean", 0.0),
+                )
+                run.write_json(f"profiles/{rung_key}.json", result["profile"])
+            elif sampler is not None:
+                # Recorded rather than raised: the throughput measurement is
+                # still valid, and a family that threw away a good rung
+                # because the profiler missed would be worse than one that
+                # says the profile is missing.
+                run.invalidate(f"{rung_key}: no profile", {"detail": sampler.error})
+            if profile is not None and reference_rps:
+                # A profile of a perturbed worker is not a profile of the
+                # service. py-spy pauses the process to walk its stacks, and on
+                # a thread-heavy asyncio process that has been measured at
+                # thirty times slower — which would leave a breakdown of a
+                # worker nobody runs, at a concurrency it is no longer
+                # saturated at. Marked rather than deleted, with the number.
+                overhead = (reference_rps - (result["http"]["rps"] or 0.0)) / reference_rps
+                ceiling = float(cfg["scenarios"]["profile"].get("max_overhead_fraction") or 0.10)
+                result["profile"]["overhead_fraction"] = overhead
+                if overhead > ceiling:
+                    # Marked on the measurement as well as on the run, so the
+                    # report leaves the attribution out rather than publishing
+                    # a perturbed one. A missing breakdown with a stated reason
+                    # and a remedy is worth more than a confident wrong split.
+                    result["invalid"] = True
+                    run.invalidate(
+                        f"{rung_key}: the profiler cost {100 * overhead:.1f}% of throughput",
+                        {
+                            "detail": "re-run with nonblocking: true in"
+                            " config/scenarios.yaml's profile section, or --nonblocking",
+                            "reference_rps": reference_rps,
+                            "profiled_rps": result["http"]["rps"],
+                            "ceiling_fraction": ceiling,
+                        },
+                    )
+            results.append(result)
+        time.sleep(settle)
+    return results
+
+
+def profile_api_cpu(
+    run,
+    cfg: dict,
+    dataset: str,
+    entries: list,
+    *,
+    concurrency: int,
+    with_auth: bool = True,
+) -> tuple[list[dict], dict]:
+    """Attribute one worker's per-request CPU, and price a bearer token.
+
+    Six rungs at one concurrency, all at ``replicas: 1, workers: 1`` so that
+    "per request" and "per worker" are the same statement:
+
+    * ``base`` — unauthenticated, unprofiled. The reference for everything
+      else, and the only rung whose throughput is comparable to the figures
+      the rest of this suite publishes.
+    * ``gil`` — the same load with py-spy holding to GIL-owning stacks. This
+      is the ceiling's own composition: one worker is one interpreter lock.
+    * ``all`` — the same load again with every non-idle thread sampled, which
+      adds the work done with the lock released (libpq on the socket, the
+      writers' C extensions, the threadpool handoff).
+    * ``authverify`` — authentication on, nothing gated: every request now
+      carries a token the service verifies against a real JWKS, and no
+      authorisation decision is taken. One repetition of it is profiled, so
+      verification appears as a share rather than only as a throughput delta.
+    * ``authgated`` — the same, with the whole query surface enforced, so the
+      marginal cost of a decision on top of verification is separable.
+    * ``noauth`` — authentication off again. The auth rungs are bracketed by
+      two unauthenticated ones, because they are measured after two helm
+      upgrades and a pod restart, and a drift between the first rung and the
+      last would otherwise be indistinguishable from the cost of a token.
+
+    Returns the measurements and a report tying them together.
+    """
+    scenario = cfg["scenarios"]["profile"]
+    reps = int(scenario["repetitions"])
+    warmup_s = float(scenario["warmup_seconds"])
+    measure_s = float(scenario["measure_seconds"])
+    profile_s = float(scenario["profile_seconds"])
+    results: list[dict] = []
+
+    cluster.scale("tap-api", 1)
+    policies = {"base": require_auth_policy(enabled=False)}
+    base_rungs = _profile_rung(
+        run,
+        cfg,
+        dataset,
+        entries,
+        key=f"prof-{dataset}-c{concurrency}-base",
+        concurrency=concurrency,
+        repetitions=reps,
+        warmup_s=warmup_s,
+        measure_s=measure_s,
+    )
+    results += base_rungs
+    # The unprofiled throughput the profiled windows are judged against. From
+    # the rung immediately before them, at the same concurrency, on the same
+    # pod — not from a published figure, which would import another run's host.
+    base_rps = sum(r["http"]["rps"] for r in base_rungs) / len(base_rungs) if base_rungs else None
+    # No warmup on the profiled windows: the rung above just spent minutes at
+    # this concurrency, so the pool, the caches and the published-table cache
+    # are all warm, and a warmup here would be time py-spy is not sampling.
+    results += _profile_rung(
+        run,
+        cfg,
+        dataset,
+        entries,
+        key=f"prof-{dataset}-c{concurrency}-gil",
+        concurrency=concurrency,
+        repetitions=1,
+        warmup_s=0.0,
+        measure_s=profile_s,
+        reference_rps=base_rps,
+        gil_only=True,
+    )
+    results += _profile_rung(
+        run,
+        cfg,
+        dataset,
+        entries,
+        key=f"prof-{dataset}-c{concurrency}-all",
+        concurrency=concurrency,
+        repetitions=1,
+        warmup_s=0.0,
+        measure_s=profile_s,
+        reference_rps=base_rps,
+        gil_only=False,
+    )
+
+    issuer_info: dict = {"enabled": False}
+    if with_auth:
+        issuer = oidc_mod.keypair()
+        oidc_mod.deploy(issuer, cluster.api_image())
+        token = issuer.mint()
+        issuer_info = {
+            "enabled": True,
+            "issuer": issuer.issuer,
+            "audience": issuer.audience,
+            "kid": issuer.kid,
+            "algorithm": "RS256",
+            "key_bits": 2048,
+            "jwks_cache_s": 300,
+            "group": oidc_mod.GROUP,
+        }
+        auth_values = str(SUITE / "config/auth-values.yaml")
+        try:
+            cluster.install_chart({"auth.gatedOperations": "{none}"}, values_files=[auth_values])
+            policies["authverify"] = require_auth_policy(enabled=True)
+            verify_rungs = _profile_rung(
+                run,
+                cfg,
+                dataset,
+                entries,
+                key=f"prof-{dataset}-c{concurrency}-authverify",
+                concurrency=concurrency,
+                repetitions=reps,
+                warmup_s=warmup_s,
+                measure_s=measure_s,
+                token=token,
+            )
+            results += verify_rungs
+            verify_rps = (
+                sum(r["http"]["rps"] for r in verify_rungs) / len(verify_rungs)
+                if verify_rungs
+                else None
+            )
+            results += _profile_rung(
+                run,
+                cfg,
+                dataset,
+                entries,
+                key=f"prof-{dataset}-c{concurrency}-authgil",
+                concurrency=concurrency,
+                repetitions=1,
+                warmup_s=0.0,
+                measure_s=profile_s,
+                token=token,
+                gil_only=True,
+                reference_rps=verify_rps,
+            )
+            cluster.install_chart(
+                {"auth.gatedOperations": "{" + ",".join(GATED_OPERATIONS) + "}"},
+                values_files=[auth_values],
+            )
+            policies["authgated"] = require_auth_policy(enabled=True, gated=GATED_OPERATIONS)
+            results += _profile_rung(
+                run,
+                cfg,
+                dataset,
+                entries,
+                key=f"prof-{dataset}-c{concurrency}-authgated",
+                concurrency=concurrency,
+                repetitions=reps,
+                warmup_s=warmup_s,
+                measure_s=measure_s,
+                token=token,
+            )
+        finally:
+            # Back to the deployment every other family measures, whatever
+            # happened above: a cluster left with authentication on would make
+            # the next run's numbers a mystery.
+            cluster.install_chart()
+            oidc_mod.remove()
+        policies["noauth"] = require_auth_policy(enabled=False)
+        results += _profile_rung(
+            run,
+            cfg,
+            dataset,
+            entries,
+            key=f"prof-{dataset}-c{concurrency}-noauth",
+            concurrency=concurrency,
+            repetitions=reps,
+            warmup_s=warmup_s,
+            measure_s=measure_s,
+        )
+
+    return results, profile_report(results, concurrency, issuer_info, policies)
+
+
+def _rung_group(results: list[dict], suffix: str) -> list[dict]:
+    """The repetitions of one rung, valid ones only.
+
+    Matched on ``-{suffix}`` rather than on ``suffix``: the profiled
+    authenticated rung is ``authgil``, and a bare suffix test would fold it
+    into ``gil`` and average an authenticated profile into an
+    unauthenticated one.
+    """
+    return [
+        r
+        for r in results
+        if r.get("kind") == "profile"
+        and r["key"].rsplit("-r", 1)[0].endswith(f"-{suffix}")
+        and not r.get("invalid")
+    ]
+
+
+def _rung_summary(results: list[dict], suffix: str) -> dict | None:
+    """Throughput, CPU and per-request CPU for one rung, over its repetitions."""
+    group = _rung_group(results, suffix)
+    if not group:
+        return None
+    rps = [r["http"]["rps"] for r in group]
+    cpu = [r["resources"].get("tap_api_cpu_cores_mean", 0.0) for r in group]
+    per_request_ms = [
+        1000.0 * c * r["window_seconds"] / max(r["http"]["requests"], 1)
+        for r, c in zip(group, cpu, strict=True)
+    ]
+    return {
+        "rung": suffix,
+        "keys": [r["key"] for r in group],
+        "authenticated": bool(group[0].get("authenticated")),
+        "requests": sum(r["http"]["requests"] for r in group),
+        "rps": stats_mod.mean_ci(rps),
+        "error_fraction": max(r["http"]["error_fraction"] for r in group),
+        "p95_ms": 1000.0 * max(r["http"]["latency"]["p95_s"] for r in group),
+        "api_cpu_cores": stats_mod.mean_ci(cpu),
+        "cpu_ms_per_request": stats_mod.mean_ci(per_request_ms),
+        # The reciprocal of throughput, for a single worker: what one request
+        # occupies of the one thing there is one of.
+        "worker_ms_per_request": stats_mod.mean_ci([1000.0 / v for v in rps if v]),
+        "profile": next((r["profile"] for r in group if r.get("profile")), None),
+    }
+
+
+def profile_report(
+    results: list[dict], concurrency: int, issuer: dict, policies: dict | None = None
+) -> dict:
+    """What the family measured, as one comparable set of rungs.
+
+    The two things the package asks for are computed here rather than left to
+    a reader: the share of a request's CPU that named frames account for, and
+    the difference a verified bearer token makes to the same rung.
+    """
+    rungs = {
+        name: _rung_summary(results, name)
+        for name in ("base", "gil", "all", "authverify", "authgil", "authgated", "noauth")
+    }
+    report: dict = {
+        "concurrency": concurrency,
+        "replicas": 1,
+        "workers": 1,
+        "issuer": issuer,
+        # What the pods said they enforced, per rung, in their own words. The
+        # provenance of the authentication figures: without it, "authenticated"
+        # is an assertion about a helm upgrade rather than about a deployment.
+        "deployed_auth_policy": policies or {},
+        "rungs": {k: v for k, v in rungs.items() if v},
+    }
+
+    base, gil, whole = rungs["base"], rungs["gil"], rungs["all"]
+    if gil and gil["profile"]:
+        report["attribution"] = {
+            "named_fraction": gil["profile"]["named_fraction"],
+            "application_fraction": gil["profile"]["application_fraction"],
+            "unattributed_fraction": gil["profile"]["unattributed_fraction"],
+            "by_subsystem_ms": gil["profile"]["by_subsystem_ms"],
+            "top_frames": gil["profile"]["top_frames"],
+            "samples": gil["profile"]["samples"],
+        }
+    if base and gil:
+        # What the profiler cost. Stated because everything above is measured
+        # while it was attached, and "the profile did not perturb the run" is
+        # a claim that has to come from a number.
+        base_rps = base["rps"]["mean"]
+        report["profiler_overhead_fraction"] = (
+            (base_rps - gil["rps"]["mean"]) / base_rps if base_rps else None
+        )
+    if base and whole and whole["profile"] and gil and gil["profile"]:
+        # What the interpreter lock does *not* contain. Expressed as differences
+        # of shares rather than as two durations: with the sampler unable to
+        # achieve its requested rate, neither pass's sample count is a duration
+        # (see pyspy.summarise), so the comparable quantity is how the two
+        # distributions differ. A subsystem larger among on-CPU samples than
+        # among GIL-holding ones is doing work with the lock released — libpq on
+        # the socket, the writers' C extensions — which is CPU the single-worker
+        # throughput ceiling does not contain.
+        report["gil_versus_all_threads"] = {
+            "cgroup_cpu_ms_per_request": base["cpu_ms_per_request"]["mean"],
+            "gil_occupancy_ms_per_request": gil["profile"]["profiled_occupancy_ms_per_request"],
+            "all_threads_occupancy_ms_per_request": whole["profile"][
+                "profiled_occupancy_ms_per_request"
+            ],
+            "occupancy_unavailable_reason": gil["profile"].get("occupancy_unavailable_reason"),
+            "share_off_gil": {
+                name: whole["profile"]["buckets"].get(name, 0.0)
+                - gil["profile"]["buckets"].get(name, 0.0)
+                for name in sorted(
+                    set(whole["profile"]["buckets"]) | set(gil["profile"]["buckets"])
+                )
+            },
+        }
+
+    unauth = [r for r in (rungs["base"], rungs["noauth"]) if r]
+    if unauth and rungs["authverify"]:
+        # Against the mean of the bracketing unauthenticated rungs, not against
+        # the first one: two helm upgrades and a pod restart separate them.
+        reference = sum(r["rps"]["mean"] for r in unauth) / len(unauth)
+        reference_cpu = sum(r["cpu_ms_per_request"]["mean"] for r in unauth) / len(unauth)
+        cost = {"unauthenticated_rps": reference, "unauthenticated_cpu_ms": reference_cpu}
+        for name in ("authverify", "authgated"):
+            rung = rungs[name]
+            if not rung:
+                continue
+            cost[name] = {
+                "rps": rung["rps"]["mean"],
+                "throughput_cost_fraction": (reference - rung["rps"]["mean"]) / reference
+                if reference
+                else None,
+                "cpu_ms_per_request": rung["cpu_ms_per_request"]["mean"],
+                "cpu_ms_added_per_request": rung["cpu_ms_per_request"]["mean"] - reference_cpu,
+                "error_fraction": rung["error_fraction"],
+            }
+        if rungs["authgil"] and rungs["authgil"]["profile"]:
+            cost["verification_share_of_gil"] = rungs["authgil"]["profile"]["buckets"].get(
+                "token verification", 0.0
+            )
+            cost["verification_ms_of_gil"] = rungs["authgil"]["profile"]["by_subsystem_ms"].get(
+                "token verification", 0.0
+            )
+        report["authentication_cost"] = cost
+    return report
 
 
 def result_formats(run, cfg: dict, dataset: str, entries: list) -> list[dict]:
@@ -1590,6 +2481,9 @@ def reclassify(run_dir, cfg: dict) -> dict:
     headline.update(capacity_headline(entries, slo_p95_s, signals_required))
     summary["headline"] = headline
     summary["replica_capacity"] = replica_capacities(entries, slo_p95_s, signals_required)
+    summary["worker_capacity"] = worker_capacities(
+        entries, slo_p95_s, signals_required, **connection_arithmetic(cfg["chart_values"])
+    )
     summary["sustainable_capacity_c1"] = sustainable_capacity(entries, slo_p95_s)
     summary["reanalysed_at"] = _time.time()
     summary_path.write_text(

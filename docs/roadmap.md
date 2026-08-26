@@ -4,9 +4,11 @@ Follow-up work is organized in numbered packages, referenced by number in
 issues, PRs and discussions. Package numbers are stable: delivered packages
 are removed from this page but their numbers are not reused.
 
-**Packages 18 through 21 are open.** Everything through package 17 is
-delivered and merged; what each one settled is recorded in the findings
-below.
+**Packages 20, 21 and 22 are open.** Everything through package 19 is
+delivered and merged; what each one settled is recorded in the findings below.
+Listed rather than given as a range, because packages are delivered out of
+order and a range silently misstates the set the moment one in the middle
+lands.
 
 ## Measured findings
 
@@ -18,6 +20,254 @@ so it can be checked and it can go stale — the run that produced it is named.
 Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/egernia-performance/results/`.
+
+### 2026-08-26 — the parse removal, deployed: executors stopped being the async bottleneck (package 20, delivered)
+
+The autoscaling family (K1–K7), run twice on identical offered load — the
+ladder anchored at C1 = 6.83 jobs/s in both — differing only in whether the
+executor re-parses each job's query: run `20260826T013544Z-88d8c5e9` with
+the parse in the loop, run `20260826T050451Z-0f62a0fa` with the table list
+carried on the job row (`query_tables`, package 20's fix; the local profile
+behind it — 190 ms of per-job re-parse against ~6 ms for everything else,
+by `tests/performance/profile_async_job.py` — is in the 2026-08-25 entry in
+git history). Every validity guard passed in both runs. Completions are
+counted server-side: a `uws.jobs` row is inserted once and updated exactly
+four times on its way to COMPLETED, so per-window completions are the
+table's `n_tup_upd / 4` — the client's own success count is a casualty in
+both runs, for two different reasons below.
+
+| | before (`88d8c5e9`) | after (`0f62a0fa`) |
+| --- | --- | --- |
+| executor CPU per completed job | 385–469 ms | **4.3–5.0 ms** |
+| per-executor drain, fleet saturated | 2.3–2.5 jobs/s at ~0.9 core/pod (K3, K6) | never saturated — ≥6.2 jobs/s at 2–3% CPU (K6) |
+| sustained 6×C1 — K6, ~41 jobs/s offered | 80% done in-window; queue peaks 20,870; oldest job 851 s | 100% done in-window; queue peaks 52; oldest job 1 s |
+| KEDA replicas | pegged at 8 | peak 5, mean 3.7 |
+
+The before run is the published ~2 jobs/s figure re-measured and confirmed:
+a pegged executor drains 2.3–2.5 jobs/s at ~0.9 cores — ~0.4 s of CPU per
+job — and a fleet of eight cannot hold 6×C1: the queue grows past twenty
+thousand, jobs wait fourteen minutes, and 94% of K6's clients gave up
+before their job ran. The after run is the local profile transferring to
+the deployed environment almost exactly: ~4.6 ms of executor CPU per job
+against the profile's ~6 ms, ninety times less than before. No scenario in
+the family can make the executor the bottleneck any more — every job every
+scenario offered completed inside that scenario's window, KEDA never ran
+more than five replicas, and the pods that did run sat 97% idle.
+
+What the after run surfaces instead is the async path's next ceiling: the
+API. From 3.5×C1 up, 17–57% of client conversations failed — with
+connection errors, on jobs the server had accepted and did complete —
+against the single API pod at ~85% of its one-core limit. A job is a
+submit plus phase polls plus a result fetch, and ~41 arrivals/s of that
+control traffic exceeds what one pod that also answers ~99 rps of sync
+queries can serve. The executor autoscaling defaults survive unchanged
+(`queuedJobsPerReplica: 10` — the queue simply never builds); the ~2
+jobs/s notes in `values.yaml`, `autoscaling.md` and `architecture.md` are
+republished from these runs. What one executor can do now has no measured
+ceiling: feeding it one would take an API that scales, which is not this
+package.
+
+One boundary before that ceiling is read as a service property. The
+executor numbers above are server-side and client-independent; the API
+ceiling is a joint property of the service and a spin-polling client. The
+generator never sends UWS 1.1 `WAIT`: it polls each job's phase at 0.25 s
+backing off to 2 s, so one job costs the API roughly six to eight
+requests, and package 18 put this API at 10.5 ms of CPU per request
+(96–100 rps at one worker) — ~100 rps over ~7 requests per job predicts a
+~14 jobs/s ceiling. The data cannot test that prediction, only fail to
+contradict it: the family is clean at 0.5×C1 ≈ 3.4 jobs/s and failing at
+every rung from 3.5×C1 ≈ 24 jobs/s up, a factor-of-seven bracket with no
+rung between, and the suite cannot count the requests that would settle it
+(the generator records one sample per job however many polls it made, and
+no collected Prometheus series counts API requests — so `http.rps` on an
+async artefact is jobs/s, unlabelled; no published page mislabels it, the
+docs site's only requests/s column never sees an async measurement, so the
+fix is a unit on the field, not a correction to published figures). The service already
+carries the lever the generator did not use: `uws_api.py` implements the
+blocking `WAIT`, which would replace most of those requests with one held
+connection per job — so an operator hitting this ceiling may want a client
+change before more API replicas. The follow-up is one package with a
+prerequisite, not two: teach the harness to count API requests per job,
+then measure the async ceiling under a `WAIT`-ing client.
+### 2026-08-25 — workers against replicas: same price per process, and the wall is the cgroup (package 19, delivered)
+
+One run (`20260825T180219Z-f8b21fc4`), twelve (workers, replicas) points plus
+one probe, every point a saturated closed-loop ceiling on the same host,
+corpus and seeds — and the w=1 column reproduces the replica ladder
+(99.1 / 189.9 / 342.9 / 581.6 rps against `ccbcb41a`'s 98.9 / 190.8 / 347.5 /
+577.9) on a rebuilt cluster, which is what makes the rest comparable.
+
+| rps | n=1 | n=2 | n=4 | n=8 |
+| --- | ---: | ---: | ---: | ---: |
+| w=1 | 99.1 | 189.9 | 342.9 | 581.6 |
+| w=2 | 187.6 | 335.8 | 583.0 | 830.7 |
+| w=4 | 179.2 | 346.7 | 640.6 | 1005.5 |
+
+- **A worker is worth a replica, and it costs no pod.** At equal process
+  count the two axes are interchangeable in throughput: 4 processes measure
+  335.8 (2x2) against 342.9 (1x4); 8 processes measure 583.0 against 581.6.
+  What a worker costs instead is ~140–165 MiB of essentially private memory
+  (pod peaks 138 / 302 / 562 MiB at w=1/2/4 — the interpreter shares almost
+  nothing) and `dbPoolMax` more connections in the pod's ceiling. One caveat
+  on the memory: the working set keeps growing after the pod warms — a fresh
+  four-worker pod went 548 → 581 MiB over its 25 minutes of serving — so
+  read the default 1 Gi as hosting four workers with real, not generous,
+  margin. The shape of that growth says warm-up, not leak: the per-request
+  slope differs 37x between w=2 and w=4 at equal throughput (0.03 against
+  1.05 MiB per thousand requests) where a real per-request cost would be a
+  constant, it decays at constant load, and the two-worker pod measurably
+  flattens at its own steady state. The steps between rungs have a named
+  mechanism: they coincide exactly with the per-worker psycopg pools
+  opening connections as concurrency rises (server sessions 11 → 24 across
+  the probe's rungs, ~2–3 MiB a connection), so the pod's memory floor
+  grows toward `workers x dbPoolMax` — the same product its connection
+  ceiling is made of, which gives the workers default its companion:
+  workers follow the CPU limit, and `config.dbPoolMax` is what makes them
+  fit the memory limit. What rules out a slow residual leak conclusively
+  is a soak — no configuration here was held longer than ten minutes — run
+  it at the w=4 saturation rung, where the bound is tightest and a real
+  residual shows first. And because the pool is bounded by construction at
+  `workers x dbPoolMax` = 32 connections (the probe's top rung had opened
+  only 24), the mechanism makes the soak a prediction rather than a watch:
+  the working set should flatten near ~600 MiB (the ~548 MiB warm floor
+  plus the remaining connections at ~2.5 MiB each); past ~650 MiB there is
+  a second mechanism and the bounded-pool explanation is wrong.
+- **The default follows the pod's CPU limit, and the mechanism was
+  falsifiable in advance.** Package 18's profile priced a request at 10.5 ms
+  of CPU with ~53% GIL-serialised and one worker at 1.05 cores, predicting
+  w=2 at 2 x 1.05 wanted against 2.00 allowed = 0.952 of doubling; measured,
+  187.6 / (2 x 99.1) = 0.945, with the pod at 1.94 cores. Four workers on
+  the same 2 cores *lose* 4% (179.2). The probe settles what that means:
+  the same four workers at a 4-core limit reach 338.1 rps pinned at exactly
+  4.00 cores, still `TAP_CPU_BOUND` — the wall is the cgroup, not uvicorn.
+  So `tapApi.workers` = the pod's CPU limit, stated in
+  [Deployment](deployment.md) with the table.
+- **On one host the axes stop being interchangeable at the top.** At n=8 a
+  w=2 fleet's pods reach only 1.45 cores each (11.6 of 16 allowed) where
+  w=4 pods reach 1.81 — 830.7 against 1005.5 rps from the same eight pods —
+  so extra in-pod workers recovered capacity that adding pods could not,
+  on a 24-core node also running PostgreSQL (1.9 cores at the top point)
+  and the cluster plane. Per process, 32 processes on one host serve
+  31 rps each against a single process's 99.
+- **The connection arithmetic is stated, and it was survived, not
+  validated.** The w=4 n=8 shape may open 256 connections against
+  `max_connections: 200`; it served 1,005 rps with zero errors because this
+  CPU-bound mix holds few connections at once. The ceiling is what the
+  fleet *may* open — [Autoscaling](autoscaling.md) now says so next to the
+  chart's own refusal arithmetic.
+- **What the sweep broke on the way is fixed and pinned.** A ConfigMap-only
+  change (workers, auth, any `config.*`) never restarted the pods — the pod
+  templates now hash ConfigMap and Secret, the harness verifies the deployed
+  worker count and limits from the pods rather than from helm's exit code,
+  and package 18's authenticated rungs were the first beneficiary. Also
+  fixed: dataset generation on a fresh cluster (the service's obscore view
+  pre-empts the suite's table), the restart guard judging pods on lifetime
+  `restartCount`, the database port-forward adopted on an accepting socket
+  a dying forwarder still held, and `MEMORY_BOUND` judged on a fleet-summed
+  working set that counts a rollout's terminating pods (now judged per pod;
+  six transition rungs in this run carry the old misverdict, capacity rungs
+  are unaffected).
+- **Known artefact, diagnosable but not yet attributed per worker:**
+  keep-alive connections pin to a pod *and to a worker within it*, so
+  low-concurrency rungs are bimodal (two clients on one worker of two
+  measure 98 rps where spread clients measure 167). It vanishes at every
+  capacity rung in this run (max repetition spread 2.7%), and per-pod
+  `served_by` concentration lands with package 18 — per-*worker* identity
+  in the response is proposed follow-up, not tacked onto either package.
+
+### 2026-08-25 — the API's per-request CPU, named (package 18, delivered)
+
+One profile run (`20260825T163627Z-034d69ba`), one worker, `tapApi.replicas: 1`
+and `tapApi.workers: 1` throughout, ten rungs at the knee of a short ladder
+(c=4 at 100.6 rps and p95 61 ms; c=8 bought 133 ms of p95 for no more
+throughput). py-spy attached to the pod from the host — nothing added to the
+image — 24,593 GIL-held samples over ten minutes, each attributed to the
+innermost frame that names a subsystem so stdlib time rolls up to the part of
+the request that spent it. **99.1% of samples reach a named subsystem, and
+75.3% of the request is the application's own work** rather than the server,
+the router or the event loop:
+
+| subsystem | ms/request | share |
+| --- | --- | --- |
+| ADQL translation | 3.19 | 30.9% |
+| result writers | 2.29 | 22.1% |
+| psycopg and row conversion | 1.61 | 15.6% |
+| event loop | 0.95 | 9.2% |
+| threadpool handoff | 0.81 | 7.8% |
+| ASGI routing and dependencies | 0.58 | 5.6% |
+| query preparation | 0.32 | 3.1% |
+| observability | 0.23 | 2.2% |
+| HTTP server | 0.14 | 1.4% |
+| everything else named | 0.20 | 2.0% |
+| unattributed | 0.10 | 0.9% |
+
+The split is the profile's; the 10.55 ms it is applied to is the pod's own CPU
+accounting divided by the requests that window served. Neither number can
+produce the other, and a sampling profiler must never be a source of throughput
+figures.
+
+- **This package's own premise was wrong: translation never stopped being the
+  largest cost.** It opened by noting the fast path took ADQL translation from
+  41 ms to 1.2 ms and asking where the remaining ~88% went. Translation is
+  3.19 ms — 30.9% of the request, still the biggest named subsystem — and the
+  in-process micro-benchmarks agree independently: 2.57 ms for the cone search
+  that dominates the mix, 2.86 ms for a join. Two methods about 20% apart, both
+  around 2.5x the published figure. The 35x the fast path bought is real (the
+  old two-pass shape still measures 256 ms in `tests/benchmarks`), but 1.2 ms
+  described something narrower than a whole request's translation and was read
+  as though it described all of it.
+- **The busiest single frame in the service is the CSV writer.** `stream_dsv`
+  alone is 20.8% of GIL-held time, and the writers together are 22.1% — second
+  only to translation — on a mix whose mean response is around 124 rows. This
+  is the first time the writers have been visible *behind an HTTP request*
+  rather than measured alone by `benchmark-serialize`.
+- **Authentication is the cheap part, and it had never been measured.** With
+  every request carrying a token the service verifies against a real in-cluster
+  JWKS — RS256, 2,048-bit, keys cached for the configured five minutes, no
+  principal cache anywhere — throughput fell 3.1% (98.1 to 95.1 rps) for
+  +0.48 ms of CPU per request, and token verification shows up in the
+  authenticated profile at 3.0% of GIL-held time, of which the signature check
+  itself is 0.8%. Enforcing the whole query surface on top costs 6.2% and
+  +0.94 ms. Both rungs ran at 0.00% errors, so these are the costs of
+  verification and of an authorisation decision that succeeds — not of refusing
+  traffic.
+- **Read those percentages beside the drift, not instead of it.** The two
+  unauthenticated rungs bracketing the authenticated ones measured 96.2 and
+  100.0 rps: a 3.9% spread within one run, the same size as the effect being
+  measured. The honest statement is "a few percent, inside a drift of the same
+  order", and it is only available because the family brackets.
+- **The end-to-end hot-path benchmark reconciles to 5%.**
+  `test_benchmark_sync_request_normal_mix` drives the real ASGI app over the mix
+  and reports 8.20 ms per request against the 10.55 ms measured here — 22% low,
+  just outside the 20% this package asked for. It is outside it for two reasons
+  the profile names and prices: the benchmark has no libpq (psycopg, 1.61 ms)
+  and no uvicorn or h11 (0.14 ms). Adding those back gives 9.95 ms against
+  10.55 — 5.3%. Both are reported: the raw figure is what CI regresses against,
+  the reconciled one is what says the benchmark measures the right thing.
+- **What the profiler cost.** py-spy's default blocking mode took 74% of this
+  service's throughput (95.5 to 24.9 rps) and then stalled the worker past its
+  one-second liveness timeout, so the kubelet restarted a process that was busy
+  rather than broken — the same failure mode the probes were split to prevent,
+  arriving from a new direction. At 5 Hz it still cost 45%, because the expense
+  is roughly 100 ms per attach rather than per sample. Sampling is nonblocking
+  as a result: 0.9% of throughput, paid for in torn stacks — three of 24,593
+  samples arrived with a frame name that was not valid UTF-8 and 193 arrived
+  with no stack at all, both counted into the residual rather than dropped from
+  the denominator. The run where blocking mode fired both guards is kept as
+  `20260825T155319Z-44a69b9c-profile`.
+- **One thing the family does not deliver.** The all-threads pass was meant to
+  separate CPU spent with the GIL released. It does not: py-spy counts a thread
+  blocked in `epoll` as non-idle, so 84% of that pass is the event loop waiting.
+  It is published as a distribution of thread activity, and the attribution
+  rests on the GIL pass against the cgroup total.
+- **A provenance caveat about this run.** Its directory name and
+  `environment.json` record commit `034d69b` on branch
+  `feat/repoint-references-to-ska-telescope`, because a concurrent session
+  checked that branch out in the shared working tree while the run was in
+  flight. The code measured was this package's working tree throughout, which
+  `dirty: true` records; the branch and SHA describe what git happened to have
+  checked out, not what ran. A run's provenance is only as good as its
+  worktree's exclusivity, which is now a thing to know about this suite.
 
 ### 2026-08-25 — the size sweep is finished, and size almost is not the story (packages 16 and 17, delivered)
 
@@ -384,46 +634,13 @@ cache hit ratios, per-class latencies.
 After the translation fix the normal mix remains `TAP_CPU_BOUND` on D1 (2 GiB)
 and D2 (10 GiB) alike: PostgreSQL sits near idle for it. Saturation moved from
 four concurrent clients on D1 to eight on D2. So replicas and `tapApi.workers`
-remain the throughput lever — and each worker is now worth roughly 200
-requests/s rather than 20.
+remain the throughput lever.
 
-## Package 18 — Name the API's per-request CPU
-
-Every scaling recommendation on this page rests on `TAP_CPU_BOUND`, and the
-only cause it ever named is gone. ADQL translation was 41 ms of a ~50 ms
-request when the API's ceiling was first attributed; the fast path took it to
-1.2 ms (35x, `e38ed30`), and nothing has re-attributed what remains. One
-uvicorn worker is one GIL-bound thread, so the newest single-replica runs put
-the budget at roughly 10 ms of CPU per request — 98.0 rps at saturation on D1
-(`20260825T005436Z-b450b0a9`) and 98.9 rps at C1
-(`20260824T235130Z-ccbcb41a`), both at `tapApi.replicas: 1`,
-`tapApi.workers: 1` — of which translation is now 1.2 ms. About 88% of the
-ceiling is unaccounted for, and two published figures already disagree about
-it: the 2026-08-23 finding above says a worker is worth "roughly 200
-requests/s", where these runs measure half that.
-
-The per-request profile is also missing the one cost production always pays.
-No benchmark enables authentication — `benchmarks/egernia-performance/config/chart-values.yaml`
-configures no OIDC issuer — so every capacity figure on this page is an
-unauthenticated figure, while a deployment that gates its endpoints verifies a
-token on exactly this CPU-bound path.
-
-Work: profile a saturated `tap-api` worker under the closed-loop normal mix
-(`py-spy` against the worker process, the tool
-[Python performance](python-performance.md) already prescribes for the
-micro-benchmarks) and attribute the 10 ms to named frames — request parsing
-and parameter validation, psycopg row conversion, the result writers at small
-row counts, observability instrumentation, and the translation that is now a
-twelfth of it. `tests/benchmarks/test_hot_paths.py` measures translation and
-two serializers but never a whole request, so a regression anywhere else is
-currently invisible; whatever the profile names belongs there as a hot path.
-
-**Resolution is shown by** a profile of the saturated worker in which named
-frames account for at least 80% of a request's CPU, published as a finding
-here; a hot-path benchmark covering the request path end to end whose
-per-request total agrees with the measured saturation throughput within 20%;
-and one measured rung with authentication enabled, so the cost of verifying a
-token on this path is a number rather than an assumption.
+**Corrected 2026-08-25:** this finding also said each worker was "now worth
+roughly 200 requests/s rather than 20". It is worth roughly 100 — 96 to 100 rps
+across the ten rungs of `20260825T163627Z-034d69ba`, and 98.9 rps at C1 in
+`20260824T235130Z-ccbcb41a` before that. The 200 was never measured on a
+single-replica rung; it is withdrawn, and the rest of the finding stands.
 
 ## Package 19 — Workers against replicas, on one host
 
@@ -447,7 +664,6 @@ each bracketed by a saturated sweep the way the replica ladder now is; the
 stale notes in `autoscaling.md` and `deployment.md` replaced by those numbers;
 and a stated default for `tapApi.workers` that follows the pod's CPU limit if
 the measurement supports one.
-
 ## Package 20 — What one async job actually costs
 
 The chart puts an executor at ~2 jobs/s (`values.yaml`, `tapExecutor.replicas`
@@ -498,10 +714,83 @@ Work: settle the parser question before writing any grammar — fork
 queryparser's grammar to 2.1, or replace the parse with a maintained
 alternative — and only then the feature surface, the sentinel's removal, and
 the declared version. Note that the parse is also the subject of package 18's
-profile, so the two packages share evidence: a replacement parser has to hold
-the fast path's 1.2 ms as well as accept more syntax.
+profile, so the two packages share evidence — and the budget is larger than
+this section used to claim. It said a replacement parser has to hold "the fast
+path's 1.2 ms"; package 18 measured translation at **3.19 ms, 30.9% of a
+request and the largest named subsystem in the service**, with the in-process
+micro-benchmarks agreeing at 2.57 ms for a cone search and 2.86 ms for a join.
+So a replacement has 3 ms to beat rather than 1.2 ms to hold — more room than
+the old figure suggested, and a bigger prize if it wins.
 
 **Resolution is shown by** `/capabilities` declaring 2.1 truthfully; the
 sentinel substitution deleted because the grammar accepts a geometry column
 directly; a conformance test per added construct; and no regression in the
 translation hot-path benchmark.
+
+## Package 22 — A text column in a geometry predicate
+
+`s_region` is the ObsCore standard's footprint column and it holds STC-S
+*text*. The queryable companion is `s_region_geom`, a pgsphere `spoly` the
+ingest pipeline derives at ingestion (package 7), and it is non-standard by
+construction — `std = 0` in TAP_SCHEMA. So the column every ObsCore tutorial,
+every VO client and every worked example names is the one that cannot be
+queried spatially, and the one that can is the one nobody has heard of.
+
+That would be a documentation problem if the service refused the standard
+spelling clearly. It does not. The sentinel substitution in
+`egernia_core.query.adql` puts *any* bare identifier found in an
+`INTERSECTS`/`CONTAINS` argument slot behind a geometry literal and swaps the
+column name back into the SQL, without consulting the column's type — because
+`translate()` is deliberately pure and has no TAP_SCHEMA to consult. The result
+translates happily and then dies in PostgreSQL:
+
+```
+1 = INTERSECTS(s_region, CIRCLE('ICRS', 150.0, -30.0, 0.5))
+  -> s_region && scircle(spoint(RADIANS(150.0), RADIANS(-30.0)), RADIANS(0.5))
+  -> ERROR: operator does not exist: text && scircle
+```
+
+Verified against pgsphere. What a client receives is a DALI error document
+carrying a PostgreSQL operator name — a server-fault shape for what is a usage
+error, naming neither the column at fault nor the one to use instead. The first
+spatial query a new user writes is the one that produces it.
+
+Work: **the translator half is already done.** The ADQL 2.1 work exposes
+`Translation.geometry_columns` — a frozenset of every column reference the
+translator accepted in a geometry slot, named as the caller wrote it — so what
+is left here is purely the API layer: `prepare_query` reads that set, checks
+each name's type against the TAP_SCHEMA it already has cached, and refuses a
+non-geometry column with a usage error naming `s_region_geom`. This package is
+sequenced *after* that one rather than absorbed into it, so it begins with the
+hook in place.
+
+The type lookup belongs in `prepare_query` rather than in `translate()`, and
+that division is why the hook is a set of names rather than a check: the query
+path already reads TAP_SCHEMA for the publication check and for column
+metadata, both cached, while the translator is the hot path package 18 measured
+at 3.19 ms — 30.9% of a request — and must stay free of I/O.
+
+One decision to take rather than default: **do not silently rewrite `s_region`
+to `s_region_geom`.** Answering a different query than the one asked is worse
+than refusing clearly, and the two are not equivalent — the companion is
+nullable, so a row whose STC-S failed to convert at ingestion is present under
+one column and absent under the other. A rewrite would quietly drop those rows
+from every result.
+
+Not in scope, and worth stating so the boundary is clear: the ADQL region
+algebra — `UNION`, `INTERSECTION`, `AREA`, `CENTROID`, `DISTANCE`, `COORD1` —
+is rejected by the grammar outright (`QueryParseError`, not a translation
+fault), and belongs to the ADQL 2.1 work (package 21). Nor is this work wasted
+when the sentinel substitution is deleted, as that work deletes it: a grammar
+that accepts a geometry column directly still has to refuse a *text* one, so
+the check survives the sentinel's removal and only changes where it gets its
+list of candidate columns from. This section is therefore written to stand
+whether package 21 is open or delivered.
+
+**Resolution is shown by** the standard spelling answered with a usage error
+that names `s_region_geom`, at the right HTTP status for a client error rather
+than a server fault; a test per predicate and argument order (`INTERSECTS` and
+`CONTAINS`, column first and column second); the same refusal for any other
+text column reached the same way, not a special case for `s_region`; and the
+translation hot-path benchmark unmoved, since the check costs a set lookup over
+a handful of names against an already-cached table.

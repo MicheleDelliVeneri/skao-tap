@@ -14,11 +14,22 @@ make benchmark-keda                   # autoscaling scenarios K1-K7
 make benchmark-result-formats         # every result writer over the same rows
 make benchmark-stress                 # just Q09/Q11/Q13/Q14, each on its own
 make benchmark-shedding               # held overload: 503s versus socket drops
+make benchmark-profile                # where a request's CPU goes, and a token's cost
 make benchmark-replicas               # a bracketed capacity per replica count
 make benchmark-serialize              # the writers alone, in process, no cluster
 make benchmark-full                   # every family, every dataset
 make benchmark-publish RUN=<run-dir>  # graphs and CSV into this site
 ```
+
+`benchmark-profile` needs two things nothing else here does: `py-spy`
+installed against the same interpreter (`uv pip install --python .venv/bin/python
+py-spy==0.4.2`) and passwordless `sudo`. The worker it profiles lives in the
+node's namespaces, so reading its stacks is a root operation on the host —
+nothing is installed into the image, and the pod being measured is the one
+every other family measures. It is also the only family that turns
+authentication on, which it does by deploying a small OIDC issuer into the
+cluster and layering `config/auth-values.yaml` over the suite's values; both
+are undone before it returns.
 
 `benchmark-serialize` is the exception to everything else on this page: it
 needs no cluster, no database and no Docker, and it finishes in seconds. It
@@ -88,6 +99,23 @@ first, and when it fires the rest of that measurement describes the client.
   defaults to CSV, which for a long time meant every published latency was a
   CSV latency with nothing saying so. It is now recorded per measurement, and
   `benchmark-result-formats` varies it deliberately.
+- **Every published capacity figure is an unauthenticated one, except the
+  profile family's.** No other family sends a bearer token, so nothing else on
+  this page includes the cost of verifying one. `benchmark-profile` measures
+  the same rung with authentication off, with every token verified, and with
+  the whole query surface additionally gated, so the difference is a number
+  rather than an assumption.
+- **A profile is refused if the profiler moved the throughput.** The profiled
+  window is compared against an unprofiled one at the same concurrency on the
+  same pod, and a profile that cost more than 10% of throughput is marked
+  invalid rather than published: a breakdown of a worker slowed by its own
+  profiler describes a service nobody runs. This is not hypothetical. py-spy's
+  default mode pauses the process to walk its stacks, which cost this service
+  74% of its throughput and then stalled it past its one-second liveness
+  timeout, so Kubernetes restarted a worker that was busy rather than broken.
+  Sampling is nonblocking by default because of that measurement, and it trades
+  the perturbation for torn stacks — roughly half the reads discarded, recorded
+  with the profile.
 - **Cone search needs an expression index.** The translator emits
   `spoint(RADIANS(s_ra), RADIANS(s_dec)) @ scircle(...)`, so the GiST index has
   to be on that expression — see [Autoscaling](autoscaling.md) and the suite's

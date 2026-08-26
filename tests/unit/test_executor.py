@@ -41,6 +41,30 @@ def test_execute_job_writes_result_and_completes(fake_db, results_dir):
     assert stored["result_size"] == len(content)
 
 
+def test_execute_job_reads_tables_off_the_job_row(monkeypatch, fake_db, results_dir):
+    """A job queued by the current API carries its table list, so the
+    executor must not pay the per-job SQL parse the list used to cost."""
+
+    def no_parse(sql):
+        raise AssertionError("the executor re-parsed SQL despite a stored table list")
+
+    monkeypatch.setattr(worker, "touched_tables", no_parse)
+    job = _queued_job(fake_db, query_tables=["ska.continuum_sources"])
+    worker.execute_job(worker.claim_job())
+    assert fake_db.jobs[job["job_id"]]["phase"] == "COMPLETED"
+
+
+def test_execute_job_falls_back_to_parsing_without_stored_tables(monkeypatch, fake_db, results_dir):
+    """A job queued by an API that predates query_tables still executes,
+    deriving the list from the SQL the way it always did."""
+    parsed = []
+    monkeypatch.setattr(worker, "touched_tables", lambda sql: parsed.append(sql) or set())
+    job = _queued_job(fake_db)  # query_tables is NULL
+    worker.execute_job(worker.claim_job())
+    assert parsed == [QUERY_SQL]
+    assert fake_db.jobs[job["job_id"]]["phase"] == "COMPLETED"
+
+
 def test_execute_job_respects_maxrec(fake_db, results_dir):
     fake_db.result_rows = [(i, float(i)) for i in range(10)]
     job = _queued_job(fake_db)
@@ -100,7 +124,7 @@ def test_a_busy_executor_still_reports_the_queue(monkeypatch, fake_db, results_d
     monkeypatch.setattr(worker, "execute_job", lambda job: None)
     monkeypatch.setattr(worker, "refresh_queue_metrics", lambda: calls.append("metrics"))
     monkeypatch.setattr(worker, "cleanup_expired", cleanup)
-    monkeypatch.setattr(worker, "_ensure_backend_pid_column", lambda: None)
+    monkeypatch.setattr(worker, "_ensure_job_columns", lambda: None)
     monkeypatch.setattr(worker, "start_http_server", lambda *args, **kwargs: None)
     monkeypatch.setattr(worker.time, "sleep", lambda seconds: slept.append(seconds))
 

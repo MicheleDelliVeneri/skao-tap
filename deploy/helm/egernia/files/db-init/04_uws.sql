@@ -15,6 +15,9 @@ CREATE TABLE uws.jobs (
     destruction         timestamptz,
     parameters          jsonb NOT NULL DEFAULT '{}'::jsonb, -- uppercased TAP params
     query_sql           text,                               -- translated PostgreSQL
+    -- tables the query reads, from the ADQL parse the API does at submit
+    -- time, so the executor never has to parse the SQL again
+    query_tables        text[],
     error_type          text,                               -- 'transient' | 'fatal'
     error_message       text,
     result_mime         text,

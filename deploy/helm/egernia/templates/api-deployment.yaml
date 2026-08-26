@@ -19,6 +19,13 @@ spec:
   template:
     metadata:
       annotations:
+        # The pods read their configuration from the ConfigMap and Secret at
+        # startup, so a change to either is invisible until they restart —
+        # `tapApi.workers` moved in the values file while the running pods
+        # kept the old count, and nothing said so. Hashing both into the pod
+        # template makes a config change a rollout.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         # the API serves metrics on its own port; a deployment's own Prometheus discovers pods by these
         prometheus.io/scrape: {{ .Values.metrics.scrapeAnnotations | quote }}
         prometheus.io/path: /metrics

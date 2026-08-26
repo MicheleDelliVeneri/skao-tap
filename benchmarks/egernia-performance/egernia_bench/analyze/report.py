@@ -332,6 +332,75 @@ class Plotter:
             "shortfall is what the replicas are contending over.",
         )
 
+    def rps_vs_workers(self) -> Figure:
+        """The worker grid: one line per worker count, over the replica axis.
+
+        Drawn from the summary's worker_capacity rows rather than re-derived
+        from the runs, for the same reason the efficiency plot reads
+        replica_capacity: the table and the picture must not be able to
+        disagree about which points are ceilings.
+        """
+        grid = self.summary.get("worker_capacity") or []
+        if not grid:
+            return self._skip(
+                "rps_vs_workers",
+                "Throughput vs workers and replicas",
+                "no worker-sweep measurements in this run",
+            )
+        fig, ax = self._axes(
+            "API replicas", "successful requests/second", "Throughput vs workers and replicas"
+        )
+        colors = [PALETTE["primary"], PALETTE["third"], PALETTE["fourth"]]
+        by_workers: dict[int, list[dict]] = {}
+        for row in grid:
+            by_workers.setdefault(row["workers"], []).append(row)
+        for i, workers in enumerate(sorted(by_workers)):
+            rows = sorted(by_workers[workers], key=lambda r: r["replicas"])
+            ax.plot(
+                [r["replicas"] for r in rows],
+                [r["rps"] for r in rows],
+                marker="o",
+                color=colors[i % len(colors)],
+                label=f"{workers} worker{'s' if workers > 1 else ''}/pod",
+            )
+            # An open-ended point is the largest rate anybody offered, not a
+            # ceiling: mark it so the line does not read as saturation.
+            open_ended = [r for r in rows if not r["bracketed"]]
+            if open_ended:
+                ax.scatter(
+                    [r["replicas"] for r in open_ended],
+                    [r["rps"] for r in open_ended],
+                    marker="^",
+                    s=90,
+                    facecolors="none",
+                    edgecolors=colors[i % len(colors)],
+                    zorder=5,
+                )
+        base = next(
+            (r["rps"] for r in grid if r["workers"] == 1 and r["replicas"] == 1 and r["bracketed"]),
+            None,
+        )
+        if base:
+            xs = sorted({r["replicas"] for r in grid})
+            ax.plot(
+                xs,
+                [base * x for x in xs],
+                linestyle="--",
+                color=PALETTE["grey"],
+                label="linear from (1 worker, 1 replica)",
+            )
+        ax.legend()
+        return self._save(
+            fig,
+            "rps_vs_workers",
+            "Throughput vs workers and replicas",
+            "Each point is the highest rate that (workers, replicas) shape met "
+            "inside the SLO; hollow triangles served everything offered, so "
+            "they are floors rather than ceilings. Lines above one another at "
+            "the same replica count are capacity that cost no extra pod — "
+            "paid for in connections, not cores.",
+        )
+
     # -- dataset size -------------------------------------------------------
 
     def _size_axis(self) -> dict[str, float]:
@@ -991,6 +1060,7 @@ class Plotter:
             self.errors_vs_concurrency,
             self.rps_vs_replicas,
             self.scaling_efficiency,
+            self.rps_vs_workers,
             self.rps_vs_size,
             self.latency_vs_size,
             self.tap_cpu_vs_throughput,
@@ -1029,3 +1099,68 @@ def rolling_percentile_local(samples, percentile: float, window_s: float = 10.0)
     from .keda import rolling_percentile
 
     return rolling_percentile(samples, percentile, window_s)
+
+
+def profile_table(report: dict) -> str:
+    """The profile family's findings as plain text, for the terminal.
+
+    Printed at the end of a `profile` run so the two numbers the package asks
+    for are visible without opening a JSON file: what a request's CPU is spent
+    on, and what a verified bearer token adds to it.
+    """
+    if not report:
+        return "no profile in this run"
+    lines: list[str] = []
+    concurrency = report.get("concurrency")
+    lines.append(f"one tap-api worker, {concurrency} concurrent clients, replicas=1 workers=1")
+
+    rungs = report.get("rungs") or {}
+    lines.append("")
+    lines.append(f"{'rung':<12} {'auth':<5} {'rps':>8} {'p95 ms':>8} {'cpu ms/req':>11} {'err':>7}")
+    for name in ("base", "gil", "all", "authverify", "authgil", "authgated", "noauth"):
+        rung = rungs.get(name)
+        if not rung:
+            continue
+        lines.append(
+            f"{name:<12} {('yes' if rung['authenticated'] else 'no'):<5} "
+            f"{(rung['rps']['mean'] or 0.0):>8.1f} {rung['p95_ms']:>8.0f} "
+            f"{(rung['cpu_ms_per_request']['mean'] or 0.0):>11.2f} "
+            f"{100 * rung['error_fraction']:>6.2f}%"
+        )
+
+    attribution = report.get("attribution") or {}
+    if attribution:
+        lines.append("")
+        lines.append(
+            f"where a request's CPU goes ({attribution['samples']:,} GIL-held samples; "
+            f"{100 * attribution['named_fraction']:.1f}% attributed, "
+            f"{100 * attribution['application_fraction']:.1f}% in the application)"
+        )
+        for name, ms in sorted(
+            (attribution.get("by_subsystem_ms") or {}).items(), key=lambda kv: -kv[1]
+        ):
+            share = ms / sum((attribution.get("by_subsystem_ms") or {}).values() or [1.0])
+            lines.append(f"  {name:<34} {ms:>7.2f} ms  {100 * share:>5.1f}%")
+
+    cost = report.get("authentication_cost") or {}
+    if cost:
+        lines.append("")
+        lines.append(
+            f"authentication, against {cost['unauthenticated_rps']:.1f} rps / "
+            f"{cost['unauthenticated_cpu_ms']:.2f} ms unauthenticated"
+        )
+        for name in ("authverify", "authgated"):
+            entry = cost.get(name)
+            if not entry:
+                continue
+            lines.append(
+                f"  {name:<12} {entry['rps']:>7.1f} rps "
+                f"({100 * (entry['throughput_cost_fraction'] or 0.0):>5.1f}% of throughput), "
+                f"{entry['cpu_ms_added_per_request']:+.2f} ms/request"
+            )
+        if cost.get("verification_ms_of_gil"):
+            lines.append(
+                f"  token verification in the profile: {cost['verification_ms_of_gil']:.2f} ms "
+                f"({100 * cost['verification_share_of_gil']:.1f}% of GIL-held time)"
+            )
+    return "\n".join(lines)
