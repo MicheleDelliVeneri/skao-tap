@@ -5,26 +5,23 @@ Result serialization itself lives in egernia_core.query.results (typed, streamin
 
 from xml.sax.saxutils import escape
 
-# RESPONSEFORMAT aliases -> (canonical key, mime type, file extension)
-FORMATS = {
-    "votable": ("votable", "application/x-votable+xml", "vot"),
-    "application/x-votable+xml": ("votable", "application/x-votable+xml", "vot"),
-    "text/xml": ("votable", "application/x-votable+xml", "vot"),
-    "csv": ("csv", "text/csv", "csv"),
-    "text/csv": ("csv", "text/csv", "csv"),
-    "tsv": ("tsv", "text/tab-separated-values", "tsv"),
-    "text/tab-separated-values": ("tsv", "text/tab-separated-values", "tsv"),
-    "json": ("json", "application/json", "json"),
-    "application/json": ("json", "application/json", "json"),
-    "parquet": ("parquet", "application/vnd.apache.parquet", "parquet"),
-    "application/vnd.apache.parquet": ("parquet", "application/vnd.apache.parquet", "parquet"),
-    "arrow": ("arrow", "application/vnd.apache.arrow.stream", "arrows"),
-    "application/vnd.apache.arrow.stream": (
-        "arrow",
-        "application/vnd.apache.arrow.stream",
-        "arrows",
-    ),
+#: canonical key -> (mime type, file extension)
+_FORMATS = {
+    "votable": ("application/x-votable+xml", "vot"),
+    "csv": ("text/csv", "csv"),
+    "tsv": ("text/tab-separated-values", "tsv"),
+    "json": ("application/json", "json"),
+    "parquet": ("application/vnd.apache.parquet", "parquet"),
+    "arrow": ("application/vnd.apache.arrow.stream", "arrows"),
 }
+
+# RESPONSEFORMAT aliases -> (canonical key, mime type, file extension): every
+# format answers to its short name and to its own mime type. text/xml is the
+# one alias that is neither, kept because TAP 1.0 clients send it.
+FORMATS = {
+    alias: (key, mime, ext) for key, (mime, ext) in _FORMATS.items() for alias in (key, mime)
+}
+FORMATS["text/xml"] = FORMATS["votable"]
 
 DEFAULT_FORMAT = "votable"
 
