@@ -54,6 +54,13 @@ tapApi:
   # chart for a cluster with no ingress controller — see deploy/demo/README.
   service:
     type: ClusterIP
+  # -- REQUIRED, and easy to miss. Every UWS job URL, every result link and
+  # the accessURL in the capabilities document are built from this. Left
+  # unset it defaults to the in-cluster service, so a job created through the
+  # tunnel hands back a Location the notebook machine cannot resolve — which
+  # is a broken async demo that looks like a network fault.
+  # Must match the URL the notebook uses, port included.
+  baseUrl: "http://egernia.test:8080/tap"
   replicas: 2
   # One worker per core of the CPU limit, no higher: ADQL translation is
   # pure-Python and holds the GIL, so a worker cannot exceed one core whatever

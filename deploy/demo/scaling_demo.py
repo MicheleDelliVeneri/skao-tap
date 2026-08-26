@@ -590,6 +590,67 @@ def _(mo):
 
 
 @app.cell
+def _(TAP, http, mo):
+    # Two ObsCore shapes exist in the wild and the demo must work on both. The
+    # ODP plugin's view carries `s_region_geom`, a pgsphere polygon with a GiST
+    # index; the benchmark generator's ObsCore is CAOM-flavoured, its
+    # `s_region` is STC-S text and its index is on the position.
+    #
+    # Decided by *asking the service*, not by reading TAP_SCHEMA. Where the
+    # plugin finds a pre-existing obscore relation it leaves it alone — rightly
+    # — but still registers its own column list, so TAP_SCHEMA can advertise
+    # columns the relation does not have. Trusting it produced exactly the 500
+    # this probe exists to avoid.
+    def _works(predicate: str) -> bool:
+        try:
+            return (
+                http.post(
+                    f"{TAP}/sync",
+                    data={
+                        "LANG": "ADQL",
+                        "QUERY": f"SELECT TOP 1 obs_id FROM ivoa.obscore WHERE {predicate}",
+                        "RESPONSEFORMAT": "csv",
+                    },
+                    timeout=60,
+                ).status_code
+                == 200
+            )
+        except Exception:
+            return False
+
+    _circle = "CIRCLE('ICRS', 150.0, -30.0, 0.1)"
+    HAS_FOOTPRINT = _works(f"1 = INTERSECTS(s_region_geom, {_circle})")
+
+    def cone(ra: float, dec: float, radius: float) -> str:
+        """The spatial predicate this deployment can actually answer.
+
+        CONTAINS rather than INTERSECTS for the point form, and not merely for
+        tidiness: pg_sphere 1.5.2 defines no `&&(spoint, scircle)`, so
+        INTERSECTS(POINT, CIRCLE) resolves by implicit cast to two candidates
+        and fails as `operator is not unique`.
+        """
+        circle = f"CIRCLE('ICRS', {ra}, {dec}, {radius})"
+        if HAS_FOOTPRINT:
+            return f"1 = INTERSECTS(s_region_geom, {circle})"
+        return f"1 = CONTAINS(POINT('ICRS', s_ra, s_dec), {circle})"
+
+    mo.md(
+        "### Which spatial column this deployment can answer on\n\n"
+        + (
+            "`s_region_geom` — a pgsphere footprint with a GiST index, so the "
+            "cone searches below use `INTERSECTS` over the polygon."
+            if HAS_FOOTPRINT
+            else "No usable `s_region_geom`: this ObsCore is the CAOM-flavoured "
+            "one, whose `s_region` is STC-S text and whose index is on the "
+            "position. The cone searches below use "
+            "`CONTAINS(POINT(s_ra, s_dec), ...)`, which is what that index "
+            "answers."
+        )
+    )
+    return (cone,)
+
+
+@app.cell
 def _(mo):
     radius = mo.ui.slider(
         0.05, 5.0, value=0.5, step=0.05, label="cone radius (degrees)", show_value=True
@@ -599,13 +660,12 @@ def _(mo):
 
 
 @app.cell
-def _(TAP, http, mo, radius, time):
-    _adql = f"""
-    SELECT TOP 1000 obs_publisher_did, s_ra, s_dec, em_min, em_max, access_url
-    FROM ivoa.obscore
-    WHERE 1 = INTERSECTS(s_region_geom,
-                         CIRCLE('ICRS', 150.0, -30.0, {radius.value}))
-    """
+def _(TAP, cone, http, mo, radius, time):
+    _adql = (
+        "SELECT TOP 1000 obs_publisher_did, s_ra, s_dec, em_min, em_max, access_url\n"
+        "FROM ivoa.obscore\n"
+        f"WHERE {cone(150.0, -30.0, radius.value)}"
+    )
     _t0 = time.perf_counter()
     _r = http.post(
         f"{TAP}/sync",
@@ -715,7 +775,7 @@ def _(mo):
 
 
 @app.cell
-def _(TAP, VERIFY, alt, concurrency, mo, pd, run_load, time, total):
+def _(TAP, VERIFY, alt, concurrency, cone, mo, pd, run_load, time, total):
     if not run_load.value:
         _panel = mo.md("_Idle._")
     else:
@@ -726,7 +786,7 @@ def _(TAP, VERIFY, alt, concurrency, mo, pd, run_load, time, total):
 
         _queries = [
             "SELECT TOP 50 obs_publisher_did, s_ra, s_dec FROM ivoa.obscore "
-            f"WHERE 1 = INTERSECTS(s_region_geom, CIRCLE('ICRS', {ra:.1f}, {dec:.1f}, 0.4))"
+            f"WHERE {cone(round(ra, 1), round(dec, 1), 0.4)}"
             for ra, dec in [(random.uniform(0, 360), random.uniform(-80, 20)) for _ in range(64)]
         ]
 

@@ -38,6 +38,16 @@ spec:
                 name: {{ include "egernia.fullname" . }}-tap-api
                 port:
                   name: http
+          # the rest of the same service: OpenAPI, /docs, the health probes and
+          # the metrics exposition. Last, and a bare prefix, so the two above
+          # still win on longest-prefix match.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "egernia.fullname" . }}-tap-api
+                port:
+                  name: http
           {{- if and .Values.prometheus.enabled .Values.ingress.exposePrometheus }}
           # unauthenticated: see ingress.exposePrometheus in values.yaml
           - path: /prometheus

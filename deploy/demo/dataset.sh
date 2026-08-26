@@ -21,7 +21,7 @@ python_bin=${PYTHON:-$repo_root/.venv/bin/python}
 local_port=${LOCAL_PORT:-15432}
 
 pg_pod() {
-  kubectl get pod -n "$namespace" -l app.kubernetes.io/component=postgresql \
+  kubectl get pod -n "$namespace" -l app.kubernetes.io/component=postgres \
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null
 }
 

@@ -36,7 +36,7 @@ kubectl get pvc -n "$namespace" --no-headers 2>/dev/null \
 
 echo
 echo "database"
-pod=$(kubectl get pod -n "$namespace" -l app.kubernetes.io/component=postgresql \
+pod=$(kubectl get pod -n "$namespace" -l app.kubernetes.io/component=postgres \
       -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 if [ -n "$pod" ]; then
   size=$(kubectl exec -n "$namespace" "$pod" -- psql -U tap -d tap -tAc \
@@ -61,7 +61,9 @@ if [ -n "$ingress_host" ]; then
     echo "  ingress address: $address"
     echo "  the notebook machine must resolve '$ingress_host' to it (DNS, or /etc/hosts)"
   else
-    echo "  ! the Ingress has no address yet — no controller, or still provisioning"
+    echo "  the Ingress has no external address — expected when the controller"
+    echo "  is ClusterIP (reach it with a port-forward), a problem if you were"
+    echo "  expecting a LoadBalancer. tunnel.sh says which applies here."
   fi
 else
   echo "  (no Ingress)"
