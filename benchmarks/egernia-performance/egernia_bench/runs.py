@@ -82,10 +82,6 @@ class Run:
     def explain_dir(self) -> pathlib.Path:
         return self._dir("explain")
 
-    @property
-    def plots_dir(self) -> pathlib.Path:
-        return self._dir("plots")
-
     def _dir(self, name: str) -> pathlib.Path:
         path = self.path / name
         path.mkdir(parents=True, exist_ok=True)
@@ -126,10 +122,6 @@ class Run:
         path.write_text(json.dumps(existing, indent=2, default=str))
         log.error("run marked invalid: %s", reason)
 
-    @property
-    def invalid(self) -> bool:
-        return (self.path / "invalid.json").exists()
-
 
 def new_run(scenario: str, resume: str | None = None) -> Run:
     """A fresh run directory, or an existing one to continue."""
@@ -152,7 +144,7 @@ def new_run(scenario: str, resume: str | None = None) -> Run:
     return Run(path=path, scenario=scenario)
 
 
-def resolve(argument: str | None, scenario: str | None = None) -> pathlib.Path | None:
+def resolve(argument: str | None) -> pathlib.Path | None:
     """A run directory from whatever the caller had to hand.
 
     Accepts an absolute path, a path relative to the working directory, a bare
@@ -162,7 +154,7 @@ def resolve(argument: str | None, scenario: str | None = None) -> pathlib.Path |
     on every invocation.
     """
     if not argument:
-        return latest_run(scenario)
+        return latest_run()
     candidate = pathlib.Path(argument)
     if candidate.is_dir():
         return candidate
@@ -173,11 +165,42 @@ def resolve(argument: str | None, scenario: str | None = None) -> pathlib.Path |
     return None
 
 
-def latest_run(scenario: str | None = None) -> pathlib.Path | None:
+def latest_run() -> pathlib.Path | None:
     candidates = sorted(p for p in RESULTS.glob("*") if p.is_dir())
-    if scenario:
-        candidates = [p for p in candidates if p.name.endswith(f"-{scenario}")]
     return candidates[-1] if candidates else None
+
+
+# -- artefact readers ---------------------------------------------------------
+# The rebuild half of the suite's "analysis is re-derivable from artefacts"
+# rule, shared by the runner and the report so the shapes cannot drift.
+
+
+def read_metrics_rows(path: pathlib.Path) -> list[dict]:
+    """A metrics Parquet back as the row dicts Prometheus.collect produced."""
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(path).to_pydict()
+    return [
+        {"metric": m, "labels": lab, "t": t, "value": v}
+        for m, lab, t, v in zip(
+            table["metric"], table["labels"], table["t"], table["value"], strict=True
+        )
+    ]
+
+
+def read_samples(path: pathlib.Path) -> list:
+    """A samples Parquet back as objects with the fields the analysis reads."""
+    import types
+
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(path, columns=["t_start", "latency_s", "status", "error"]).to_pydict()
+    return [
+        types.SimpleNamespace(t_start=t, latency_s=lat, status=st, error=err)
+        for t, lat, st, err in zip(
+            table["t_start"], table["latency_s"], table["status"], table["error"], strict=True
+        )
+    ]
 
 
 def environment(

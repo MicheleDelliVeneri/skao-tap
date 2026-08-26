@@ -22,6 +22,12 @@ import psutil
 
 log = logging.getLogger("egernia_bench.guards")
 
+#: Above this the load generator's own limit becomes indistinguishable from
+#: the service's.
+GENERATOR_CPU_CEILING = 0.80
+#: Swap written during the run, past which the host was paging out.
+SWAP_GROWTH_BYTES = 512 * 1024 * 1024
+
 
 @dataclasses.dataclass
 class GuardResult:
@@ -100,28 +106,8 @@ def schedule_verdicts(
 class Guards:
     """Snapshot the machine before a run, judge it after."""
 
-    def __init__(
-        self,
-        min_free_disk_gb: float = 15.0,
-        generator_cpu_ceiling: float = 0.80,
-        swap_growth_bytes: int = 512 * 1024 * 1024,
-        prometheus_coverage_floor: float = 0.5,
-        max_arrival_lateness_s: float = 5.0,
-        max_unoffered_fraction: float = 0.01,
-    ) -> None:
+    def __init__(self, min_free_disk_gb: float = 15.0) -> None:
         self.min_free_disk_gb = min_free_disk_gb
-        self.generator_cpu_ceiling = generator_cpu_ceiling
-        self.swap_growth_bytes = swap_growth_bytes
-        self.prometheus_coverage_floor = prometheus_coverage_floor
-        # Above this the open-loop generator was not offering the rate it
-        # claims, so the latencies belong to its queue rather than to the
-        # service. Five seconds is generous: it tolerates a slow start without
-        # tolerating a run that measured the client.
-        self.max_arrival_lateness_s = max_arrival_lateness_s
-        # Arrivals the generator abandoned rather than issued late. One percent
-        # tolerates the odd clash at the cap; past that the labelled offered
-        # rate was never offered.
-        self.max_unoffered_fraction = max_unoffered_fraction
         self.before = self._machine()
 
     @staticmethod
@@ -158,7 +144,7 @@ class Guards:
         results.append(
             GuardResult(
                 "host_did_not_swap",
-                swapped < self.swap_growth_bytes,
+                swapped < SWAP_GROWTH_BYTES,
                 f"{swapped / 2**20:.0f} MiB paged out during the run",
                 {"swap_out_delta_bytes": swapped},
             )
@@ -181,10 +167,10 @@ class Guards:
             results.append(
                 GuardResult(
                     "load_generator_had_headroom",
-                    peak < self.generator_cpu_ceiling,
+                    peak < GENERATOR_CPU_CEILING,
                     f"generator's busiest process peaked at {100 * peak:.0f}% of one "
                     f"core (its whole budget: one asyncio loop per process); above "
-                    f"{100 * self.generator_cpu_ceiling:.0f}% its own limit becomes "
+                    f"{100 * GENERATOR_CPU_CEILING:.0f}% its own limit becomes "
                     "indistinguishable from the service's",
                     {"generator_cpu_peak": peak},
                 )
@@ -202,8 +188,6 @@ class Guards:
             lateness_max_s=lateness_max,
             arrivals_dropped=dropped_arrivals,
             arrivals_issued=len(recorder.samples) if recorder is not None else 0,
-            max_arrival_lateness_s=self.max_arrival_lateness_s,
-            max_unoffered_fraction=self.max_unoffered_fraction,
         )
 
         # -- monitoring completeness -----------------------------------------
@@ -285,12 +269,3 @@ class Guards:
                 result.detail,
             )
         return results
-
-
-def apply(run, results: list[GuardResult]) -> bool:
-    """Record the guards; mark the run invalid for any that failed."""
-    run.write_json("guards.json", [dataclasses.asdict(r) for r in results])
-    failures = [r for r in results if not r.ok]
-    for failure in failures:
-        run.invalidate(failure.name, {"detail": failure.detail, **failure.measured})
-    return not failures

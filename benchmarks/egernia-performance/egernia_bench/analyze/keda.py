@@ -132,25 +132,6 @@ def rolling_percentile(
     return out
 
 
-def rolling_rate(
-    samples, window_s: float = 10.0, *, successful_only: bool = False
-) -> list[tuple[float, float]]:
-    if not samples:
-        return []
-    chosen = [s for s in samples if not successful_only or (200 <= s.status < 300 and not s.error)]
-    if not chosen:
-        return []
-    finished = np.sort(np.asarray([s.t_start + s.latency_s for s in chosen]))
-    start, end = finished[0], finished[-1]
-    out = []
-    edge = start
-    while edge < end:
-        count = int(((finished >= edge) & (finished < edge + window_s)).sum())
-        out.append((edge + window_s / 2, count / window_s))
-        edge += window_s
-    return out
-
-
 def timings(
     *,
     t0: float,
@@ -362,9 +343,7 @@ def timings(
     }
 
 
-def scale_behaviour(
-    watcher_samples: list[dict], deployment: str, *, offered_capacity_replicas: float | None = None
-) -> dict:
+def scale_behaviour(watcher_samples: list[dict], deployment: str) -> dict:
     """How the autoscaler behaved, as opposed to how fast it was."""
     timeline = [
         (
@@ -399,14 +378,12 @@ def scale_behaviour(
     for (t_prev, spec_prev, _), (t_now, _, _) in itertools.pairwise(timeline):
         replica_seconds += spec_prev * (t_now - t_prev)
 
-    peak = max(spec for _, spec, _ in timeline)
-    settled = timeline[-1][1]
-    result = {
+    return {
         "samples": len(timeline),
         "duration_s": duration,
         "min_replicas_seen": min(spec for _, spec, _ in timeline),
-        "peak_replicas": peak,
-        "final_replicas": settled,
+        "peak_replicas": max(spec for _, spec, _ in timeline),
+        "final_replicas": timeline[-1][1],
         "replica_seconds": replica_seconds,
         "mean_replicas": replica_seconds / duration if duration else None,
         "scale_events": len(changes),
@@ -416,14 +393,3 @@ def scale_behaviour(
         "replica_changes_per_minute": len(changes) / (duration / 60) if duration else None,
         "changes": changes,
     }
-    if offered_capacity_replicas:
-        # Overshoot and undershoot against the replica count the offered load
-        # actually needed. Both matter and they are not symmetric: overshoot
-        # costs money, undershoot costs latency.
-        result["required_replicas"] = offered_capacity_replicas
-        result["overshoot_replicas"] = max(0.0, peak - offered_capacity_replicas)
-        result["undershoot_replicas"] = max(0.0, offered_capacity_replicas - peak)
-        result["overshoot_fraction"] = (
-            peak - offered_capacity_replicas
-        ) / offered_capacity_replicas
-    return result

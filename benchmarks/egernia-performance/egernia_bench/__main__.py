@@ -28,6 +28,7 @@ from . import cluster
 from . import corpus as corpus_mod
 from . import runs as runs_mod
 from . import serialize as serialize_mod
+from .analyze import bottleneck as bottleneck_mod
 from .analyze import html as html_mod
 from .analyze import report as report_mod
 from .orchestrate import runner
@@ -84,13 +85,7 @@ def finalise(
     # The autoscaling scenarios count here too. They are measurements with a
     # classification like any other, and leaving them out made the tally of a
     # KEDA run a tally of its warm-up sweep.
-    tally: dict[str, dict] = {}
-    for result in [*results, *(keda or [])]:
-        for verdict in result.get("bottleneck") or []:
-            entry = tally.setdefault(
-                verdict["classification"], {"count": 0, "explanation": verdict["explanation"]}
-            )
-            entry["count"] += 1
+    tally = bottleneck_mod.tally([*results, *(keda or [])])
 
     # Per-class aggregation across every measurement, weighted by nothing: it
     # is a pooled view, and the report says so rather than implying these are
@@ -148,7 +143,7 @@ def finalise(
         "format_comparison": runner.format_comparison(results),
         "shedding": runner.shedding_summary(results),
         "plan_flags": {
-            name: {"count": count, "explanation": _plan_explanation(name)}
+            name: {"count": count, "explanation": PLAN_EXPLANATIONS.get(name, "")}
             for name, count in (plan_flags or {}).items()
         },
         "invalid": json.loads(invalid_path.read_text())["reasons"] if invalid_path.exists() else [],
@@ -194,10 +189,6 @@ PLAN_EXPLANATIONS = {
         "flag most likely to be a real defect rather than a tuning note."
     ),
 }
-
-
-def _plan_explanation(flag: str) -> str:
-    return PLAN_EXPLANATIONS.get(flag, "")
 
 
 # ---------------------------------------------------------------------------

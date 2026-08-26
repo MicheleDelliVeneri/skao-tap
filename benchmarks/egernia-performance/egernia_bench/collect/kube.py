@@ -248,16 +248,6 @@ class StateWatcher:
             self._stop.wait(max(0.0, self.interval_s - (time.time() - started)))
 
 
-def replica_timeline(samples: list[dict], deployment: str) -> list[tuple[float, int, int]]:
-    """(t, spec_replicas, ready) for one deployment, from watcher samples."""
-    timeline = []
-    for sample in samples:
-        entry = (sample.get("deployments") or {}).get(deployment)
-        if entry:
-            timeline.append((sample["t"], entry.get("spec_replicas") or 0, entry.get("ready") or 0))
-    return timeline
-
-
 def config_snapshot() -> dict:
     """The exact autoscaler configuration, saved with the run.
 

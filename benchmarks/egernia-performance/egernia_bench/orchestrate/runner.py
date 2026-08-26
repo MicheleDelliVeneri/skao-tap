@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import time
@@ -463,7 +464,7 @@ def measure(
     phase("prometheus collection")
 
     prometheus_parquet = run.metrics_dir / f"{key}.parquet"
-    prom_mod.Prometheus(PROMETHEUS_URL).write(metrics_rows, prometheus_parquet)
+    prom_mod.write(metrics_rows, prometheus_parquet)
     load_mod.write_samples(recorder.samples, run.samples_dir / f"{key}.parquet")
     pg_mod.write_statements_csv(statements, run.postgres_dir / f"{key}-statements.csv")
     run.write_json(f"postgres/{key}-before.json", before)
@@ -565,15 +566,7 @@ def measure(
         "unoffered_fraction": dropped_arrivals / max(len(recorder.samples) + dropped_arrivals, 1),
         "prometheus_coverage": coverage,
         "guards": [{"name": r.name, "ok": r.ok, "detail": r.detail} for r in guard_results],
-        "bottleneck": [
-            {
-                "classification": v.classification,
-                "confidence": v.confidence,
-                "evidence": v.evidence,
-                "explanation": v.explanation,
-            }
-            for v in verdicts
-        ],
+        "bottleneck": [dataclasses.asdict(v) for v in verdicts],
         "generator_cpu_peak": recorder.generator_cpu_peak,
         "load_timeline": timeline,
         "invalid": bool(failed),
@@ -909,11 +902,7 @@ def keda_timings_from_artefacts(run_dir, entry: dict, key: str, metrics_rows: li
     scenarios that were already measured, which is the whole reason the
     artefacts are kept.
     """
-    import json
     import pathlib
-    from types import SimpleNamespace
-
-    import pyarrow.parquet as pq
 
     run_dir = pathlib.Path(run_dir)
     state = run_dir / "kubernetes" / f"{key}-state.jsonl"
@@ -927,19 +916,7 @@ def keda_timings_from_artefacts(run_dir, entry: dict, key: str, metrics_rows: li
     # measure() records both deployments' Pods; the executors are the ones the
     # ScaledObject moves.
     pod_timings = [p for p in json.loads(pods.read_text()) if p.get("component") == "tap-executor"]
-    columns = pq.read_table(
-        sample_path, columns=["t_start", "latency_s", "status", "error"]
-    ).to_pydict()
-    samples = [
-        SimpleNamespace(t_start=t, latency_s=lat, status=st, error=err)
-        for t, lat, st, err in zip(
-            columns["t_start"],
-            columns["latency_s"],
-            columns["status"],
-            columns["error"],
-            strict=True,
-        )
-    ]
+    samples = runs_mod.read_samples(sample_path)
     return keda_analysis.timings(
         t0=entry["t_transition"],
         metrics_rows=metrics_rows,
@@ -962,6 +939,7 @@ def _lateness_from_samples(run_dir, key: str) -> dict:
     so the lateness the guard needs can be recovered rather than re-measured.
     """
     import pathlib
+    import types
 
     import pyarrow.parquet as pq
 
@@ -969,19 +947,12 @@ def _lateness_from_samples(run_dir, key: str) -> dict:
     if not path.exists():
         return {}
     table = pq.read_table(path, columns=["t_start", "t_offered"]).to_pydict()
-    late = sorted(
-        start - offered
-        for start, offered in zip(table["t_start"], table["t_offered"], strict=True)
-        if offered and offered > 0
+    return stats_mod.coordinated_omission(
+        [
+            types.SimpleNamespace(t_start=start, t_offered=offered or 0.0)
+            for start, offered in zip(table["t_start"], table["t_offered"], strict=True)
+        ]
     )
-    if not late:
-        return {}
-    return {
-        "p95_lateness_s": late[int(0.95 * (len(late) - 1))],
-        "max_lateness_s": late[-1],
-        "samples": len(late),
-        "recovered_from_samples": True,
-    }
 
 
 def replica_capacities(
@@ -1430,39 +1401,14 @@ def keda_scenarios(
 
         # The transition of interest is the first step boundary where the rate
         # changes: that is T0.
-        elapsed = 0.0
-        t0 = result["started_at"]
-        for step in steps[:-1]:
-            elapsed += step.seconds
-            t0 = result["started_at"] + elapsed
-            break
+        t0 = result["started_at"] + (steps[0].seconds if len(steps) > 1 else 0.0)
         watcher_samples = [
             json.loads(line)
             for line in (run.kube_dir / f"{key}-state.jsonl").read_text().splitlines()
             if line.strip()
         ]
-        import pyarrow.parquet as pq
-
-        rows = pq.read_table(run.metrics_dir / f"{key}.parquet").to_pydict()
-        metrics_rows = [
-            {"metric": m, "labels": lab, "t": t, "value": v}
-            for m, lab, t, v in zip(
-                rows["metric"], rows["labels"], rows["t"], rows["value"], strict=True
-            )
-        ]
-        samples_rows = pq.read_table(run.samples_dir / f"{key}.parquet").to_pydict()
-        from types import SimpleNamespace
-
-        samples = [
-            SimpleNamespace(t_start=t, latency_s=lat, status=st, error=err)
-            for t, lat, st, err in zip(
-                samples_rows["t_start"],
-                samples_rows["latency_s"],
-                samples_rows["status"],
-                samples_rows["error"],
-                strict=True,
-            )
-        ]
+        metrics_rows = runs_mod.read_metrics_rows(run.metrics_dir / f"{key}.parquet")
+        samples = runs_mod.read_samples(run.samples_dir / f"{key}.parquet")
         timings = keda_analysis.timings(
             t0=t0,
             metrics_rows=metrics_rows,
@@ -1488,15 +1434,7 @@ def keda_scenarios(
             limits=limits(cfg),
             keda=timings,
         )
-        result["bottleneck"] = [
-            {
-                "classification": v.classification,
-                "confidence": v.confidence,
-                "evidence": v.evidence,
-                "explanation": v.explanation,
-            }
-            for v in verdicts
-        ]
+        result["bottleneck"] = [dataclasses.asdict(v) for v in verdicts]
         # The scenario's own analysis *on top of* the measurement, not instead
         # of it. Listing the fields to keep dropped the guards, the `invalid`
         # flag and the coordinated-omission block, so a KEDA scenario could not
@@ -2326,17 +2264,13 @@ def reclassify(run_dir, cfg: dict) -> dict:
     directory is append-only by design, and "the analysis changed" is exactly
     the kind of thing a reader needs to be able to see.
     """
-    import json
     import pathlib
     import shutil
-    import time as _time
-
-    import pyarrow.parquet as pq
 
     run_dir = pathlib.Path(run_dir)
     summary_path = run_dir / "summary.json"
     summary = json.loads(summary_path.read_text())
-    shutil.copy2(summary_path, run_dir / f"summary.superseded-{int(_time.time())}.json")
+    shutil.copy2(summary_path, run_dir / f"summary.superseded-{int(time.time())}.json")
 
     limits_map = limits(cfg)
     # Guard failures the run itself recorded, keyed by measurement. These are
@@ -2368,19 +2302,7 @@ def reclassify(run_dir, cfg: dict) -> dict:
         if not delta_path.exists():
             continue
         pg_summary = pg_mod.summarise(json.loads(delta_path.read_text()))
-        metrics_rows = []
-        if metrics_path.exists():
-            table = pq.read_table(metrics_path).to_pydict()
-            metrics_rows = [
-                {"metric": m, "labels": lab, "t": t, "value": v}
-                for m, lab, t, v in zip(
-                    table["metric"],
-                    table["labels"],
-                    table["t"],
-                    table["value"],
-                    strict=True,
-                )
-            ]
+        metrics_rows = runs_mod.read_metrics_rows(metrics_path) if metrics_path.exists() else []
         # Timings before the classification, because the classification needs
         # them: KEDA_SCALE_LAG is the one class this family exists to find and
         # it cannot fire without the stage breakdown.
@@ -2449,28 +2371,12 @@ def reclassify(run_dir, cfg: dict) -> dict:
             resources["tap_api_cpu_fraction_of_limit"] = (
                 resources.get("tap_api_cpu_cores_p95", 0.0) / fleet
             )
-        entry["bottleneck"] = [
-            {
-                "classification": v.classification,
-                "confidence": v.confidence,
-                "evidence": v.evidence,
-                "explanation": v.explanation,
-            }
-            for v in verdicts
-        ]
+        entry["bottleneck"] = [dataclasses.asdict(v) for v in verdicts]
         now = verdicts[0].classification if verdicts else None
         if was != now:
             changed.append((key, was, now))
 
-    tally: dict[str, dict] = {}
-    for entry, _ in measurements:
-        for verdict in entry.get("bottleneck") or []:
-            slot = tally.setdefault(
-                verdict["classification"],
-                {"count": 0, "explanation": verdict["explanation"]},
-            )
-            slot["count"] += 1
-    summary["bottleneck_tally"] = tally
+    summary["bottleneck_tally"] = bottleneck.tally([e for e, _ in measurements])
     # The headline is derived from validity, so re-judging validity has to
     # re-derive it. Leaving it would keep publishing a scaling efficiency that
     # the reclassified measurements no longer support.
@@ -2485,7 +2391,7 @@ def reclassify(run_dir, cfg: dict) -> dict:
         entries, slo_p95_s, signals_required, **connection_arithmetic(cfg["chart_values"])
     )
     summary["sustainable_capacity_c1"] = sustainable_capacity(entries, slo_p95_s)
-    summary["reanalysed_at"] = _time.time()
+    summary["reanalysed_at"] = time.time()
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True, default=str, allow_nan=False)
     )

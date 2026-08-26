@@ -244,7 +244,7 @@ def test_a_pinned_worker_is_cpu_bound_against_the_gil_ceiling_not_the_pod_limit(
         recorder_cpu_peak=0.05,
         limits={"tap_api_cpu_limit_cores": 1.0, "postgres_cpu_limit_cores": 4.0},
     )
-    assert bottleneck.primary(verdicts) == "TAP_CPU_BOUND"
+    assert verdicts[0].classification == "TAP_CPU_BOUND"
 
 
 def test_a_saturated_generator_outranks_everything():
@@ -364,13 +364,12 @@ def test_scale_behaviour_counts_reversals_and_replica_seconds():
         {"t": 20.0, "deployments": {"d": {"spec_replicas": 2, "ready": 2}}},
         {"t": 30.0, "deployments": {"d": {"spec_replicas": 6, "ready": 2}}},
     ]
-    behaviour = keda.scale_behaviour(watcher, "d", offered_capacity_replicas=4.0)
+    behaviour = keda.scale_behaviour(watcher, "d")
     assert behaviour["scale_events"] == 3
     assert behaviour["direction_reversals"] == 2
     assert behaviour["peak_replicas"] == 6
     # 1x10 + 4x10 + 2x10 = 70 replica-seconds
     assert behaviour["replica_seconds"] == pytest.approx(70.0)
-    assert behaviour["overshoot_replicas"] == pytest.approx(2.0)
 
 
 def test_rolling_percentile_buckets_by_completion_not_by_start():
