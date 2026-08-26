@@ -1065,6 +1065,8 @@ def profile_table(report: dict) -> str:
     for are visible without opening a JSON file: what a request's CPU is spent
     on, and what a verified bearer token adds to it.
     """
+    from . import stats as stats_mod
+
     if not report:
         return "no profile in this run"
     lines: list[str] = []
@@ -1093,10 +1095,7 @@ def profile_table(report: dict) -> str:
             f"{100 * attribution['named_fraction']:.1f}% attributed, "
             f"{100 * attribution['application_fraction']:.1f}% in the application)"
         )
-        for name, ms in sorted(
-            (attribution.get("by_subsystem_ms") or {}).items(), key=lambda kv: -kv[1]
-        ):
-            share = ms / sum((attribution.get("by_subsystem_ms") or {}).values() or [1.0])
+        for name, ms, share in stats_mod.subsystem_shares(attribution):
             lines.append(f"  {name:<34} {ms:>7.2f} ms  {100 * share:>5.1f}%")
 
     cost = report.get("authentication_cost") or {}
@@ -1106,14 +1105,11 @@ def profile_table(report: dict) -> str:
             f"authentication, against {cost['unauthenticated_rps']:.1f} rps / "
             f"{cost['unauthenticated_cpu_ms']:.2f} ms unauthenticated"
         )
-        for name in ("authverify", "authgated"):
-            entry = cost.get(name)
-            if not entry:
-                continue
+        for name, rps, throughput_cost, _cpu_ms, added_ms in stats_mod.auth_cost_rows(cost):
             lines.append(
-                f"  {name:<12} {entry['rps']:>7.1f} rps "
-                f"({100 * (entry['throughput_cost_fraction'] or 0.0):>5.1f}% of throughput), "
-                f"{entry['cpu_ms_added_per_request']:+.2f} ms/request"
+                f"  {name:<12} {rps:>7.1f} rps "
+                f"({100 * throughput_cost:>5.1f}% of throughput), "
+                f"{added_ms:+.2f} ms/request"
             )
         if cost.get("verification_ms_of_gil"):
             lines.append(

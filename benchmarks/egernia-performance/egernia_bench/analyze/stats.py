@@ -294,3 +294,48 @@ def saturation_signals(
 
     tripped = sorted(name for name, value in signals.items() if value)
     return {"signals": signals, "detail": detail, "tripped": tripped, "count": len(tripped)}
+
+
+# ---------------------------------------------------------------------------
+# Profile row shaping, shared by the three renderers
+#
+# The text report, the HTML report and the published markdown each present
+# these rows differently — and each was deriving them itself, which is how the
+# text report came to recompute the attribution total inside its own row loop
+# where the other two hoisted it. The shape is decided here; the formatting
+# stays with each renderer, because that is what genuinely differs.
+# ---------------------------------------------------------------------------
+
+#: the authentication rungs a profile run measures, in the order they are shown
+AUTH_RUNGS = ("authverify", "authgated")
+
+
+def subsystem_shares(attribution: dict) -> list[tuple[str, float, float]]:
+    """(subsystem, ms/request, share of attributed time), busiest first."""
+    by_subsystem = attribution.get("by_subsystem_ms") or {}
+    total = sum(by_subsystem.values()) or 1.0
+    return [
+        (name, ms, ms / total) for name, ms in sorted(by_subsystem.items(), key=lambda kv: -kv[1])
+    ]
+
+
+def auth_cost_rows(cost: dict) -> list[tuple[str, float, float, float, float]]:
+    """(rung, rps, throughput cost fraction, cpu ms/request, added ms/request).
+
+    Rungs the run did not measure are absent rather than zero: a missing rung
+    is missing evidence, and a zero would read as "cost nothing".
+    """
+    rows = []
+    for name in AUTH_RUNGS:
+        entry = cost.get(name)
+        if entry:
+            rows.append(
+                (
+                    name,
+                    entry["rps"],
+                    entry["throughput_cost_fraction"] or 0.0,
+                    entry["cpu_ms_per_request"],
+                    entry["cpu_ms_added_per_request"],
+                )
+            )
+    return rows

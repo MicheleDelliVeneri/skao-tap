@@ -207,6 +207,8 @@ def write_csv(summary: dict, path: pathlib.Path) -> None:
 
 
 def render(run_dir: pathlib.Path, summary: dict, figures: list) -> pathlib.Path:
+    from . import stats as stats_mod
+
     environment = summary.get("environment") or {}
     git = environment.get("git") or {}
     sections: list[str] = []
@@ -292,7 +294,6 @@ def render(run_dir: pathlib.Path, summary: dict, figures: list) -> pathlib.Path:
         )
         attribution = profile.get("attribution") or {}
         if attribution:
-            total = sum((attribution.get("by_subsystem_ms") or {}).values()) or 1.0
             sections.append(
                 f"<p>{attribution['samples']:,} GIL-held samples of the saturated worker; "
                 f"{100 * attribution['named_fraction']:.1f}% attributed to a named subsystem, "
@@ -303,11 +304,8 @@ def render(run_dir: pathlib.Path, summary: dict, figures: list) -> pathlib.Path:
                 _table(
                     ["subsystem", "ms/request", "share"],
                     [
-                        [name, ms, f"{100 * ms / total:.1f}%"]
-                        for name, ms in sorted(
-                            (attribution.get("by_subsystem_ms") or {}).items(),
-                            key=lambda kv: -kv[1],
-                        )
+                        [name, ms, f"{100 * share:.1f}%"]
+                        for name, ms, share in stats_mod.subsystem_shares(attribution)
                     ],
                     numeric={1},
                 )
@@ -329,15 +327,10 @@ def render(run_dir: pathlib.Path, summary: dict, figures: list) -> pathlib.Path:
                 _table(
                     ["rung", "rps", "throughput cost", "CPU ms/request", "added ms/request"],
                     [
-                        [
-                            name,
-                            entry["rps"],
-                            f"{100 * (entry['throughput_cost_fraction'] or 0.0):.1f}%",
-                            entry["cpu_ms_per_request"],
-                            entry["cpu_ms_added_per_request"],
-                        ]
-                        for name in ("authverify", "authgated")
-                        if (entry := cost.get(name))
+                        [name, rps, f"{100 * throughput_cost:.1f}%", cpu_ms, added_ms]
+                        for name, rps, throughput_cost, cpu_ms, added_ms in (
+                            stats_mod.auth_cost_rows(cost)
+                        )
                     ],
                     numeric={1, 3, 4},
                 )
