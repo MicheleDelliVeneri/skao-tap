@@ -542,7 +542,8 @@ def _(TAP, http, mo, pd):
         "**Observatory data products** — a join up the hierarchy",
     )
     _sw = _try(
-        "SELECT TOP 10 uri, name, version FROM srcnet.software",
+        "SELECT TOP 10 uri, status, resources_requires_gpu, resources_min_memory"
+        " FROM srcnet.software ORDER BY uri",
         "**Software discovery** — a different model, same ADQL",
     )
     mo.hstack([_odp, _sw], widths=[1, 1])
@@ -591,10 +592,11 @@ def _(mo):
 
 @app.cell
 def _(TAP, http, mo):
-    # Two ObsCore shapes exist in the wild and the demo must work on both. The
-    # ODP plugin's view carries `s_region_geom`, a pgsphere polygon with a GiST
-    # index; the benchmark generator's ObsCore is CAOM-flavoured, its
-    # `s_region` is STC-S text and its index is on the position.
+    # The demo's own database always has the ODP plugin's view, whose
+    # `s_region_geom` is a pgsphere polygon with a GiST index. The probe stays
+    # because a deployment can publish an ObsCore this notebook did not load —
+    # its own archive's, or one left by the benchmark suite — and those carry
+    # `s_region` as text with the index on the position instead.
     #
     # Decided by *asking the service*, not by reading TAP_SCHEMA. Where the
     # plugin finds a pre-existing obscore relation it leaves it alone — rightly
@@ -640,11 +642,10 @@ def _(TAP, http, mo):
             "`s_region_geom` — a pgsphere footprint with a GiST index, so the "
             "cone searches below use `INTERSECTS` over the polygon."
             if HAS_FOOTPRINT
-            else "No usable `s_region_geom`: this ObsCore is the CAOM-flavoured "
-            "one, whose `s_region` is STC-S text and whose index is on the "
-            "position. The cone searches below use "
-            "`CONTAINS(POINT(s_ra, s_dec), ...)`, which is what that index "
-            "answers."
+            else "No usable `s_region_geom`: this deployment publishes an "
+            "ObsCore whose `s_region` is text, with the index on the position. "
+            "The cone searches below use `CONTAINS(POINT(s_ra, s_dec), ...)`, "
+            "which is what that index answers."
         )
     )
     return (cone,)

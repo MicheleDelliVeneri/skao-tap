@@ -96,14 +96,31 @@ make demo-notebook BASE_URL=http://localhost:8080 \
 ## The dataset
 
 ```bash
-make demo-dataset      # hours, once
-make demo-snapshot     # so it is never hours again
+make demo-dataset      # ~20 minutes
+make demo-snapshot     # so it is never 20 minutes again
 ```
 
-Generation grows one database through D1 → D5, checkpointing at each tier, and
-is resumable: a run that dies at 60 GiB restarts near 60, not at zero. Every
-row crosses a port-forward, so run it from a machine with a fast path to the
-cluster — not from the laptop that will present over hotel wifi.
+`deploy/demo/odp_dataset.py` fills the two models the service implements: the
+ODP hierarchy — projects → observations → scheduling blocks → execution blocks
+→ data products → artifacts — and the software discovery model. `ivoa.obscore`
+stays the ODP plugin's *view* over those tables, so what the demo queries as
+ObsCore is the mapping the service actually ships.
+
+Deliberately **not** the benchmark suite's generator. That one builds a CAOM
+hierarchy and replaces `ivoa.obscore` with a table of its own, which is right
+for measuring throughput against a fixed corpus and wrong for showing what
+this service does: it puts a data model egernia does not implement in front of
+the audience and leaves every `srcnet` table empty.
+
+Defaults give 4,700 projects — 601,600 data products, 1.2M artifacts, 400
+software packages. Size it with `PROJECTS=` and `SOFTWARE=`. Every row crosses
+a port-forward, so run it from a machine with a fast path to the cluster — not
+from the laptop that will present over hotel wifi.
+
+The load drops the GiST indexes and rebuilds them at the end, which is most of
+the difference between twenty minutes and two hours; the dropped definitions
+are stashed in the database, so a run that is killed rather than raised can be
+recovered by simply running it again.
 
 `demo-snapshot` takes a `VolumeSnapshot`, which needs a CSI driver that
 supports them. Without one, keep the data between demos instead:
@@ -111,11 +128,6 @@ supports them. Without one, keep the data between demos instead:
 ```bash
 make demo-teardown KEEP_DATA=1
 ```
-
-D5 is defined in `benchmarks/egernia-performance/config/datasets.yaml`
-alongside the benchmark tiers but marked `demo_only`, so the families that
-sweep every tier do not pick it up — a 55 GiB addition to every `db-scaling`
-run would buy a curve that D1–D4 already gives the shape of.
 
 ## The notebook
 
