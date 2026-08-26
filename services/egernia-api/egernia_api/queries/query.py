@@ -1,6 +1,7 @@
 """Shared query preparation and synchronous (streaming) execution."""
 
 import contextlib
+import functools
 import itertools
 import threading
 import time
@@ -10,6 +11,7 @@ from egernia_core.config import settings
 from egernia_core.db import StreamedRows
 from egernia_core.db import connection as db_connection
 from egernia_core.errors import UsageError
+from egernia_core.metadata.schema_gen import REGION_SUFFIX
 from egernia_core.observability import QUERY_DURATION, tag_sql
 from egernia_core.query.adql import apply_maxrec, check_language, translate
 from egernia_core.query.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
@@ -56,6 +58,13 @@ def prepare_query(params: dict[str, str]) -> dict:
         unpublished = _first_unpublished(tables, _published_tables(refresh=True), upload_names)
     if unpublished is not None:
         raise UsageError(f"table {unpublished} is not published by this service")
+
+    # Geometry slots accept any bare identifier during translation, which is
+    # pure and consults no schema. A text column reaching PostgreSQL there
+    # fails as `operator does not exist: text && scircle` — a server-fault
+    # shape for a usage error, naming neither the column at fault nor the one
+    # to use. Refused here instead, where the column metadata already is.
+    _reject_text_geometry(translation.geometry_columns, tables, upload_names)
 
     maxrec = params.get("MAXREC")
     if maxrec is not None:
@@ -147,11 +156,91 @@ def _published_tables(*, refresh: bool = False) -> frozenset[str]:
         return tables
 
 
+# pgsphere's spatial types. A column is queryable with INTERSECTS/CONTAINS
+# exactly when PostgreSQL holds it as one of these; TAP_SCHEMA cannot answer
+# this, because its VOTable datatype for spoly is "char" — the same as the
+# STC-S text the footprint was derived from.
+_GEOMETRY_TYPES = frozenset({"spoly", "spoint", "scircle", "sbox", "spath", "sline"})
+
+
+@functools.cache
+def _column_is_geometry() -> dict[str, bool]:
+    """``schema.table.column`` -> whether PostgreSQL holds it as a geometry.
+
+    Read once and kept, rather than given the TTL and refresh-under-lock
+    dance ``_published_tables`` needs, because the two go stale differently.
+    A stale table list refuses a table that *is* published, which a user
+    sees immediately; this map only decides whether a geometry predicate is
+    refused, and a column it has never heard of is left alone — so a stale
+    read costs the behaviour that existed before this check rather than a
+    wrong refusal. It is dropped with the table list whenever this service
+    changes the schema, which is the only way the answer moves in practice.
+    """
+    with db_connection() as conn:
+        rows = conn.execute(
+            "SELECT table_schema, table_name, column_name, udt_name"
+            " FROM information_schema.columns"
+            " WHERE table_schema NOT IN ('pg_catalog', 'information_schema')"
+        ).fetchall()
+    return {
+        f"{schema}.{table}.{column}".lower(): udt in _GEOMETRY_TYPES
+        for schema, table, column, udt in rows
+    }
+
+
+def _reject_text_geometry(
+    references: frozenset[str], tables: frozenset[str], upload_names: set[str]
+) -> None:
+    """Refuse a geometry predicate over a column that is not a geometry.
+
+    Only a column positively identified as non-geometry in a table the query
+    reads is refused. A reference that cannot be resolved — an alias, an
+    uploaded table, a column added since the last catalogue read — is left
+    alone: translating it was already legal, and guessing would refuse valid
+    queries to catch a mistake PostgreSQL still reports.
+    """
+    if not references:
+        return
+    columns = _column_is_geometry()
+    readable = [t.lower() for t in tables if not t.lower().startswith("tap_upload.")]
+    if upload_names or not readable:
+        return
+    for reference in sorted(references):
+        bare = reference.rsplit(".", 1)[-1].lower()
+        found = [columns[key] for t in readable if (key := f"{t}.{bare}") in columns]
+        if not found or any(found):
+            continue
+        companion = f"{bare}{REGION_SUFFIX}"
+        alternative = next(
+            (companion for t in readable if columns.get(f"{t}.{companion}")),
+            None,
+        )
+        message = (
+            f"column {reference} holds STC-S text, so it cannot be used in a"
+            " geometry predicate such as INTERSECTS or CONTAINS"
+        )
+        if alternative:
+            # Named rather than substituted: the companion is nullable, so a
+            # row whose STC-S failed to convert at ingestion is present under
+            # one column and absent under the other. Answering a different
+            # query than the one asked would drop those rows silently.
+            message += (
+                f". Use {alternative}, the pgsphere footprint derived from it at"
+                f" ingestion — note it is NULL wherever {bare} could not be converted"
+            )
+        raise UsageError(message)
+
+
 def forget_published_tables() -> None:
-    """Drop the cached table list, for when this service publishes a table."""
+    """Drop what this service caches about the schema, for when it changes it.
+
+    Both caches, because publishing a table can also add the geometry column
+    a predicate over it would be judged against.
+    """
     global _published_cache
     with _published_lock:
         _published_cache = None
+    _column_is_geometry.cache_clear()
 
 
 def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[bytes]:
