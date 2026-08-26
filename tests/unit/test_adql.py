@@ -5,7 +5,13 @@ import contextlib
 
 import pytest
 from egernia_core.errors import QueryParseError
-from egernia_core.query.adql import adql_to_postgresql, apply_maxrec, check_language, touched_tables
+from egernia_core.query.adql import (
+    adql_to_postgresql,
+    apply_maxrec,
+    check_language,
+    touched_tables,
+    translate,
+)
 
 
 def test_plain_select_translates():
@@ -460,3 +466,61 @@ def test_all_literal_geometry_reports_no_columns():
     )
     # s_ra/s_dec are constructor *coordinates*, not geometry-slot columns.
     assert result.geometry_columns == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# INTERSECTS with a point argument (issue #97)
+# ---------------------------------------------------------------------------
+
+
+def test_intersects_with_a_point_emits_containment():
+    """pg_sphere defines no `&&` taking (spoint, scircle) — the candidates are
+    (spoint, spherekey) and (spoint, sbox), so the expression resolves by
+    implicit cast to two of them and PostgreSQL refuses it as "operator is not
+    unique". A point has no area, so intersecting one is containment in it, and
+    `@` has an exact operator for every geometry pgsphere defines."""
+    sql = translate(
+        "SELECT a FROM t WHERE 1 = INTERSECTS(POINT('ICRS', s_ra, s_dec), "
+        "CIRCLE('ICRS', 150, -30, 2))"
+    ).sql
+    assert " @ " in sql
+    assert "&&" not in sql
+
+
+def test_intersects_puts_the_point_on_the_left_whichever_side_it_was_written():
+    """`@` is "contained by", so the point has to be the left operand — but
+    INTERSECTS is commutative and a caller may write it either way."""
+    written_first = translate(
+        "SELECT a FROM t WHERE 1 = INTERSECTS(POINT('ICRS', s_ra, s_dec), "
+        "CIRCLE('ICRS', 150, -30, 2))"
+    ).sql
+    written_second = translate(
+        "SELECT a FROM t WHERE 1 = INTERSECTS(CIRCLE('ICRS', 150, -30, 2), "
+        "POINT('ICRS', s_ra, s_dec))"
+    ).sql
+    assert written_first == written_second
+    assert written_first.split("WHERE", 1)[1].strip().startswith("spoint(")
+
+
+def test_a_negated_point_intersects_negates_the_operator_it_actually_emitted():
+    """The regression this guards: negation used to be `replace('&&', '!&&')`.
+    With `@` emitted instead, that replace finds nothing and returns the
+    *positive* predicate — a wrong answer rather than an error."""
+    sql = translate(
+        "SELECT a FROM t WHERE 0 = INTERSECTS(POINT('ICRS', s_ra, s_dec), "
+        "CIRCLE('ICRS', 150, -30, 2))"
+    ).sql
+    assert " !@ " in sql
+
+
+def test_intersects_between_two_areas_is_unchanged():
+    """Only the point case moves; a geometry column against a circle keeps the
+    `&&` it has always had, negation included."""
+    positive = translate(
+        "SELECT a FROM t WHERE 1 = INTERSECTS(s_region_geom, CIRCLE('ICRS', 150, -30, 2))"
+    ).sql
+    negative = translate(
+        "SELECT a FROM t WHERE 0 = INTERSECTS(s_region_geom, CIRCLE('ICRS', 150, -30, 2))"
+    ).sql
+    assert " && " in positive and " @ " not in positive
+    assert " !&& " in negative
