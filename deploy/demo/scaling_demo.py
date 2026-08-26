@@ -4,7 +4,8 @@ A marimo notebook. Reactive by design, so the sliders re-run only what depends
 on them — turn concurrency up and the latency plot redraws while the Prometheus
 panel keeps streaming.
 
-    make demo-notebook HOST=tap.example.org
+    make demo-tunnel HOST=cluster-host    # forwards the ingress to localhost
+    make demo-notebook                    # against http://egernia.test:8080
 
 It runs in four parts: what a client can discover about the service, the four
 ways to ask it a question, both metadata models under one query language, and
@@ -30,20 +31,30 @@ def _():
     import marimo as mo
     import pandas as pd
 
-    BASE = os.environ.get("EGERNIA_BASE_URL", "http://localhost:8080").rstrip("/")
+    BASE = os.environ.get("EGERNIA_BASE_URL", "http://egernia.test:8080").rstrip("/")
     TAP = f"{BASE}/tap"
     API = f"{BASE}/api/v1"
-    PROM = f"{BASE}/prometheus"
-    return API, BASE, PROM, TAP, alt, httpx, mo, os, pd, time
+    # Same host by default: one ingress routes /tap, /api/v1 and /prometheus,
+    # so one tunnelled port carries all three. Overridable for a deployment
+    # that exposes Prometheus somewhere else.
+    PROM = os.environ.get("EGERNIA_PROMETHEUS_URL", f"{BASE}/prometheus").rstrip("/")
+
+    # `make demo-tls` issues a self-signed certificate, which httpx would
+    # refuse. Skipping verification is defensible here and nowhere else: the
+    # only route to this service is an SSH tunnel, which is already an
+    # encrypted and authenticated channel. See deploy/demo/tls.sh.
+    VERIFY = os.environ.get("EGERNIA_INSECURE_TLS", "0") not in ("1", "true", "yes")
+    http = httpx.Client(verify=VERIFY)
+    return API, BASE, PROM, TAP, VERIFY, alt, http, mo, os, pd, time
 
 
 @app.cell
-def _(BASE, TAP, httpx, mo):
+def _(BASE, TAP, http, mo):
     # One reachability check, stated plainly: everything below is meaningless
     # if this fails, and "connection refused" three cells later reads as a
     # broken service rather than a DNS entry nobody made.
     try:
-        _probe = httpx.get(f"{TAP}/availability", timeout=10)
+        _probe = http.get(f"{TAP}/availability", timeout=10)
         _reachable = _probe.status_code == 200
         _detail = f"HTTP {_probe.status_code}"
     except Exception as exc:
@@ -87,7 +98,7 @@ def _(mo):
 
 
 @app.cell
-def _(BASE, TAP, httpx, mo):
+def _(BASE, TAP, http, mo):
     _endpoints = [
         ("service root", f"{BASE}/", "what this is, and where everything else is"),
         ("OpenAPI", f"{BASE}/openapi.json", "the JSON API, machine-readable"),
@@ -104,7 +115,7 @@ def _(BASE, TAP, httpx, mo):
     _rows = []
     for _name, _url, _why in _endpoints:
         try:
-            _resp = httpx.get(_url, timeout=20)
+            _resp = http.get(_url, timeout=20)
             _status, _size = _resp.status_code, len(_resp.content)
         except Exception as exc:
             _status, _size = type(exc).__name__, 0
@@ -133,10 +144,10 @@ def _(BASE, TAP, httpx, mo):
 
 
 @app.cell
-def _(TAP, httpx, mo):
+def _(TAP, http, mo):
     # The capabilities document is the contract. Rather than dump the XML,
     # pull out the parts a client actually branches on.
-    _caps = httpx.get(f"{TAP}/capabilities", timeout=20).text
+    _caps = http.get(f"{TAP}/capabilities", timeout=20).text
 
     def _inner(tag):
         out, rest = [], _caps
@@ -177,10 +188,10 @@ def _(TAP, httpx, mo):
 
 
 @app.cell
-def _(API, httpx, mo):
+def _(API, http, mo):
     # What the deployment enforces, said by the deployment. A client should
     # not have to discover by trial that it needs a token.
-    _auth = httpx.get(f"{API}/auth", timeout=15).json()
+    _auth = http.get(f"{API}/auth", timeout=15).json()
     _gated = _auth.get("gated_operations") or {}
     mo.vstack(
         [
@@ -268,13 +279,13 @@ def _(TAP, mo, query_adql, time):
 
 
 @app.cell
-def _(TAP, httpx, mo, pd, query_adql, time):
+def _(TAP, http, mo, pd, query_adql, time):
     # (b) Raw TAP: an HTTP form post. What PyVO does underneath, and what any
     # language with an HTTP client can do without a VO library at all.
     from io import StringIO
 
     _t0 = time.perf_counter()
-    _r = httpx.post(
+    _r = http.post(
         f"{TAP}/sync",
         data={"LANG": "ADQL", "QUERY": query_adql.value, "RESPONSEFORMAT": "csv"},
         timeout=120,
@@ -303,11 +314,11 @@ def _(TAP, httpx, mo, pd, query_adql, time):
 
 
 @app.cell
-def _(API, httpx, mo, query_adql, time):
+def _(API, http, mo, query_adql, time):
     # (c) The JSON API: no XML, no VO library, an OpenAPI schema. What a
     # pipeline or a web front end would use.
     _t0 = time.perf_counter()
-    _r = httpx.post(
+    _r = http.post(
         f"{API}/query",
         json={"query": query_adql.value, "lang": "ADQL", "format": "json"},
         timeout=120,
@@ -356,7 +367,7 @@ def _(mo):
 
 
 @app.cell
-def _(API, TAP, httpx, mo, query_adql, run_async, time):
+def _(API, TAP, http, mo, query_adql, run_async, time):
     if not run_async.value:
         _panel = mo.md("_Not submitted._")
     else:
@@ -364,7 +375,7 @@ def _(API, TAP, httpx, mo, query_adql, run_async, time):
 
         # --- UWS (IVOA): create pending, then drive the phase
         _t0 = time.perf_counter()
-        _create = httpx.post(
+        _create = http.post(
             f"{TAP}/async",
             data={"LANG": "ADQL", "QUERY": query_adql.value, "RESPONSEFORMAT": "csv"},
             follow_redirects=False,
@@ -373,12 +384,12 @@ def _(API, TAP, httpx, mo, query_adql, run_async, time):
         _job_url = _create.headers.get("location", "")
         _log.append(f"UWS   POST /tap/async      -> {_create.status_code}, job at {_job_url}")
         if _job_url:
-            httpx.post(
+            http.post(
                 f"{_job_url}/phase", data={"PHASE": "RUN"}, follow_redirects=False, timeout=30
             )
             _phase = "UNKNOWN"
             for _ in range(120):
-                _phase = httpx.get(f"{_job_url}/phase", timeout=15).text.strip()
+                _phase = http.get(f"{_job_url}/phase", timeout=15).text.strip()
                 if _phase in ("COMPLETED", "ERROR", "ABORTED"):
                     break
                 time.sleep(0.5)
@@ -386,12 +397,12 @@ def _(API, TAP, httpx, mo, query_adql, run_async, time):
                 f"UWS   phase                -> {_phase} in {time.perf_counter() - _t0:.1f}s"
             )
             if _phase == "COMPLETED":
-                _res = httpx.get(f"{_job_url}/results/result", timeout=60)
+                _res = http.get(f"{_job_url}/results/result", timeout=60)
                 _log.append(f"UWS   result               -> {len(_res.content):,} bytes")
 
         # --- JSON API: one POST creates and runs it
         _t1 = time.perf_counter()
-        _job = httpx.post(
+        _job = http.post(
             f"{API}/jobs",
             json={"query": query_adql.value, "format": "csv", "run": True},
             timeout=30,
@@ -400,7 +411,7 @@ def _(API, TAP, httpx, mo, query_adql, run_async, time):
         _log.append(f"JSON  POST /api/v1/jobs    -> {_jid} ({_job.get('phase')})")
         _state = _job
         for _ in range(120):
-            _state = httpx.get(f"{API}/jobs/{_jid}", timeout=15).json()
+            _state = http.get(f"{API}/jobs/{_jid}", timeout=15).json()
             if _state.get("phase") in ("COMPLETED", "ERROR", "ABORTED"):
                 break
             time.sleep(0.5)
@@ -409,7 +420,7 @@ def _(API, TAP, httpx, mo, query_adql, run_async, time):
             f"{time.perf_counter() - _t1:.1f}s"
         )
         if _state.get("phase") == "COMPLETED":
-            _r = httpx.get(f"{API}/jobs/{_jid}/result", timeout=60)
+            _r = http.get(f"{API}/jobs/{_jid}/result", timeout=60)
             _log.append(f"JSON  result               -> {len(_r.content):,} bytes")
             _log.append(f"BOTH  the same job in UWS  -> {_state['urls']['uws']}")
 
@@ -445,7 +456,7 @@ def _(mo):
 
 
 @app.cell
-def _(TAP, httpx, mo, show_errors):
+def _(TAP, http, mo, show_errors):
     if not show_errors.value:
         _panel = mo.md("_Not sent._")
     else:
@@ -460,7 +471,7 @@ def _(TAP, httpx, mo, show_errors):
         ]
         _rows = []
         for _label, _adql in _cases:
-            _r = httpx.post(
+            _r = http.post(
                 f"{TAP}/sync",
                 data={"LANG": "ADQL", "QUERY": _adql, "RESPONSEFORMAT": "csv"},
                 timeout=60,
@@ -501,11 +512,11 @@ def _(mo):
 
 
 @app.cell
-def _(TAP, httpx, mo, pd):
+def _(TAP, http, mo, pd):
     from io import StringIO as _S
 
     def _csv(adql: str) -> pd.DataFrame:
-        r = httpx.post(
+        r = http.post(
             f"{TAP}/sync",
             data={"LANG": "ADQL", "QUERY": adql, "RESPONSEFORMAT": "csv"},
             timeout=120,
@@ -539,9 +550,9 @@ def _(TAP, httpx, mo, pd):
 
 
 @app.cell
-def _(API, httpx, mo, pd):
+def _(API, http, mo, pd):
     # TAP_SCHEMA is the map both models registered themselves in.
-    _tables = httpx.get(f"{API}/tables", timeout=30).json()["tables"]
+    _tables = http.get(f"{API}/tables", timeout=30).json()["tables"]
     _rows = [
         {
             "table": f"{t['schema']}.{t['name']}",
@@ -588,7 +599,7 @@ def _(mo):
 
 
 @app.cell
-def _(TAP, httpx, mo, radius, time):
+def _(TAP, http, mo, radius, time):
     _adql = f"""
     SELECT TOP 1000 obs_publisher_did, s_ra, s_dec, em_min, em_max, access_url
     FROM ivoa.obscore
@@ -596,7 +607,7 @@ def _(TAP, httpx, mo, radius, time):
                          CIRCLE('ICRS', 150.0, -30.0, {radius.value}))
     """
     _t0 = time.perf_counter()
-    _r = httpx.post(
+    _r = http.post(
         f"{TAP}/sync",
         data={"LANG": "ADQL", "QUERY": _adql, "RESPONSEFORMAT": "csv"},
         timeout=120,
@@ -645,7 +656,7 @@ def _(mo):
 
 
 @app.cell
-def _(TAP, httpx, mo, run_aggregate, time):
+def _(TAP, http, mo, run_aggregate, time):
     if not run_aggregate.value:
         _out = mo.md("_Not run — it is deliberately expensive._")
     else:
@@ -655,7 +666,7 @@ def _(TAP, httpx, mo, run_aggregate, time):
         GROUP BY dataproduct_type
         """
         _t0 = time.perf_counter()
-        _r = httpx.post(
+        _r = http.post(
             f"{TAP}/sync",
             data={"LANG": "ADQL", "QUERY": _adql, "RESPONSEFORMAT": "csv"},
             timeout=600,
@@ -704,7 +715,7 @@ def _(mo):
 
 
 @app.cell
-def _(TAP, alt, concurrency, mo, pd, run_load, time, total):
+def _(TAP, VERIFY, alt, concurrency, mo, pd, run_load, time, total):
     if not run_load.value:
         _panel = mo.md("_Idle._")
     else:
@@ -723,7 +734,9 @@ def _(TAP, alt, concurrency, mo, pd, run_load, time, total):
             latencies, errors = [], 0
             limit = asyncio.Semaphore(concurrency.value)
             async with _httpx.AsyncClient(
-                timeout=60, limits=_httpx.Limits(max_connections=concurrency.value + 8)
+                timeout=60,
+                verify=VERIFY,
+                limits=_httpx.Limits(max_connections=concurrency.value + 8),
             ) as client:
 
                 async def one(i):
@@ -807,7 +820,7 @@ def _(mo):
 
 
 @app.cell
-def _(PROM, alt, httpx, mo, pd, refresh, window):
+def _(PROM, alt, http, mo, pd, refresh, window):
     refresh  # the dependency that makes this cell re-run on the timer
 
     def _range(query: str, span: str, step: str = "5s") -> pd.DataFrame:
@@ -815,7 +828,7 @@ def _(PROM, alt, httpx, mo, pd, refresh, window):
 
         end = _t.time()
         seconds = {"5m": 300, "15m": 900, "1h": 3600}[span]
-        r = httpx.get(
+        r = http.get(
             f"{PROM}/api/v1/query_range",
             params={"query": query, "start": end - seconds, "end": end, "step": step},
             timeout=20,

@@ -60,7 +60,9 @@ if [ -n "$classes" ]; then
   ok "IngressClass available: $classes"
   echo "     pass INGRESS_CLASS=<name> unless one is marked default"
 else
-  bad "no IngressClass — the notebook machine will have nothing to connect to"
+  bad "no IngressClass — the tunnel has nothing to land on. Either install one"
+  echo "     (ingress-nginx is the usual choice), or use the NodePort fallback"
+  echo "     described in deploy/demo/README.md"
 fi
 
 echo

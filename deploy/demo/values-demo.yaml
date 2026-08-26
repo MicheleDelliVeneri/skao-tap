@@ -12,6 +12,17 @@
 # checked against the cluster it lands on: `storageClass` and the ingress
 # `className` in particular have no portable default, which is why they are
 # empty and the Makefile refuses to guess them.
+#
+# Reached over an SSH tunnel to one ingress port. On the laptop:
+#
+#   echo '127.0.0.1 egernia.test' | sudo tee -a /etc/hosts
+#   make demo-tunnel HOST=cluster-host
+#   open http://egernia.test:8080/tap/capabilities
+#
+# One forwarded port carries /tap, /api/v1 and /prometheus, because the
+# ingress routes by path. It routes by *Host* as well, which is the reason
+# for the /etc/hosts line: the name has to be in the request, not just in
+# the URL bar. `make demo-tunnel` prints both lines.
 
 image:
   registry: ghcr.io/ska-telescope/egernia
@@ -20,20 +31,29 @@ image:
 
 ingress:
   enabled: true
-  # -- REQUIRED. The hostname the notebook machine will resolve. `make
-  # demo-deploy` refuses to run while this is still the example.
-  host: tap.demo.example.org
+  # -- The name the notebook machine maps to 127.0.0.1. `.test` is reserved
+  # by RFC 6761 for exactly this: it can never collide with a real domain.
+  host: egernia.test
   # -- REQUIRED on most clusters: nginx, traefik, alb... An empty className
   # means "the cluster default", which many clusters do not define.
   className: ""
   annotations: {}
+  # TLS is off by default and that is not laziness: the tunnel is already an
+  # encrypted channel, so a certificate inside it protects nothing and costs
+  # a trust decision on every laptop. `make demo-tls` turns it on with a
+  # self-signed certificate for the host above, for anyone who wants the
+  # padlock in the screenshot.
   tls: []
-  # Prometheus is unauthenticated. Acceptable on a demo cluster whose
-  # ingress is not on the public internet; not acceptable anywhere else, and
-  # the chart keeps it off by default for that reason.
+  # Prometheus has no authentication of its own. Acceptable here because the
+  # only way in is an SSH tunnel to a cluster you can already reach; not
+  # acceptable on a public ingress, which is why the chart defaults it off.
   exposePrometheus: true
 
 tapApi:
+  # ClusterIP: the ingress is the way in. NodePort stays available in the
+  # chart for a cluster with no ingress controller — see deploy/demo/README.
+  service:
+    type: ClusterIP
   replicas: 2
   # One worker per core of the CPU limit, no higher: ADQL translation is
   # pure-Python and holds the GIL, so a worker cannot exceed one core whatever

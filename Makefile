@@ -103,7 +103,9 @@ benchmark-teardown:
 #
 #   make demo-help                        this list, and the current target
 #   make demo-preflight                   what the cluster is and what it lacks
-#   make demo-deploy HOST=tap.example.org deploy the chart via the current context
+#   make demo-deploy                      deploy the chart via the current context
+#   make demo-tunnel HOST=cluster-host    the ssh + /etc/hosts lines, and open it
+#   make demo-tls                         a self-signed cert for egernia.test
 #   make demo-headlamp                    Headlamp, for the cluster view on screen
 #   make demo-dataset                     generate the ~100 GiB D5 dataset in-cluster
 #   make demo-snapshot                    capture D5 so the next run is minutes
@@ -122,9 +124,12 @@ DEMO_RELEASE ?= egernia
 DEMO_VALUES ?= $(DEMO_DIR)/values-demo.yaml
 DEMO_CONTEXT = $(shell kubectl config current-context 2>/dev/null)
 DEMO_MARIMO := $(DEMO_DIR)/scaling_demo.py
+# The name the notebook machine maps to 127.0.0.1. `.test` is reserved by
+# RFC 6761, so it can never collide with a real domain.
+DEMO_HOST ?= egernia.test
 
-.PHONY: demo-help demo-preflight demo-deploy demo-headlamp demo-dataset \
-        demo-snapshot demo-restore demo-notebook demo-status demo-teardown
+.PHONY: demo-help demo-preflight demo-deploy demo-tunnel demo-tls demo-headlamp \
+        demo-dataset demo-snapshot demo-restore demo-notebook demo-status demo-teardown
 
 demo-help:
 	@sed -n '/^# Multi-machine demo/,/^# deploying 100 GiB/p' $(firstword $(MAKEFILE_LIST))
@@ -135,17 +140,23 @@ demo-preflight:
 	@$(DEMO_DIR)/preflight.sh
 
 demo-deploy:
-	@test -n "$(HOST)" || { echo "HOST is required, e.g. make demo-deploy HOST=tap.example.org" >&2; exit 2; }
 	@test -n "$(DEMO_CONTEXT)" || { echo "no current kubectl context" >&2; exit 2; }
-	@echo "deploying to context '$(DEMO_CONTEXT)', namespace '$(DEMO_NS)', host '$(HOST)'"
+	@echo "deploying to context '$(DEMO_CONTEXT)', namespace '$(DEMO_NS)', host '$(DEMO_HOST)'"
 	helm upgrade --install $(DEMO_RELEASE) $(CURDIR)/deploy/helm/egernia \
 	  --namespace $(DEMO_NS) --create-namespace \
 	  --values $(DEMO_VALUES) \
-	  --set ingress.host=$(HOST) \
+	  --set ingress.host=$(DEMO_HOST) \
 	  $(if $(INGRESS_CLASS),--set ingress.className=$(INGRESS_CLASS),) \
 	  $(if $(STORAGE_CLASS),--set postgresql.storageClass=$(STORAGE_CLASS) --set results.storageClass=$(STORAGE_CLASS),) \
+	  $(if $(TLS_SECRET),--set ingress.tls[0].secretName=$(TLS_SECRET) --set ingress.tls[0].hosts[0]=$(DEMO_HOST),) \
 	  --wait --timeout 15m
-	@$(MAKE) --no-print-directory demo-status HOST=$(HOST)
+	@$(MAKE) --no-print-directory demo-status
+
+demo-tunnel:
+	@$(DEMO_DIR)/tunnel.sh $(DEMO_NS) $(HOST)
+
+demo-tls:
+	@$(DEMO_DIR)/tls.sh $(DEMO_NS) $(DEMO_HOST)
 
 demo-headlamp:
 	@test -n "$(DEMO_CONTEXT)" || { echo "no current kubectl context" >&2; exit 2; }
@@ -161,12 +172,12 @@ demo-restore:
 	$(DEMO_DIR)/dataset.sh restore $(DEMO_NS) $(DEMO_RELEASE)
 
 demo-notebook:
-	@test -n "$(HOST)" || { echo "HOST is required, e.g. make demo-notebook HOST=tap.example.org" >&2; exit 2; }
-	EGERNIA_BASE_URL=$(if $(SCHEME),$(SCHEME),http)://$(HOST) \
+	EGERNIA_BASE_URL=$(or $(BASE_URL),http://$(DEMO_HOST):8080) \
+	  EGERNIA_INSECURE_TLS=$(or $(INSECURE_TLS),0) \
 	  $(PYTHON) -m marimo edit $(DEMO_MARIMO)
 
 demo-status:
-	@$(DEMO_DIR)/status.sh $(DEMO_NS) $(DEMO_RELEASE) $(HOST)
+	@$(DEMO_DIR)/status.sh $(DEMO_NS) $(DEMO_RELEASE) $(DEMO_HOST)
 
 demo-teardown:
 	@echo "removing release '$(DEMO_RELEASE)' from context '$(DEMO_CONTEXT)'"

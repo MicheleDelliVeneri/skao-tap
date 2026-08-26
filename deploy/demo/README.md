@@ -9,33 +9,89 @@ This is deliberately not the single-machine walkthrough — that is
 different question: *does it hold up, and does it scale, when the client is
 somewhere else?*
 
-## What you need
+## The shape of it
 
-A cluster with a StorageClass that can give it ~200 GiB, an ingress
-controller, and metrics-server. `make demo-preflight` checks all three and
-says which is missing rather than letting you find out from a `Pending` PVC
-twenty minutes later.
+Two machines and one SSH tunnel:
+
+```
+laptop                              cluster host
+------                              ------------
+notebook                            ingress controller
+  |                                       |
+  http://egernia.test:8080  ──ssh -L──>  :80 ──> /tap
+                                              ──> /api/v1
+  /etc/hosts: 127.0.0.1 egernia.test          ──> /prometheus
+```
+
+One forwarded port carries everything, because the ingress routes by path.
+It routes by **Host** as well, which is what the `/etc/hosts` line is for:
+the name has to be in the request, not just in the address bar. `.test` is
+reserved by RFC 6761 for exactly this and can never collide with a real
+domain.
+
+## On the cluster
+
+A StorageClass that can give it ~200 GiB, an ingress controller, and
+metrics-server. `make demo-preflight` checks all three and says which is
+missing rather than letting you find out from a `Pending` PVC twenty minutes
+later.
 
 ```bash
 kubectl config use-context <your-cluster>
 make demo-preflight
+make demo-deploy INGRESS_CLASS=nginx STORAGE_CLASS=fast-ssd
 ```
 
-## Deploying
+The host defaults to `egernia.test`; override with `DEMO_HOST=`. The cluster
+is whatever `kubectl config current-context` points at, and every target that
+changes it prints that context first — deploying 100 GiB into the wrong
+cluster is not an undo-able mistake.
+
+## On the laptop
 
 ```bash
-make demo-deploy HOST=tap.example.org \
-                 INGRESS_CLASS=nginx \
-                 STORAGE_CLASS=fast-ssd
+echo '127.0.0.1 egernia.test' | sudo tee -a /etc/hosts   # once
+make demo-tunnel HOST=user@cluster-host
 ```
 
-`HOST` is required and must be a name the **notebook machine** can resolve to
-the ingress address — DNS, or a line in its `/etc/hosts`. `make demo-status`
-prints both the hostname and the address so you can check they agree.
+`demo-tunnel` finds where the ingress controller is reachable from the
+cluster host — a NodePort, a LoadBalancer address, or neither — prints the
+exact `ssh -L` line, and offers to run it. Leave it open; everything is then
+at `http://egernia.test:8080`.
 
-The cluster is whatever `kubectl config current-context` points at. Every
-target that changes it prints that context first: deploying 100 GiB into the
-wrong cluster is not an undo-able mistake.
+### TLS, if you want the padlock
+
+```bash
+make demo-tls                      # self-signed cert for egernia.test
+make demo-deploy TLS_SECRET=egernia-demo-tls
+make demo-notebook BASE_URL=https://egernia.test:8443 INSECURE_TLS=1
+```
+
+Worth being straight about what this buys: the tunnel is already an
+encrypted, authenticated channel, so a certificate inside it protects nothing
+the tunnel does not already protect — it costs a trust decision on every
+laptop instead. It is here because "why is it not https" is a fair question
+to be asked in front of an audience, and a working padlock answers it faster
+than that paragraph does.
+
+`INSECURE_TLS=1` makes the notebook skip verification, which is defensible
+only because of the tunnel underneath. PyVO uses its own HTTP stack and will
+not honour it, so the PyVO cell needs the certificate genuinely trusted —
+another reason the default is plain HTTP.
+
+### No ingress controller?
+
+Fall back to NodePorts and two forwards. There is no Host routing that way,
+so Prometheus needs its own port:
+
+```bash
+helm upgrade ... --set ingress.enabled=false \
+    --set tapApi.service.type=NodePort --set tapApi.service.nodePort=30080 \
+    --set prometheus.service.type=NodePort --set prometheus.service.nodePort=30090
+ssh -N -L 8080:localhost:30080 -L 9090:localhost:30090 user@cluster-host
+make demo-notebook BASE_URL=http://localhost:8080 \
+                   EGERNIA_PROMETHEUS_URL=http://localhost:9090
+```
 
 ## The dataset
 
@@ -63,9 +119,11 @@ run would buy a curve that D1–D4 already gives the shape of.
 
 ## The notebook
 
+With the tunnel open:
+
 ```bash
 uv sync --group demo
-make demo-notebook HOST=tap.example.org
+make demo-notebook
 ```
 
 marimo, so the sliders are live: change the query, the cone radius or the
