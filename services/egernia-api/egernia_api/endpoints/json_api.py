@@ -19,7 +19,7 @@ import logging
 import shutil
 
 from egernia_core import uws
-from egernia_core.config import settings
+from egernia_core.config import base_url, settings
 from egernia_core.db import connection as db_connection
 from egernia_core.errors import NotFoundError, UsageError
 from egernia_core.metadata import ingest
@@ -131,7 +131,7 @@ async def sync_query(body: QueryRequest):
 
 def _api_base() -> str:
     """The /api/v1 base derived from the TAP base URL (…/tap -> …/api/v1)."""
-    root = settings.base_url.rsplit("/tap", 1)[0]
+    root = base_url().rsplit("/tap", 1)[0]
     return f"{root}/api/v1"
 
 
@@ -149,7 +149,7 @@ def _job_json(job: dict) -> dict:
         "parameters": job["parameters"],
         "urls": {
             "job": f"{_api_base()}/jobs/{job['job_id']}",
-            "uws": f"{settings.base_url}/async/{job['job_id']}",
+            "uws": f"{base_url()}/async/{job['job_id']}",
         },
     }
     if job["phase"] == "COMPLETED":

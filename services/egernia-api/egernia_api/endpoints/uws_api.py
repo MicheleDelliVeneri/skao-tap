@@ -7,7 +7,7 @@ import shutil
 import time
 
 from egernia_core import uws
-from egernia_core.config import settings
+from egernia_core.config import base_url, settings
 from egernia_core.db import connection as db_connection
 from egernia_core.errors import NotFoundError, UsageError
 from egernia_core.query.upload import save_upload_sources
@@ -32,7 +32,7 @@ def _job_url(job_id: str) -> str:
     Callers pass the id as stored in uws.jobs — never the raw path segment —
     so only a server-generated id can reach a Location header.
     """
-    return f"{settings.base_url}/async/{job_id}"
+    return f"{base_url()}/async/{job_id}"
 
 
 def fetch_job(job_id: str) -> dict:
@@ -188,7 +188,7 @@ async def delete_job(job_id: str):
     with db_connection() as conn:
         uws.delete_job(conn, job_id)
     shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
-    return RedirectResponse(f"{settings.base_url}/async", status_code=303)
+    return RedirectResponse(f"{base_url()}/async", status_code=303)
 
 
 @router.get("/{job_id}/phase")

@@ -1,7 +1,10 @@
 """Environment-driven configuration shared by all services."""
 
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 TRUE_VALUES = ("1", "true", "yes", "on")
 FALSE_VALUES = ("0", "false", "no", "off")
@@ -52,6 +55,12 @@ def _bool(name: str, default: bool):
 class Settings:
     database_url: str = _env("TAP_DATABASE_URL", "postgresql://tap:tap@localhost:5432/tap")
     base_url: str = _env("TAP_BASE_URL", "http://localhost:8080/tap")
+    # Hosts whose requests may decide the URLs this service prints back into
+    # job documents, comma-separated. Host is client-controlled, so an
+    # unvetted one would let a caller choose the links a job document hands
+    # out; unset means trust none of them and always answer with base_url,
+    # which is exactly how this behaved before request-derived URLs existed.
+    trusted_hosts: str = _env("TAP_TRUSTED_HOSTS", "")
     results_dir: str = _env("TAP_RESULTS_DIR", "/results")
     # How long the readiness probe waits for a connection before answering
     # "busy". Short on purpose and separate from db_pool_timeout_s: a probe
@@ -164,3 +173,42 @@ class Settings:
 
 
 settings = Settings()
+
+
+# The origin (scheme://host) the client used to reach us, for the duration of
+# one request. A ContextVar rather than a parameter because the URL builders
+# are spread across the UWS store, the VOSI documents and both APIs, and the
+# executor calls some of them with no request at all.
+_origin: ContextVar[str | None] = ContextVar("tap_request_origin", default=None)
+
+
+def trusted_hosts() -> frozenset[str]:
+    """Hostnames whose requests may decide the URLs we print, lowercased."""
+    return frozenset(h.strip().lower() for h in settings.trusted_hosts.split(",") if h.strip())
+
+
+@contextmanager
+def request_origin(origin: str | None):
+    """Bind the client's origin for one request. None keeps the configured URL."""
+    token = _origin.set(origin)
+    try:
+        yield
+    finally:
+        _origin.reset(token)
+
+
+def base_url() -> str:
+    """The TAP base URL as the client reached us, else the configured one.
+
+    A job URL is one the client has to fetch back, so it must name the host
+    the client used — not the one the operator registered. Behind an SSH
+    tunnel, a port-forward or any second ingress those differ, and a canonical
+    URL the client cannot resolve is a job it cannot poll.
+
+    Only the origin comes from the request; the path stays configured, so a
+    deployment at ``/services/tap`` keeps its prefix. An untrusted host never
+    reaches here — the middleware binds nothing — so this is base_url, and a
+    registry harvesting the canonical host is told the canonical URL.
+    """
+    origin = _origin.get()
+    return f"{origin}{urlsplit(settings.base_url).path}" if origin else settings.base_url

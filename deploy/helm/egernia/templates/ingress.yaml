@@ -18,44 +18,19 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   rules:
-    - host: {{ .Values.ingress.host | quote }}
+    {{- range include "egernia.serviceHosts" . | splitList "," }}
+    - host: {{ . | quote }}
       http:
         paths:
-          - path: /tap
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "egernia.fullname" . }}-tap-api
-                port:
-                  name: http
-          # the JSON API: same service, own prefix — routed too, or a
-          # deployment behind an ingress serves VO clients and refuses every
-          # machine-to-machine caller
-          - path: /api/v1
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "egernia.fullname" . }}-tap-api
-                port:
-                  name: http
-          # the rest of the same service: OpenAPI, /docs, the health probes and
-          # the metrics exposition. Last, and a bare prefix, so the two above
-          # still win on longest-prefix match.
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "egernia.fullname" . }}-tap-api
-                port:
-                  name: http
-          {{- if and .Values.prometheus.enabled .Values.ingress.exposePrometheus }}
-          # unauthenticated: see ingress.exposePrometheus in values.yaml
-          - path: /prometheus
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "egernia.fullname" . }}-prometheus
-                port:
-                  name: http
-          {{- end }}
+          {{- include "egernia.ingressPaths" $ | nindent 10 }}
+    {{- end }}
+    {{- if .Values.ingress.catchAll }}
+    {{- /* A rule with no host matches any of them, so the service answers
+           however it was reached — including by an IP literal, which the
+           Ingress API refuses to accept as a host name. Opt-in: on a shared
+           ingress controller this claims every hostname nothing else routes. */}}
+    - http:
+        paths:
+          {{- include "egernia.ingressPaths" $ | nindent 10 }}
+    {{- end }}
 {{- end }}
