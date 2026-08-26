@@ -73,6 +73,15 @@ class Settings:
     # must match the registry's authorityId, so this is configuration, not a
     # constant.
     obscore_did_prefix: str = _env("TAP_OBSCORE_DID_PREFIX", "ivo://skao.int/~?")
+    # The key chain the DID path is built from, dot-separated, in order. The
+    # default is the primary key of srcnet.data_products — one component per
+    # level of the ODP hierarchy — because that is what identifies a data
+    # product uniquely. A deployment whose model nests differently sets its
+    # own; a chain that does not identify a product uniquely makes two
+    # products share a DID, and a DID is a permanent promise.
+    obscore_did_columns: str = _env(
+        "TAP_OBSCORE_DID_COLUMNS", "project_id.obs_id.sbd_id.eb_id.product_id"
+    )
     log_level: str = _env("TAP_LOG_LEVEL", "INFO")
     # Where to send OpenTelemetry traces. Empty means nowhere, and nothing is
     # instrumented — a deployment without a collector should not pay for one.
