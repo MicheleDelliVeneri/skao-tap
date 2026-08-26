@@ -215,6 +215,8 @@ def _profile_section(summary: dict) -> list[str]:
     would invite a reader to treat the profiler's shares as measured
     throughput, which is exactly the mistake the family is arranged to avoid.
     """
+    from . import stats as stats_mod
+
     profile = summary.get("profile") or {}
     if not profile:
         return []
@@ -256,8 +258,6 @@ def _profile_section(summary: dict) -> list[str]:
 
     attribution = profile.get("attribution") or {}
     if attribution:
-        by_subsystem = attribution.get("by_subsystem_ms") or {}
-        total = sum(by_subsystem.values()) or 1.0
         parts += [
             "### Where it goes",
             "",
@@ -272,8 +272,8 @@ def _profile_section(summary: dict) -> list[str]:
             _table(
                 ["subsystem", "ms/request", "share"],
                 [
-                    [name, _fmt(ms, 2), f"{100 * ms / total:.1f}%"]
-                    for name, ms in sorted(by_subsystem.items(), key=lambda kv: -kv[1])
+                    [name, _fmt(ms, 2), f"{100 * share:.1f}%"]
+                    for name, ms, share in stats_mod.subsystem_shares(attribution)
                 ],
             ),
         ]
@@ -293,13 +293,14 @@ def _profile_section(summary: dict) -> list[str]:
                 [
                     [
                         f"`{name}`",
-                        _fmt(entry["rps"]),
-                        f"{100 * (entry['throughput_cost_fraction'] or 0.0):.1f}%",
-                        _fmt(entry["cpu_ms_per_request"], 2),
-                        _fmt(entry["cpu_ms_added_per_request"], 2),
+                        _fmt(rps),
+                        f"{100 * throughput_cost:.1f}%",
+                        _fmt(cpu_ms, 2),
+                        _fmt(added_ms, 2),
                     ]
-                    for name in ("authverify", "authgated")
-                    if (entry := cost.get(name))
+                    for name, rps, throughput_cost, cpu_ms, added_ms in (
+                        stats_mod.auth_cost_rows(cost)
+                    )
                 ],
             ),
             "`authverify` verifies every token and enforces nothing; `authgated`",

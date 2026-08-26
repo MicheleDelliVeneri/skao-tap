@@ -661,3 +661,48 @@ def test_a_rung_whose_clients_collapsed_onto_one_pod_says_so():
     # as unknown rather than as a single pod having served everything.
     silent = stats_mod.served_by([sample("")] * 100)
     assert silent == {"pods": {}, "distinct_pods": 0, "concentration": None}
+
+
+# ---------------------------------------------------------------------------
+# Row shaping shared by the three renderers
+# ---------------------------------------------------------------------------
+
+
+def test_subsystem_shares_are_sorted_and_total_one():
+    """The text report used to recompute this total inside its own row loop
+    while the other two renderers hoisted it — the drift that comes free with
+    writing the same derivation three times."""
+    from egernia_bench.analyze import stats as stats_mod
+
+    rows = stats_mod.subsystem_shares(
+        {"by_subsystem_ms": {"writers": 7.5, "adql": 2.5, "routing": 0.5}}
+    )
+    assert [name for name, _, _ in rows] == ["writers", "adql", "routing"]  # busiest first
+    assert sum(share for _, _, share in rows) == pytest.approx(1.0)
+    assert rows[0][2] == pytest.approx(7.5 / 10.5)
+
+
+def test_subsystem_shares_of_nothing_does_not_divide_by_zero():
+    from egernia_bench.analyze import stats as stats_mod
+
+    assert stats_mod.subsystem_shares({}) == []
+    assert stats_mod.subsystem_shares({"by_subsystem_ms": {"idle": 0.0}}) == [("idle", 0.0, 0.0)]
+
+
+def test_an_unmeasured_auth_rung_is_absent_rather_than_zero():
+    """A rung the run never measured is missing evidence; a zero row would
+    read as 'authentication cost nothing'."""
+    from egernia_bench.analyze import stats as stats_mod
+
+    rows = stats_mod.auth_cost_rows(
+        {
+            "authverify": {
+                "rps": 101.2,
+                "throughput_cost_fraction": None,  # the 'or 0.0' fallback
+                "cpu_ms_per_request": 9.1,
+                "cpu_ms_added_per_request": 1.9,
+            }
+        }
+    )
+    assert [name for name, *_ in rows] == ["authverify"]  # authgated absent, not zero
+    assert rows[0][2] == 0.0
