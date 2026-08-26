@@ -71,3 +71,28 @@ def test_pool_is_cached_and_closable(monkeypatch):
     assert first.closed
     assert db._pool is None
     db.close_pool()  # idempotent when already closed
+
+
+def test_signalling_a_backend_is_always_scoped_to_this_jobs_statement():
+    """The `query LIKE` guard is what stops a signal reaching a PID that
+    PostgreSQL has since handed to an unrelated backend. Both variants carry
+    it, and both bind the pid and marker rather than interpolating them."""
+
+    class Recording:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=None):
+            self.calls.append((sql, params))
+            return self
+
+    conn = Recording()
+    uws.signal_backend(conn, 4242, "%tap_job_abc%")
+    uws.signal_backend(conn, 4242, "%tap_job_abc%", terminate=True)
+
+    actions = [sql.split("(")[0].removeprefix("SELECT ") for sql, _ in conn.calls]
+    assert actions == ["pg_cancel_backend", "pg_terminate_backend"]
+    for sql, params in conn.calls:
+        assert "FROM pg_stat_activity WHERE pid = %s AND query LIKE %s" in sql
+        assert params == (4242, "%tap_job_abc%")
+        assert "4242" not in sql  # bound, never interpolated
