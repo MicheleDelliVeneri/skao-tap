@@ -38,437 +38,316 @@ Mapping decisions (each visible in the SQL below):
 import hashlib
 import logging
 import re
+from typing import NamedTuple
 
 from egernia_core.config import settings
 
 log = logging.getLogger("tap-api")
 
-# (name, datatype, arraysize, xtype, unit, ucd, utype, principal, std, select expression)
-# in REC Table 6 order; datatypes are the VOTable names TAP_SCHEMA uses.
-OBSCORE_COLUMNS: list[tuple] = [
-    (
+
+class ObsCoreColumn(NamedTuple):
+    """One ivoa.obscore column: its TAP_SCHEMA registration and the view
+    expression that produces it, in REC Table 6 order.
+
+    arraysize is derived rather than stored — VOTable wants "*" for char
+    and nothing for the fixed-width types, which held for all 31 columns when
+    they were spelled out. Everything ObsCore makes near-universal
+    (``principal``, ``std``) defaults to the standard value, so only the one
+    non-standard column has to say otherwise.
+    """
+
+    name: str
+    datatype: str  # the VOTable name TAP_SCHEMA uses
+    ucd: str
+    utype: str | None
+    description: str
+    expression: str | None  # None: the publisher DID, built by view_sql()
+    unit: str | None = None
+    xtype: str | None = None
+    principal: int = 1
+    std: int = 1
+
+    @property
+    def arraysize(self) -> str | None:
+        return "*" if self.datatype == "char" else None
+
+
+OBSCORE_COLUMNS: list[ObsCoreColumn] = [
+    ObsCoreColumn(
         "dataproduct_type",
         "char",
-        "*",
-        None,
-        None,
         "meta.id",
         "obscore:ObsDataset.dataProductType",
-        1,
-        1,
+        "Data product (file content) primary type",
         "CASE p.dataproduct_type WHEN 'table' THEN 'measurements' ELSE p.dataproduct_type END",
     ),
-    (
+    # ObsCore 1.1 Table 6 reads calib_level as 0=raw, 1=instrumental,
+    # 2=calibrated, 3=derived; srcnet declares 0=raw, 1=calibrated,
+    # 2=science-ready, 3=analysis (docs/model-schemas.md), and the view hands
+    # the value over unchanged. Relabelling real calibration levels is a
+    # data-model decision, not a view one, so the description states what the
+    # column holds rather than what ObsCore would like it to hold;
+    # docs/obscore.md records the discrepancy.
+    ObsCoreColumn(
         "calib_level",
         "int",
-        None,
-        None,
-        None,
         "meta.code;obs.calib",
         "obscore:ObsDataset.calibLevel",
-        1,
-        1,
+        "Calibration level as declared by the SRCNet producer, passed through"
+        " untranslated (srcnet: 0=raw, 1=calibrated, 2=science-ready, 3=analysis)",
         "p.calib_level::integer",
     ),
-    (
+    ObsCoreColumn(
         "obs_collection",
         "char",
-        "*",
-        None,
-        None,
         "meta.id",
         "obscore:DataID.collection",
-        1,
-        1,
+        "Name of the data collection",
         "COALESCE(o.collection, 'unclassified')",
     ),
-    (
+    ObsCoreColumn(
         "obs_id",
         "char",
-        "*",
-        None,
-        None,
         "meta.id",
         "obscore:DataID.observationID",
-        1,
-        1,
+        "Internal ID given by the ObsTAP service",
         "p.obs_id",
     ),
-    (
+    ObsCoreColumn(
         "obs_publisher_did",
         "char",
-        "*",
-        None,
-        None,
         "meta.ref.uri;meta.curation",
         "obscore:Curation.publisherDID",
-        1,
-        1,
-        None,  # built from the DID prefix at view-creation time
+        "ID for the Dataset given by the publisher",
+        None,
     ),
-    (
+    ObsCoreColumn(
         "access_url",
         "char",
-        "*",
-        None,
-        None,
         "meta.ref.url",
         "obscore:Access.reference",
-        1,
-        1,
+        "URL used to access the dataset",
         "a.access_url",
     ),
-    (
+    ObsCoreColumn(
         "access_format",
         "char",
-        "*",
-        None,
-        None,
         "meta.code.mime",
         "obscore:Access.format",
-        1,
-        1,
+        "Content format of the dataset",
         "a.access_format",
     ),
-    (
+    ObsCoreColumn(
         "access_estsize",
         "long",
-        None,
-        None,
-        "kbyte",
         "phys.size;meta.file",
         "obscore:Access.size",
-        1,
-        1,
+        "Estimated size of the dataset in kilobytes",
         "round(a.access_estsize / 1000.0)::bigint",
+        unit="kbyte",
     ),
-    (
+    ObsCoreColumn(
         "target_name",
         "char",
-        "*",
-        None,
-        None,
         "meta.id;src",
         "obscore:Target.name",
-        1,
-        1,
+        "Object of interest",
         "p.target_name",
     ),
-    (
+    ObsCoreColumn(
         "s_ra",
         "double",
-        None,
-        None,
-        "deg",
         "pos.eq.ra",
         "obscore:Char.SpatialAxis.Coverage.Location.Coord.Position2D.Value2.C1",
-        1,
-        1,
+        "Central spatial position in ICRS: right ascension",
         "p.s_ra",
+        unit="deg",
     ),
-    (
+    ObsCoreColumn(
         "s_dec",
         "double",
-        None,
-        None,
-        "deg",
         "pos.eq.dec",
         "obscore:Char.SpatialAxis.Coverage.Location.Coord.Position2D.Value2.C2",
-        1,
-        1,
+        "Central spatial position in ICRS: declination",
         "p.s_dec",
+        unit="deg",
     ),
-    (
+    ObsCoreColumn(
         "s_fov",
         "double",
-        None,
-        None,
-        "deg",
         "phys.angSize;instr.fov",
         "obscore:Char.SpatialAxis.Coverage.Bounds.Extent.diameter",
-        1,
-        1,
+        "Estimated size of the covered region (diameter)",
         "p.s_fov",
+        unit="deg",
     ),
-    (
+    ObsCoreColumn(
         "s_region",
         "char",
-        "*",
-        "adql:REGION",
-        None,
         "pos.outline;obs.field",
         "obscore:Char.SpatialAxis.Coverage.Support.Area",
-        1,
-        1,
+        "Sky region covered by the data product (STC-S)",
         "p.s_region",
+        xtype="adql:REGION",
     ),
-    (
+    ObsCoreColumn(
         "s_resolution",
         "double",
-        None,
-        None,
-        "arcsec",
         "pos.angResolution",
         "obscore:Char.SpatialAxis.Resolution.Refval.value",
-        1,
-        1,
+        "Spatial resolution of the data (FWHM)",
         "p.beam_size",
+        unit="arcsec",
     ),
-    (
+    ObsCoreColumn(
         "s_xel1",
         "long",
-        None,
-        None,
-        None,
         "meta.number",
         "obscore:Char.SpatialAxis.numBins1",
-        1,
-        1,
+        "Number of elements along the first coordinate of the spatial axis",
         "p.s_xel1",
     ),
-    (
+    ObsCoreColumn(
         "s_xel2",
         "long",
-        None,
-        None,
-        None,
         "meta.number",
         "obscore:Char.SpatialAxis.numBins2",
-        1,
-        1,
+        "Number of elements along the second coordinate of the spatial axis",
         "p.s_xel2",
     ),
-    (
+    ObsCoreColumn(
         "t_min",
         "double",
-        None,
-        None,
-        "d",
         "time.start;obs.exposure",
         "obscore:Char.TimeAxis.Coverage.Bounds.Limits.StartTime",
-        1,
-        1,
+        "Start time in MJD",
         "p.t_min",
+        unit="d",
     ),
-    (
+    ObsCoreColumn(
         "t_max",
         "double",
-        None,
-        None,
-        "d",
         "time.end;obs.exposure",
         "obscore:Char.TimeAxis.Coverage.Bounds.Limits.StopTime",
-        1,
-        1,
+        "Stop time in MJD",
         "p.t_max",
+        unit="d",
     ),
-    (
+    ObsCoreColumn(
         "t_exptime",
         "double",
-        None,
-        None,
-        "s",
         "time.duration;obs.exposure",
         "obscore:Char.TimeAxis.Coverage.Support.Extent",
-        1,
-        1,
+        "Total exposure time",
         "p.t_exptime",
+        unit="s",
     ),
-    (
+    ObsCoreColumn(
         "t_resolution",
         "double",
-        None,
-        None,
-        "s",
         "time.resolution",
         "obscore:Char.TimeAxis.Resolution.Refval.value",
-        1,
-        1,
+        "Temporal resolution (FWHM)",
         "NULL::double precision",
+        unit="s",
     ),
-    (
+    ObsCoreColumn(
         "t_xel",
         "long",
-        None,
-        None,
-        None,
         "meta.number",
         "obscore:Char.TimeAxis.numBins",
-        1,
-        1,
+        "Number of elements along the time axis",
         "p.t_xel",
     ),
-    (
+    ObsCoreColumn(
         "em_min",
         "double",
-        None,
-        None,
-        "m",
         "em.wl;stat.min",
         "obscore:Char.SpectralAxis.Coverage.Bounds.Limits.LoLimit",
-        1,
-        1,
+        "Start in spectral coordinates (vacuum wavelength)",
         "p.em_min",
+        unit="m",
     ),
-    (
+    ObsCoreColumn(
         "em_max",
         "double",
-        None,
-        None,
-        "m",
         "em.wl;stat.max",
         "obscore:Char.SpectralAxis.Coverage.Bounds.Limits.HiLimit",
-        1,
-        1,
+        "Stop in spectral coordinates (vacuum wavelength)",
         "p.em_max",
+        unit="m",
     ),
-    (
+    ObsCoreColumn(
         "em_res_power",
         "double",
-        None,
-        None,
-        None,
         "spect.resolution",
         "obscore:Char.SpectralAxis.Resolution.ResolPower.refVal",
-        1,
-        1,
+        "Spectral resolving power",
         "NULL::double precision",
     ),
-    (
+    ObsCoreColumn(
         "em_xel",
         "long",
-        None,
-        None,
-        None,
         "meta.number",
         "obscore:Char.SpectralAxis.numBins",
-        1,
-        1,
+        "Number of elements along the spectral axis",
         "p.em_xel",
     ),
-    (
+    ObsCoreColumn(
         "o_ucd",
         "char",
-        "*",
-        None,
-        None,
         "meta.ucd",
         "obscore:Char.ObservableAxis.ucd",
-        1,
-        1,
+        "Nature of the observable axis",
         "p.o_ucd",
     ),
-    (
+    ObsCoreColumn(
         "pol_states",
         "char",
-        "*",
-        None,
-        None,
         "meta.code;phys.polarization",
         "obscore:Char.PolarizationAxis.stateList",
-        1,
-        1,
+        "List of polarization states or NULL if not applicable",
         "p.pol_states",
     ),
-    (
+    ObsCoreColumn(
         "pol_xel",
         "long",
-        None,
-        None,
-        None,
         "meta.number",
         "obscore:Char.PolarizationAxis.numBins",
-        1,
-        1,
+        "Number of polarization samples",
         "p.pol_xel",
     ),
-    (
+    ObsCoreColumn(
         "facility_name",
         "char",
-        "*",
-        None,
-        None,
         "meta.id;instr.tel",
         "obscore:Provenance.ObsConfig.Facility.name",
-        1,
-        1,
+        "Name of the facility used for this observation",
         "o.facility_name",
     ),
-    (
+    ObsCoreColumn(
         "instrument_name",
         "char",
-        "*",
-        None,
-        None,
         "meta.id;instr",
         "obscore:Provenance.ObsConfig.Instrument.name",
-        1,
-        1,
+        "Name of the instrument used for this observation",
         "o.instrument_name",
     ),
     # Non-standard companion: the pgsphere footprint derived from s_region
     # (package 7). std = 0 says it plainly; it exists so INTERSECTS/CONTAINS
     # work directly on the view.
-    (
+    ObsCoreColumn(
         "s_region_geom",
         "char",
-        "*",
-        None,
-        None,
         "pos.outline;obs.field",
         None,
-        0,
-        0,
+        "pgsphere footprint derived from s_region at ingestion (non-standard);"
+        " query it with INTERSECTS/CONTAINS",
         "p.s_region_geom",
+        principal=0,
+        std=0,
     ),
 ]
-
-DESCRIPTIONS = {
-    "dataproduct_type": "Data product (file content) primary type",
-    # ObsCore 1.1 Table 6 reads this as 0=raw, 1=instrumental, 2=calibrated,
-    # 3=derived; srcnet declares 0=raw, 1=calibrated, 2=science-ready,
-    # 3=analysis (docs/model-schemas.md), and the view hands the value over
-    # unchanged. Relabelling real calibration levels is a data-model decision,
-    # not a view one, so the description states what the column holds rather
-    # than what ObsCore would like it to hold; docs/obscore.md records the
-    # discrepancy so a client author is not left to discover it by eye.
-    "calib_level": (
-        "Calibration level as declared by the SRCNet producer, passed through"
-        " untranslated (srcnet: 0=raw, 1=calibrated, 2=science-ready, 3=analysis)"
-    ),
-    "obs_collection": "Name of the data collection",
-    "obs_id": "Internal ID given by the ObsTAP service",
-    "obs_publisher_did": "ID for the Dataset given by the publisher",
-    "access_url": "URL used to access the dataset",
-    "access_format": "Content format of the dataset",
-    "access_estsize": "Estimated size of the dataset in kilobytes",
-    "target_name": "Object of interest",
-    "s_ra": "Central spatial position in ICRS: right ascension",
-    "s_dec": "Central spatial position in ICRS: declination",
-    "s_fov": "Estimated size of the covered region (diameter)",
-    "s_region": "Sky region covered by the data product (STC-S)",
-    "s_resolution": "Spatial resolution of the data (FWHM)",
-    "s_xel1": "Number of elements along the first coordinate of the spatial axis",
-    "s_xel2": "Number of elements along the second coordinate of the spatial axis",
-    "t_min": "Start time in MJD",
-    "t_max": "Stop time in MJD",
-    "t_exptime": "Total exposure time",
-    "t_resolution": "Temporal resolution (FWHM)",
-    "t_xel": "Number of elements along the time axis",
-    "em_min": "Start in spectral coordinates (vacuum wavelength)",
-    "em_max": "Stop in spectral coordinates (vacuum wavelength)",
-    "em_res_power": "Spectral resolving power",
-    "em_xel": "Number of elements along the spectral axis",
-    "o_ucd": "Nature of the observable axis",
-    "pol_states": "List of polarization states or NULL if not applicable",
-    "pol_xel": "Number of polarization samples",
-    "facility_name": "Name of the facility used for this observation",
-    "instrument_name": "Name of the instrument used for this observation",
-    "s_region_geom": (
-        "pgsphere footprint derived from s_region at ingestion (non-standard);"
-        " query it with INTERSECTS/CONTAINS"
-    ),
-}
 
 # doubles as the obscore table's utype in TAP_SCHEMA
 DATAMODEL_IVOID = "ivo://ivoa.net/std/ObsCore#core-1.1"
@@ -528,8 +407,8 @@ def view_sql(or_replace: bool = False) -> str:
         _did_component(f"p.{column}") for column in DID_KEY_COLUMNS
     )
     selects = ",\n    ".join(
-        f"{expression if expression is not None else did} AS {name}"
-        for name, *_, expression in OBSCORE_COLUMNS
+        f"{column.expression if column.expression is not None else did} AS {column.name}"
+        for column in OBSCORE_COLUMNS
     )
     verb = "CREATE OR REPLACE VIEW" if or_replace else "CREATE VIEW"
     return (
@@ -657,7 +536,6 @@ def ensure_obscore(conn) -> None:
         (DATAMODEL_IVOID,),
     )
     for index, column in enumerate(OBSCORE_COLUMNS, start=1):
-        name, datatype, arraysize, xtype, unit, ucd, utype, principal, std, _ = column
         conn.execute(
             "INSERT INTO tap_schema.columns (table_name, column_name, datatype,"
             " arraysize, xtype, unit, ucd, utype, description, indexed, principal,"
@@ -670,16 +548,16 @@ def ensure_obscore(conn) -> None:
             " principal = EXCLUDED.principal, std = EXCLUDED.std,"
             " column_index = EXCLUDED.column_index",
             (
-                name,
-                datatype,
-                arraysize,
-                xtype,
-                unit,
-                ucd,
-                utype,
-                DESCRIPTIONS[name],
-                principal,
-                std,
+                column.name,
+                column.datatype,
+                column.arraysize,
+                column.xtype,
+                column.unit,
+                column.ucd,
+                column.utype,
+                column.description,
+                column.principal,
+                column.std,
                 index,
             ),
         )
