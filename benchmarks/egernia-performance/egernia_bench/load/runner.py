@@ -719,6 +719,7 @@ def _open_loop_share(payload: dict) -> tuple[list, list, list, float]:
             response_format=payload["response_format"],
             arrival_seed=payload["arrival_seed"],
             max_in_flight=payload["max_in_flight"],
+            token=payload["token"],
         )
     )
     return recorder.samples, recorder.cpu_samples, timeline, time.time() - started
@@ -737,6 +738,7 @@ def open_loop_sharded(
     response_format: str = "csv",
     arrival_seed: int = 90210,
     max_in_flight: int = 4096,
+    token: str | None = None,
 ) -> tuple[Recorder, list[dict], float]:
     """An open loop split across processes, so the generator scales.
 
@@ -765,6 +767,7 @@ def open_loop_sharded(
                 "response_format": response_format,
                 "arrival_seed": arrival_seed,
                 "max_in_flight": max_in_flight,
+                "token": token,
             }
         )
         merged = Recorder()
@@ -790,6 +793,7 @@ def open_loop_sharded(
             "response_format": response_format,
             "arrival_seed": arrival_seed + 137 * index,
             "max_in_flight": max(1, max_in_flight // processes),
+            "token": token,
         }
         for index in range(processes)
     ]

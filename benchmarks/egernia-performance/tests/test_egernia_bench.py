@@ -461,3 +461,34 @@ def test_larger_tiers_declare_their_own_warmup():
     assert runner_mod.warmup_for(cfg, "D3") == 300.0
     assert runner_mod.warmup_for(cfg, "D4") == 600.0
     assert runner_mod.warmup_for(cfg, "D4") > runner_mod.warmup_for(cfg, "D3")
+
+
+def test_start_opens_a_family_in_the_documented_order(monkeypatch):
+    """config, then the run directory, then the images — and the run is
+    created before setup() so a resumed run reuses its directory rather than
+    rebuilding into a fresh one. The CLI families are otherwise uncovered, so
+    this pins the prologue they all share."""
+    from egernia_bench import __main__ as cli
+
+    calls = []
+    cfg_obj = {"marker": "cfg"}
+    run_obj = object()
+    monkeypatch.setattr(cli.runner, "load_config", lambda: calls.append("load_config") or cfg_obj)
+    monkeypatch.setattr(
+        cli.runs_mod,
+        "new_run",
+        lambda scenario, resume: calls.append(("new_run", scenario, resume)) or run_obj,
+    )
+    monkeypatch.setattr(
+        cli.runner,
+        "setup",
+        lambda cfg, rebuild_images: (
+            calls.append(("setup", cfg is cfg_obj, rebuild_images)) or {"img": "digest"}
+        ),
+    )
+
+    args = types.SimpleNamespace(resume="prior-run", no_build=True)
+    cfg, run, digests = cli._start("keda", args)
+
+    assert calls == ["load_config", ("new_run", "keda", "prior-run"), ("setup", True, False)]
+    assert cfg is cfg_obj and run is run_obj and digests == {"img": "digest"}
