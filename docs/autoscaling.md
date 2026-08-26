@@ -96,10 +96,19 @@ autoscaler divides:
 replicas = ceil(queued_jobs / queuedJobsPerReplica)
 ```
 
-So 50 queued jobs against the default 10 asks for 5 executors. One executor
-works through roughly 2 jobs/s, so the default is about 5 s of queue per
-replica. Lower it to react sooner and run more; raise it to tolerate a
-queue.
+So 50 queued jobs against the default 10 asks for 5 executors. Lower it to
+react sooner and run more; raise it to tolerate a queue. The old sizing
+aid — one executor works through roughly 2 jobs/s, so 10 is about 5 s of
+queue — was re-measured and confirmed on the image that still re-parsed
+each job's query (run `20260826T013544Z-88d8c5e9`: 2.3–2.5 jobs/s at ~0.9
+cores per pod). With that parse removed (package 20) an executor's fixed
+cost is ~5 ms of CPU per job and the benchmark's autoscaling family can no
+longer saturate one: run `20260826T050451Z-0f62a0fa` completed every
+offered job in-window at every load with the queue never past 52 jobs and
+pods at 2–3% CPU. The default of 10 still behaves — it now buys well under
+a second of queue per replica, and the async path's practical ceiling is
+the API pod, not the executors (the 2026-08-26 finding on the
+[Roadmap](roadmap.md) has the before/after).
 
 !!! note "Renamed values"
     `backlogSecondsPerReplica` and `activationBacklogSeconds` are refused by

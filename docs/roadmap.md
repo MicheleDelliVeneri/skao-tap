@@ -21,6 +21,74 @@ Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
 produced them remain in `benchmarks/egernia-performance/results/`.
 
+### 2026-08-26 — the parse removal, deployed: executors stopped being the async bottleneck (package 20, delivered)
+
+The autoscaling family (K1–K7), run twice on identical offered load — the
+ladder anchored at C1 = 6.83 jobs/s in both — differing only in whether the
+executor re-parses each job's query: run `20260826T013544Z-88d8c5e9` with
+the parse in the loop, run `20260826T050451Z-0f62a0fa` with the table list
+carried on the job row (`query_tables`, package 20's fix; the local profile
+behind it — 190 ms of per-job re-parse against ~6 ms for everything else,
+by `tests/performance/profile_async_job.py` — is in the 2026-08-25 entry in
+git history). Every validity guard passed in both runs. Completions are
+counted server-side: a `uws.jobs` row is inserted once and updated exactly
+four times on its way to COMPLETED, so per-window completions are the
+table's `n_tup_upd / 4` — the client's own success count is a casualty in
+both runs, for two different reasons below.
+
+| | before (`88d8c5e9`) | after (`0f62a0fa`) |
+| --- | --- | --- |
+| executor CPU per completed job | 385–469 ms | **4.3–5.0 ms** |
+| per-executor drain, fleet saturated | 2.3–2.5 jobs/s at ~0.9 core/pod (K3, K6) | never saturated — ≥6.2 jobs/s at 2–3% CPU (K6) |
+| sustained 6×C1 — K6, ~41 jobs/s offered | 80% done in-window; queue peaks 20,870; oldest job 851 s | 100% done in-window; queue peaks 52; oldest job 1 s |
+| KEDA replicas | pegged at 8 | peak 5, mean 3.7 |
+
+The before run is the published ~2 jobs/s figure re-measured and confirmed:
+a pegged executor drains 2.3–2.5 jobs/s at ~0.9 cores — ~0.4 s of CPU per
+job — and a fleet of eight cannot hold 6×C1: the queue grows past twenty
+thousand, jobs wait fourteen minutes, and 94% of K6's clients gave up
+before their job ran. The after run is the local profile transferring to
+the deployed environment almost exactly: ~4.6 ms of executor CPU per job
+against the profile's ~6 ms, ninety times less than before. No scenario in
+the family can make the executor the bottleneck any more — every job every
+scenario offered completed inside that scenario's window, KEDA never ran
+more than five replicas, and the pods that did run sat 97% idle.
+
+What the after run surfaces instead is the async path's next ceiling: the
+API. From 3.5×C1 up, 17–57% of client conversations failed — with
+connection errors, on jobs the server had accepted and did complete —
+against the single API pod at ~85% of its one-core limit. A job is a
+submit plus phase polls plus a result fetch, and ~41 arrivals/s of that
+control traffic exceeds what one pod that also answers ~99 rps of sync
+queries can serve. The executor autoscaling defaults survive unchanged
+(`queuedJobsPerReplica: 10` — the queue simply never builds); the ~2
+jobs/s notes in `values.yaml`, `autoscaling.md` and `architecture.md` are
+republished from these runs. What one executor can do now has no measured
+ceiling: feeding it one would take an API that scales, which is not this
+package.
+
+One boundary before that ceiling is read as a service property. The
+executor numbers above are server-side and client-independent; the API
+ceiling is a joint property of the service and a spin-polling client. The
+generator never sends UWS 1.1 `WAIT`: it polls each job's phase at 0.25 s
+backing off to 2 s, so one job costs the API roughly six to eight
+requests, and package 18 put this API at 10.5 ms of CPU per request
+(96–100 rps at one worker) — ~100 rps over ~7 requests per job predicts a
+~14 jobs/s ceiling. The data cannot test that prediction, only fail to
+contradict it: the family is clean at 0.5×C1 ≈ 3.4 jobs/s and failing at
+every rung from 3.5×C1 ≈ 24 jobs/s up, a factor-of-seven bracket with no
+rung between, and the suite cannot count the requests that would settle it
+(the generator records one sample per job however many polls it made, and
+no collected Prometheus series counts API requests — so `http.rps` on an
+async artefact is jobs/s, unlabelled; no published page mislabels it, the
+docs site's only requests/s column never sees an async measurement, so the
+fix is a unit on the field, not a correction to published figures). The service already
+carries the lever the generator did not use: `uws_api.py` implements the
+blocking `WAIT`, which would replace most of those requests with one held
+connection per job — so an operator hitting this ceiling may want a client
+change before more API replicas. The follow-up is one package with a
+prerequisite, not two: teach the harness to count API requests per job,
+then measure the async ceiling under a `WAIT`-ing client.
 ### 2026-08-25 — workers against replicas: same price per process, and the wall is the cgroup (package 19, delivered)
 
 One run (`20260825T180219Z-f8b21fc4`), twelve (workers, replicas) points plus
@@ -574,6 +642,28 @@ across the ten rungs of `20260825T163627Z-034d69ba`, and 98.9 rps at C1 in
 `20260824T235130Z-ccbcb41a` before that. The 200 was never measured on a
 single-replica rung; it is withdrawn, and the rest of the finding stands.
 
+## Package 19 — Workers against replicas, on one host
+
+The replica curve (1.00 / 0.96 / 0.88 / 0.73 at eight,
+`20260824T235130Z-ccbcb41a`) was measured at one worker per pod against a pod
+whose CPU limit is 2, so every point in it was half-idle by construction — and
+the chart still defaults `tapApi.workers: 1`. Two pages carry an explicit note
+that the worker figures predate the translation fast path and are being
+re-measured ([Autoscaling](autoscaling.md), [Deployment](deployment.md)); they
+have not been. Until they are, an operator has a measured answer for the axis
+that costs pods and a stale one for the axis that costs nothing.
+
+Work, benchmark-side: sweep `tapApi.workers` (1, 2, 4) within one pod at its
+CPU limit against the existing replica ladder, same host, same corpus, same
+workload seeds — and state the connection arithmetic each choice implies,
+since a pod's pool ceiling is `workers x dbPoolMax` and the two axes are
+therefore not interchangeable at the database.
+
+**Resolution is shown by** a capacity figure per (workers, replicas) point,
+each bracketed by a saturated sweep the way the replica ladder now is; the
+stale notes in `autoscaling.md` and `deployment.md` replaced by those numbers;
+and a stated default for `tapApi.workers` that follows the pod's CPU limit if
+the measurement supports one.
 ## Package 20 — What one async job actually costs
 
 The chart puts an executor at ~2 jobs/s (`values.yaml`, `tapExecutor.replicas`

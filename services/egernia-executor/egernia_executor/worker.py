@@ -170,6 +170,21 @@ def _reap_backend(job_id: str, pid: int | None) -> None:
         log.exception("failed to reap backend %s", pid)
 
 
+def _job_tables(job: dict) -> set[str]:
+    """The tables the job's query reads, without parsing anything.
+
+    The API stores the list on the job at queue time, from the ADQL parse it
+    already does at submit — re-deriving it here cost a full ANTLR parse of
+    the translated SQL per job (39 ms, more than the translation itself). The
+    parse remains only as a fallback for jobs queued by an API that predates
+    the column.
+    """
+    tables = job.get("query_tables")
+    if tables is not None:
+        return set(tables)
+    return touched_tables(job["query_sql"])
+
+
 def claim_job() -> dict | None:
     with db_connection() as conn:
         row = conn.execute(CLAIM_SQL).fetchone()
@@ -273,7 +288,7 @@ def _execute_job_inner(job: dict, job_id, params, backend_pid, duration) -> None
         # result sets are never materialized in memory
         result_size = 0
         with db_connection() as conn, conn.transaction():
-            tap_meta = tap_schema_metadata(conn, touched_tables(job["query_sql"]))
+            tap_meta = tap_schema_metadata(conn, _job_tables(job))
             if uploads:
                 create_upload_tables(conn, uploads, settings.query_role)
             timeout_ms = int(job["execution_duration"]) * 1000
@@ -376,14 +391,15 @@ def cleanup_expired() -> None:
         log.info("destroyed expired job %s", job_id)
 
 
-def _ensure_backend_pid_column(attempts: int = 30, delay_s: float = 2.0) -> None:
-    """Forward-migrate uws.jobs for deployments that predate ABORT support;
-    also what CLAIM_SQL needs, so retry until the database is reachable."""
+def _ensure_job_columns(attempts: int = 30, delay_s: float = 2.0) -> None:
+    """Forward-migrate uws.jobs for deployments whose schema predates a
+    column CLAIM_SQL now selects; retry until the database is reachable."""
     for attempt in range(1, attempts + 1):
         try:
             with db_connection() as conn:
                 conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS backend_pid integer")
                 conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS request_id text")
+                conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS query_tables text[]")
             return
         except Exception as exc:
             if attempt == attempts:
@@ -433,7 +449,7 @@ def main() -> None:
         settings.executor_metrics_port,
     )
     os.makedirs(settings.results_dir, exist_ok=True)
-    _ensure_backend_pid_column()
+    _ensure_job_columns()
     last_cleanup = 0.0
     last_queue_metrics = 0.0
     while True:

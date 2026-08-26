@@ -25,7 +25,7 @@ job count would scale wrongly without a word, so the old names are refused
 with the new ones.
 */}}
 {{- if hasKey $hpa.tapExecutor "backlogSecondsPerReplica" }}
-{{- fail "horizontalAutoscaling.tapExecutor.backlogSecondsPerReplica was renamed: the executor now scales on queue depth (tap_jobs{phase=\"QUEUED\"}), not the oldest job's age, which saturates under load. Set queuedJobsPerReplica — QUEUED jobs one replica absorbs (one executor runs ~2 jobs/s, so 10 is about 5 s of queue). See docs/autoscaling.md." }}
+{{- fail "horizontalAutoscaling.tapExecutor.backlogSecondsPerReplica was renamed: the executor now scales on queue depth (tap_jobs{phase=\"QUEUED\"}), not the oldest job's age, which saturates under load. Set queuedJobsPerReplica — QUEUED jobs one replica absorbs (an executor's fixed cost is ~5 ms of CPU per job since package 20, so 10 queued jobs are typically well under a second of queue). See docs/autoscaling.md." }}
 {{- end }}
 {{- if hasKey $hpa.tapExecutor "activationBacklogSeconds" }}
 {{- fail "horizontalAutoscaling.tapExecutor.activationBacklogSeconds was renamed to activationQueuedJobs: the executor now scales on queue depth, not the oldest job's age. See docs/autoscaling.md." }}

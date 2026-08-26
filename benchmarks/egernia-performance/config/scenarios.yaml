@@ -17,9 +17,14 @@ timing:
   # Async jobs wait in a queue rather than in the service, so they accumulate
   # far more outstanding requests at the same offered rate: a KEDA scenario
   # abandoned 38.6% of its arrivals at 4096, which shrinks the very backlog the
-  # autoscaler is being measured on. Affordable at this size because a queued
-  # job's phase poll backs off after its first seconds.
-  max_in_flight_async: 20000
+  # autoscaler is being measured on. Sized to hold the family's worst case —
+  # under sustained overload a job stays outstanding for its whole 600 s client
+  # timeout, so the spike scenarios keep ~offered_rate x 600 in flight
+  # (~24,600 at 6xC1): keda-K3 abandoned 11.9% at 20,000 against a slow fleet
+  # (20260826, take 3). Affordable at this size because a queued job's phase
+  # poll backs off in proportion to its age and costs a raw socket, not an
+  # httpx pass.
+  max_in_flight_async: 32768
 
 concurrency_sweep:
   levels: [1, 2, 4, 8, 16, 32, 64, 128]
@@ -38,6 +43,16 @@ fixed_replica_scaling:
   # Offered rates as multiples of C1, the sustainable capacity of one replica.
   c1_multiples: [0.5, 1.0, 2.0, 4.0, 6.0, 8.0]
   dataset: D4
+
+# The async scenarios' generator, sharded like the replica sweep's. Even at
+# ~24 offered jobs/s one asyncio loop pinned its core (keda-K2 on
+# 20260825T220317Z, marked invalid by the headroom guard): every job in
+# flight holds a phase-poll loop, so a scenario that queues thousands of
+# jobs makes the generator's real request rate the poll rate, not the
+# arrival rate. Four processes put the ceiling far above what the polls
+# and the arrivals together need.
+keda_load:
+  generator_processes: 4
 
 keda_scenarios:
   - id: K1
