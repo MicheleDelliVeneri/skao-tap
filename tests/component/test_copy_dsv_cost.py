@@ -213,9 +213,7 @@ def _integral_sql(rows: int, formatted: bool) -> str:
     base = INTEGRAL_HEAVY_SQL.replace("%(rows)s", str(rows)).replace("%%", "%")
     if not formatted:
         return base
-    columns = ", ".join(
-        OTHER_COLUMNS + [_float_matching_python(c) for c in FLOAT_COLUMNS]
-    )
+    columns = ", ".join(OTHER_COLUMNS + [_float_matching_python(c) for c in FLOAT_COLUMNS])
     return f"SELECT {columns} FROM ({base}) AS src"
 
 

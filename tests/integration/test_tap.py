@@ -380,8 +380,13 @@ def test_a_job_can_be_deleted(session, tap_url, dataset_ready):
         allow_redirects=True,
     )
     job_url = created.url.split("?")[0]
-    assert session.delete(job_url, timeout=60).status_code in (200, 303)
-    assert session.get(job_url, timeout=30).status_code == 404
+    # The request is made outside the assert: under `python -O` an assert is
+    # stripped along with everything inside it, so a delete written this way
+    # would silently not happen and the test would pass having done nothing.
+    deleted = session.delete(job_url, timeout=60)
+    assert deleted.status_code in (200, 303), deleted.text
+    gone = session.get(job_url, timeout=30)
+    assert gone.status_code == 404, f"the job survived deletion: {gone.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -404,8 +409,10 @@ def test_the_json_job_lifecycle(session, api_url, dataset_ready):
     assert created.status_code == 201, created.text
     job_id = created.json()["job_id"]
 
-    assert session.get(f"{api_url}/jobs", timeout=60).status_code == 200
-    assert session.get(f"{api_url}/jobs/{job_id}", timeout=30).status_code == 200
+    listed = session.get(f"{api_url}/jobs", timeout=60)
+    assert listed.status_code == 200, listed.text
+    fetched = session.get(f"{api_url}/jobs/{job_id}", timeout=30)
+    assert fetched.status_code == 200, fetched.text
 
     deadline = time.monotonic() + QUERY_TIMEOUT_S
     phase = ""
@@ -420,7 +427,8 @@ def test_the_json_job_lifecycle(session, api_url, dataset_ready):
     assert result.status_code == 200, result.text
     assert _rows(result), "the JSON job produced no rows"
 
-    assert session.delete(f"{api_url}/jobs/{job_id}", timeout=30).status_code == 204
+    deleted = session.delete(f"{api_url}/jobs/{job_id}", timeout=30)
+    assert deleted.status_code == 204, deleted.text
 
 
 # ---------------------------------------------------------------------------
@@ -494,8 +502,10 @@ def test_software_ingest_amend_and_delete(session, api_url, dataset_ready):
     )
     assert amended.status_code in (200, 204), amended.text
 
-    assert session.delete(f"{api_url}/software/{uri}", timeout=30).status_code in (200, 204)
-    assert session.get(f"{api_url}/software/{uri}", timeout=30).status_code == 404
+    deleted = session.delete(f"{api_url}/software/{uri}", timeout=30)
+    assert deleted.status_code in (200, 204), deleted.text
+    gone = session.get(f"{api_url}/software/{uri}", timeout=30)
+    assert gone.status_code == 404, f"{uri} survived deletion: {gone.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -565,4 +575,7 @@ def test_a_reader_may_not_delete(reader_session, api_url, dataset_ready):
         f"(HTTP {response.status_code}): {response.text[:300]}"
     )
     # and the document is still there
-    assert reader_session.get(f"{api_url}/software/{victim}", timeout=30).status_code == 200
+    survivor = reader_session.get(f"{api_url}/software/{victim}", timeout=30)
+    assert survivor.status_code == 200, (
+        f"{victim} is gone after a refused delete: {survivor.status_code}"
+    )

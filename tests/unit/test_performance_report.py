@@ -53,10 +53,22 @@ def test_the_report_names_every_measurement_and_flags_a_breach(conftest):
     _write(
         conftest,
         [
-            {"test": "a", "label": "keyed lookup", "seconds": 0.41, "budget": 20,
-             "headroom": 19.59, "within_budget": True},
-            {"test": "b", "label": "10k rows as votable", "seconds": 26.0, "budget": 20,
-             "headroom": -6.0, "within_budget": False},
+            {
+                "test": "a",
+                "label": "keyed lookup",
+                "seconds": 0.41,
+                "budget": 20,
+                "headroom": 19.59,
+                "within_budget": True,
+            },
+            {
+                "test": "b",
+                "label": "10k rows as votable",
+                "seconds": 26.0,
+                "budget": 20,
+                "headroom": -6.0,
+                "within_budget": False,
+            },
         ],
     )
     reporter = _Reporter()
@@ -82,10 +94,22 @@ def test_the_report_calls_out_the_slowest_and_the_tightest(conftest):
     _write(
         conftest,
         [
-            {"test": "a", "label": "full-table aggregate", "seconds": 104.0, "budget": 110,
-             "headroom": 6.0, "within_budget": True},
-            {"test": "b", "label": "cone search", "seconds": 1.9, "budget": 45,
-             "headroom": 43.1, "within_budget": True},
+            {
+                "test": "a",
+                "label": "full-table aggregate",
+                "seconds": 104.0,
+                "budget": 110,
+                "headroom": 6.0,
+                "within_budget": True,
+            },
+            {
+                "test": "b",
+                "label": "cone search",
+                "seconds": 1.9,
+                "budget": 45,
+                "headroom": 43.1,
+                "within_budget": True,
+            },
         ],
     )
     reporter = _Reporter()
@@ -107,8 +131,17 @@ def test_a_truncated_line_does_not_lose_the_report(conftest):
     """Workers append under a lock, but a killed run can still leave a partial
     line. The measurements that did land are worth more than strictness."""
     conftest.TIMINGS_PATH.write_text(
-        json.dumps({"test": "a", "label": "cone search", "seconds": 1.9, "budget": 45,
-                    "headroom": 43.1, "within_budget": True}) + "\n{\"partial\""
+        json.dumps(
+            {
+                "test": "a",
+                "label": "cone search",
+                "seconds": 1.9,
+                "budget": 45,
+                "headroom": 43.1,
+                "within_budget": True,
+            }
+        )
+        + '\n{"partial"'
     )
     reporter = _Reporter()
     conftest.pytest_terminal_summary(reporter, 0, None)
