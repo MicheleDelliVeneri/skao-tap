@@ -399,7 +399,7 @@ def install_chart(
         "upgrade",
         "--install",
         RELEASE,
-        str(REPO / "deploy/helm/egernia"),
+        str(REPO / "etc/helm"),
         "--kube-context",
         f"kind-{CLUSTER}",
         "--values",
