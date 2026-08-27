@@ -1,0 +1,12 @@
+# This directory is mounted into the deployment stack's test pod as source, and
+# that image runs python3.13 while the rest of this repository targets 3.14.
+#
+# Without this, `ruff format` rewrites `except (A, B):` into PEP 758's
+# unparenthesized form — valid in 3.14, a SyntaxError in 3.13 — and `ruff
+# check` accepts it, so the formatter silently produces a file the test pod
+# cannot load. It did exactly that twice.
+#
+# `extend` keeps every lint rule from the root config; only the language
+# version differs. Raise it when the stack's test image does.
+extend = "../../pyproject.toml"
+target-version = "py313"

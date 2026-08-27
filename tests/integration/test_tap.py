@@ -18,6 +18,7 @@ import time
 import uuid
 
 import pytest
+
 from conftest import QUERY_TIMEOUT_S, sync_query
 
 # Enough rows to be worth querying. Floors rather than exact counts: the seeder
@@ -165,7 +166,7 @@ def test_a_query_without_a_token_is_refused(anonymous, tap_url):
     )
 
 
-def test_a_query_with_a_token_is_served(session, tap_url):
+def test_a_query_with_a_token_is_served(session, tap_url, dataset_ready):
     """The whole auth chain in one assertion: IAM issued a token, the exchange
     gave it the egernia audience, egernia verified it against the
     IAM's JWKS over the cluster's own CA, and the Permissions API approved."""
@@ -179,7 +180,7 @@ def test_a_query_with_a_token_is_served(session, tap_url):
 # ---------------------------------------------------------------------------
 
 
-def test_sync_answers_get_as_well_as_post(session, tap_url):
+def test_sync_answers_get_as_well_as_post(session, tap_url, dataset_ready):
     """TOPCAT sends GET, PyVO sends POST; the ingress routes both to one path."""
     response = session.get(
         f"{tap_url}/sync",
@@ -190,7 +191,7 @@ def test_sync_answers_get_as_well_as_post(session, tap_url):
 
 
 @pytest.mark.parametrize("fmt", ["csv", "tsv", "votable", "json", "parquet", "arrow"])
-def test_sync_serves_every_result_format(session, fmt):
+def test_sync_serves_every_result_format(session, fmt, dataset_ready):
     """Each format is a different serialiser; a deployment missing one of the
     columnar dependencies fails only on that one."""
     response = sync_query(session, "SELECT TOP 5 obs_id, s_ra, s_dec FROM ivoa.obscore", fmt=fmt)
@@ -198,7 +199,7 @@ def test_sync_serves_every_result_format(session, fmt):
     assert response.content, f"{fmt} returned an empty body"
 
 
-def test_maxrec_is_honoured(session, tap_url):
+def test_maxrec_is_honoured(session, tap_url, dataset_ready):
     response = session.post(
         f"{tap_url}/sync",
         data={
@@ -213,7 +214,7 @@ def test_maxrec_is_honoured(session, tap_url):
     assert len(_rows(response)) <= 3
 
 
-def test_the_json_query_facade_answers(session, api_url):
+def test_the_json_query_facade_answers(session, api_url, dataset_ready):
     """POST /api/v1/query — the same engine, a JSON request and response."""
     response = session.post(
         f"{api_url}/query",
@@ -236,14 +237,14 @@ def test_the_json_tables_endpoint_answers(session, api_url):
 
 
 @pytest.mark.parametrize(("table", "minimum"), SEEDED_FLOORS)
-def test_the_seeded_tables_hold_data(session, table, minimum):
+def test_the_seeded_tables_hold_data(session, table, minimum, dataset_ready):
     response = sync_query(session, f"SELECT COUNT(*) AS n FROM {table}")
     assert response.status_code == 200, response.text
     count = int(_rows(response)[0]["n"])
     assert count >= minimum, f"{table} holds {count} rows, expected at least {minimum}"
 
 
-def test_the_odp_hierarchy_joins(session):
+def test_the_odp_hierarchy_joins(session, dataset_ready):
     """A join down the ODP model, which is what the fan-out exists for."""
     response = sync_query(
         session,
@@ -256,7 +257,7 @@ def test_the_odp_hierarchy_joins(session):
     assert _rows(response), "the ODP hierarchy join returned no rows"
 
 
-def test_the_software_model_joins(session):
+def test_the_software_model_joins(session, dataset_ready):
     response = sync_query(
         session,
         "SELECT TOP 5 s.uri, a.location "
@@ -267,7 +268,7 @@ def test_the_software_model_joins(session):
     assert _rows(response), "the software join returned no rows"
 
 
-def test_a_spatial_query_uses_the_footprint_index(session):
+def test_a_spatial_query_uses_the_footprint_index(session, dataset_ready):
     """A cone search, the query the GiST indexes exist for.
 
     The seeder drops those indexes for the load and rebuilds them after, so
@@ -283,7 +284,7 @@ def test_a_spatial_query_uses_the_footprint_index(session):
     assert response.status_code == 200, response.text
 
 
-def test_an_aggregate_over_the_whole_table_answers(session):
+def test_an_aggregate_over_the_whole_table_answers(session, dataset_ready):
     """Deliberately the expensive one: no index helps a full scan.
 
     This is the query that fails as "server disconnected" when the ingress
@@ -304,7 +305,7 @@ def test_an_aggregate_over_the_whole_table_answers(session):
 
 
 @pytest.fixture(scope="module")
-def completed_job(session, tap_url) -> str:
+def completed_job(session, tap_url, dataset_ready) -> str:
     """One job run to COMPLETED, reused by the sub-resource sweep below."""
     created = session.post(
         f"{tap_url}/async",
@@ -368,7 +369,7 @@ def test_the_job_result_carries_rows(session, completed_job):
     assert _rows(response), "the completed job produced no rows"
 
 
-def test_a_job_can_be_deleted(session, tap_url):
+def test_a_job_can_be_deleted(session, tap_url, dataset_ready):
     """Its own job, so the sweep above keeps the one it is reading."""
     created = session.post(
         f"{tap_url}/async",
@@ -386,7 +387,7 @@ def test_a_job_can_be_deleted(session, tap_url):
 # ---------------------------------------------------------------------------
 
 
-def test_the_json_job_lifecycle(session, api_url):
+def test_the_json_job_lifecycle(session, api_url, dataset_ready):
     """Create, list, fetch, run, poll, read the result, delete."""
     created = session.post(
         f"{api_url}/jobs",
@@ -426,12 +427,12 @@ def test_the_json_job_lifecycle(session, api_url):
 
 
 @pytest.mark.parametrize("domain", DOMAINS)
-def test_each_metadata_domain_lists(session, api_url, domain):
+def test_each_metadata_domain_lists(session, api_url, domain, dataset_ready):
     response = session.get(f"{api_url}/{domain}", timeout=60)
     assert response.status_code == 200, f"{domain}: {response.text[:200]}"
 
 
-def test_a_seeded_software_document_can_be_fetched(session, api_url):
+def test_a_seeded_software_document_can_be_fetched(session, api_url, dataset_ready):
     """List, then fetch by uri — the identity override this plugin declares."""
     listing = session.get(f"{api_url}/software", timeout=60)
     assert listing.status_code == 200, listing.text
@@ -451,7 +452,7 @@ def test_a_seeded_software_document_can_be_fetched(session, api_url):
     assert "artifacts" in document, f"no artifacts in the document for {uri}"
 
 
-def test_software_ingest_amend_and_delete(session, api_url):
+def test_software_ingest_amend_and_delete(session, api_url, dataset_ready):
     """One write round trip, under a uri of this test's own making.
 
     The only mutating test here, and the only one that needs the

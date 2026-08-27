@@ -28,6 +28,7 @@ import os
 import time
 
 import pytest
+
 from conftest import QUERY_TIMEOUT_S, sync_query
 
 
@@ -70,7 +71,7 @@ def _report(request, label: str, elapsed: float, budget: int) -> None:
     del request
 
 
-def test_a_keyed_lookup_is_index_served(session, request):
+def test_a_keyed_lookup_is_index_served(session, request, dataset_ready):
     """WHERE on a primary key. If this is slow, nothing else will be fast."""
     first = sync_query(session, "SELECT TOP 1 obs_id FROM ivoa.obscore")
     assert first.status_code == 200, first.text
@@ -88,7 +89,7 @@ def test_a_keyed_lookup_is_index_served(session, request):
     )
 
 
-def test_a_top_n_read_is_not_a_full_scan(session, request):
+def test_a_top_n_read_is_not_a_full_scan(session, request, dataset_ready):
     """TOP N with no predicate should stop early, not read the table."""
     response, elapsed = _timed(
         lambda: sync_query(session, "SELECT TOP 100 obs_id, s_ra, s_dec FROM ivoa.obscore")
@@ -100,7 +101,7 @@ def test_a_top_n_read_is_not_a_full_scan(session, request):
     )
 
 
-def test_a_cone_search_uses_the_footprint_index(session, request):
+def test_a_cone_search_uses_the_footprint_index(session, request, dataset_ready):
     """The test the GiST indexes exist for.
 
     The seeder drops them for its load and rebuilds them afterwards. A rebuild
@@ -125,7 +126,7 @@ def test_a_cone_search_uses_the_footprint_index(session, request):
     )
 
 
-def test_a_full_table_aggregate_completes_within_the_sync_timeout(session, request):
+def test_a_full_table_aggregate_completes_within_the_sync_timeout(session, request, dataset_ready):
     """The expensive one, and correctly so: no index helps a full scan.
 
     This is the query whose failure mode is a proxy timeout rather than a slow
@@ -151,7 +152,7 @@ def test_a_full_table_aggregate_completes_within_the_sync_timeout(session, reque
     )
 
 
-def test_an_async_round_trip_completes_within_budget(session, tap_url, request):
+def test_an_async_round_trip_completes_within_budget(session, tap_url, request, dataset_ready):
     """The path a long query is supposed to take, timed end to end.
 
     Mostly a check that the executor is picking work up: a fleet with no
@@ -196,7 +197,7 @@ def test_an_async_round_trip_completes_within_budget(session, tap_url, request):
 
 
 @pytest.mark.parametrize("fmt", ["csv", "votable", "parquet"])
-def test_result_writers_stream_rather_than_buffer(session, request, fmt):
+def test_result_writers_stream_rather_than_buffer(session, request, fmt, dataset_ready):
     """Ten thousand rows in three formats, each inside the point budget.
 
     A writer that buffers the whole result before emitting a byte scales with

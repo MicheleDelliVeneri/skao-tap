@@ -18,7 +18,9 @@ stack's test image, so egernia needs no entry in its test/pyproject.toml.
 from __future__ import annotations
 
 import contextlib
+import csv
 import fcntl
+import io
 import json
 import logging
 import os
@@ -57,6 +59,18 @@ EGERNIA_SERVICE_VERSION = "1"
 # the point of these is that the service answers, not how fast — the benchmark
 # suite is where timings are measured and published.
 QUERY_TIMEOUT_S = int(os.getenv("EGERNIA_QUERY_TIMEOUT_S", "180"))
+
+# The post-deploy seeder runs asynchronously — deliberately, so a load measured
+# in tens of minutes cannot fail the deploy — which means a test job started
+# right after a deploy meets a database being bulk-loaded with its spatial
+# indexes dropped. Every data-dependent test then fails on the API's own
+# shedding ("all database connections are busy") behind an nginx 503, which
+# says nothing about the code. So the suite waits for the dataset instead.
+#
+# Matches TARGET_PRODUCTS on the seeding Job. Lower it for a smaller seed.
+EXPECTED_PRODUCTS = int(os.getenv("EGERNIA_EXPECTED_PRODUCTS", "500000"))
+DATASET_WAIT_S = float(os.getenv("EGERNIA_DATASET_WAIT_S", "1500"))
+DATASET_POLL_S = float(os.getenv("EGERNIA_DATASET_POLL_S", "15"))
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -203,6 +217,68 @@ def token() -> str:
         # than carrying one that expires mid-run.
         cache.write_text(json.dumps({"token": minted, "expires_at": time.time() + 1800}))
         return minted
+
+
+@contextlib.contextmanager
+def _locked_cache(path: pathlib.Path):
+    """Serialise on `path`.lock and yield whatever `path` holds, as a dict.
+
+    The same shape the token fixture uses: xdist gives every worker its own
+    session-scoped fixtures, so anything that must happen once per run has to
+    coordinate through the filesystem.
+    """
+    lock = path.with_suffix(".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock, "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        state: dict = {}
+        with contextlib.suppress(ValueError, OSError):
+            state = json.loads(path.read_text())
+        yield state
+
+
+@pytest.fixture(scope="session")
+def dataset_ready(session: requests.Session) -> int:
+    """Block until the post-deploy seeder has finished, and return the row count.
+
+    Completion is "the expected number of data products is present", not "the
+    Job says Complete": the suite has no cluster credentials, and the row count
+    is what the tests actually depend on. A 503 while waiting is progress
+    rather than a failure — it is the API shedding under the seeder's load,
+    which is precisely what this waits out.
+
+    One worker polls and publishes; the rest read what it wrote.
+    """
+    cache = pathlib.Path(os.getenv("EGERNIA_DATASET_CACHE", "/tmp/egernia-dataset.json"))
+    with _locked_cache(cache) as state:
+        if state.get("rows", 0) >= EXPECTED_PRODUCTS:
+            return int(state["rows"])
+
+        deadline = time.monotonic() + DATASET_WAIT_S
+        rows = -1
+        while True:
+            response = sync_query(session, "SELECT COUNT(*) AS n FROM srcnet.data_products")
+            if response.status_code == 200:
+                try:
+                    rows = int(next(csv.DictReader(io.StringIO(response.text)))["n"])
+                except (StopIteration, KeyError, ValueError):
+                    rows = -1
+                if rows >= EXPECTED_PRODUCTS:
+                    cache.write_text(json.dumps({"rows": rows}))
+                    logger.info("dataset ready: %d data products", rows)
+                    return rows
+                logger.info("waiting for the seeder: %d/%d data products", rows, EXPECTED_PRODUCTS)
+            else:
+                # 503 here is the API shedding while the seeder loads.
+                logger.info("waiting for the seeder: HTTP %d", response.status_code)
+            if time.monotonic() >= deadline:
+                pytest.fail(
+                    f"the dataset was still incomplete after {DATASET_WAIT_S:.0f}s"
+                    f" ({rows} of {EXPECTED_PRODUCTS} data products). Check the seeding"
+                    " job: kubectl logs -n egernia -l component=dataset-seed",
+                    pytrace=False,
+                )
+            time.sleep(DATASET_POLL_S)
 
 
 @pytest.fixture(scope="session")
