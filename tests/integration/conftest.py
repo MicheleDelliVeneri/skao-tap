@@ -17,6 +17,7 @@ stack's test image, so egernia needs no entry in its test/pyproject.toml.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import json
 import logging
@@ -160,13 +161,15 @@ def token() -> str:
     with open(lock, "w") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         if cache.exists():
-            try:
+            # suppress rather than try/except: with ruff targeting py314 the
+            # formatter rewrites `except (A, B):` to PEP 758's unparenthesized
+            # form, which the stack's Python 3.13 test image cannot parse. A
+            # truncated or unreadable cache is just a cache miss either way.
+            with contextlib.suppress(ValueError, OSError):
                 cached = json.loads(cache.read_text())
                 if cached.get("token") and time.time() < cached.get("expires_at", 0):
                     logger.info("reusing the token minted by another worker")
                     return cached["token"]
-            except ValueError, OSError:
-                pass  # a truncated or unreadable cache is just a cache miss
         minted = _mint_token()
         # Well inside a token's own lifetime, so a long suite re-mints rather
         # than carrying one that expires mid-run.
