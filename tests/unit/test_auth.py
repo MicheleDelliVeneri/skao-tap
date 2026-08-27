@@ -51,6 +51,41 @@ def test_token_from_another_issuer_is_rejected(iam_verifier, make_token):
         iam_verifier.verify(make_token(iss="https://evil.example.org"))
 
 
+def test_a_trailing_slash_on_the_issuer_is_forgiven(iam_verifier, make_token):
+    """An IAM that advertises `https://iam.test/` mints tokens carrying it.
+
+    The configured issuer has its trailing slash stripped, and so does the
+    discovery document's, so those two agree — but PyJWT compares the `iss`
+    claim verbatim, so handing it the stripped form rejected every token from a
+    correctly configured deployment. The error named two strings that looked
+    identical ("bearer token was not issued by https://iam.test"), which is a
+    slow way to find one character.
+
+    Both directions, because a deployment may configure either spelling.
+    """
+    with_slash = make_token(iss="https://iam.example.org/")
+    without_slash = make_token(iss="https://iam.example.org")
+    assert iam_verifier.verify(with_slash).subject == "user-1"
+    assert iam_verifier.verify(without_slash).subject == "user-1"
+
+
+def test_only_the_trailing_slash_is_forgiven(iam_verifier, make_token):
+    """The normalisation must not become a prefix match.
+
+    A host that merely starts with the configured issuer, or adds a path, is a
+    different issuer and has to stay refused — otherwise forgiving a slash
+    becomes a way in.
+    """
+    for hostile in (
+        "https://iam.example.org.evil.test",
+        "https://iam.example.org/../other",
+        "https://iam.example.org/tenant2",
+        "http://iam.example.org",
+    ):
+        with pytest.raises(AuthenticationError):
+            iam_verifier.verify(make_token(iss=hostile))
+
+
 def test_unsigned_token_is_rejected(iam_verifier):
     none_token = jwt.encode(
         {"sub": "x", "iss": "https://iam.example.org"}, key=None, algorithm="none"
