@@ -162,3 +162,17 @@ def test_the_probe_endpoints_are_reachable_without_a_token(client, secured):
     an outage caused by turning on auth."""
     for path in ("/health/live", "/health/ready"):
         assert client.get(path).status_code == 200, path
+
+
+def test_metrics_are_reachable_without_a_token(client, secured):
+    """Prometheus holds no token either.
+
+    A scrape config names a target and a metrics path and nothing else, so
+    gating this stops the deployment's own monitoring the moment authentication
+    is enabled — and the executor autoscaler that reads its queue depth from
+    these series with it. Found the hard way: /metrics was absent from
+    ANONYMOUS_PATHS while the comment above that set already claimed monitoring
+    was exempt, and the integration suite answered 401 on a deployment where
+    auth was on.
+    """
+    assert client.get("/metrics").status_code == 200

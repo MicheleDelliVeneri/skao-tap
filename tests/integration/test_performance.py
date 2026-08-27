@@ -77,9 +77,7 @@ def test_a_keyed_lookup_is_index_served(session, request):
     obs_id = _rows(first)[0]["obs_id"]
 
     response, elapsed = _timed(
-        lambda: sync_query(
-            session, f"SELECT obs_id FROM ivoa.obscore WHERE obs_id = '{obs_id}'"
-        )
+        lambda: sync_query(session, f"SELECT obs_id FROM ivoa.obscore WHERE obs_id = '{obs_id}'")
     )
     _report(request, "keyed lookup", elapsed, POINT_BUDGET_S)
     assert response.status_code == 200, response.text
@@ -214,6 +212,5 @@ def test_result_writers_stream_rather_than_buffer(session, request, fmt):
     assert response.status_code == 200, f"{fmt}: {response.text[:200]}"
     assert response.content, f"{fmt} returned an empty body"
     assert elapsed < POINT_BUDGET_S, (
-        f"writing 10,000 rows as {fmt} took {elapsed:.1f}s against a "
-        f"{POINT_BUDGET_S}s budget"
+        f"writing 10,000 rows as {fmt} took {elapsed:.1f}s against a {POINT_BUDGET_S}s budget"
     )

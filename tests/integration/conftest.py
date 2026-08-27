@@ -17,10 +17,13 @@ stack's test image, so egernia needs no entry in its test/pyproject.toml.
 
 from __future__ import annotations
 
+import fcntl
+import json
 import logging
 import os
 import pathlib
 import sys
+import time
 
 import pytest
 import requests
@@ -111,19 +114,8 @@ def api_url() -> str:
     return API_URL
 
 
-@pytest.fixture(scope="session")
-def token() -> str:
-    """A science-metadata-api-audience access token for the seeded test user.
-
-    Env first, so a suite can be pointed at a deployment whose IAM this pod
-    cannot drive a browser against.
-    """
-    for key in ("EGERNIA_TOKEN", "EGERNIA_TEST_TOKEN"):
-        existing = os.environ.get(key, "").strip()
-        if existing:
-            logger.info("using %s from the environment", key)
-            return existing
-
+def _mint_token() -> str:
+    """Drive the AAPI device flow and exchange for this service's audience."""
     from ska_src_auth_api.client.integration import AuthenticationIntegrationClient
 
     logger.info("minting a token via the AAPI device flow at %s", AAPI_SERVICE_URL)
@@ -139,6 +131,47 @@ def token() -> str:
             access_token=raw,
         )
     return exchanged.json()["access_token"]
+
+
+@pytest.fixture(scope="session")
+def token() -> str:
+    """A science-metadata-api-audience access token for the seeded test user.
+
+    Minted once for the whole run, not once per worker. The stack's test
+    entrypoint runs pytest with `-n auto`, and a session-scoped fixture is
+    per-worker: on the integration cluster that meant two dozen workers each
+    starting a headless browser against IAM at the same instant. One flock'd
+    file makes the first worker mint and the rest read what it wrote.
+
+    Env first, so a suite can be pointed at a deployment whose IAM this pod
+    cannot drive a browser against.
+    """
+    for key in ("EGERNIA_TOKEN", "EGERNIA_TEST_TOKEN"):
+        existing = os.environ.get(key, "").strip()
+        if existing:
+            logger.info("using %s from the environment", key)
+            return existing
+
+    cache = pathlib.Path(os.getenv("EGERNIA_TOKEN_CACHE", "/tmp/egernia-token.json"))
+    lock = cache.with_suffix(".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    # Held across the mint, not just the read: the point is that only one
+    # browser ever runs, so the losers wait rather than racing.
+    with open(lock, "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        if cache.exists():
+            try:
+                cached = json.loads(cache.read_text())
+                if cached.get("token") and time.time() < cached.get("expires_at", 0):
+                    logger.info("reusing the token minted by another worker")
+                    return cached["token"]
+            except ValueError, OSError:
+                pass  # a truncated or unreadable cache is just a cache miss
+        minted = _mint_token()
+        # Well inside a token's own lifetime, so a long suite re-mints rather
+        # than carrying one that expires mid-run.
+        cache.write_text(json.dumps({"token": minted, "expires_at": time.time() + 1800}))
+        return minted
 
 
 @pytest.fixture(scope="session")
