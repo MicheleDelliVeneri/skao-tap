@@ -371,7 +371,7 @@ to know. Set it up by disabling the in-chart database and pointing at the
 operator's read-write service:
 
 ```bash
-helm upgrade egernia etc/helm \
+helm upgrade egernia charts/egernia \
   --set postgresql.enabled=false \
   --set externalDatabase.url=postgresql://tap:…@tap-db-rw:5432/tap
 ```

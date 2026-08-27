@@ -154,20 +154,20 @@ jobs:
           persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - name: Chart DB init SQL matches db/init
-        run: diff -ru db/init etc/helm/files/db-init
-      - run: helm lint etc/helm
+        run: diff -ru db/init charts/egernia/files/db-init
+      - run: helm lint charts/egernia
       - name: Template with defaults
-        run: helm template egernia etc/helm > /dev/null
+        run: helm template egernia charts/egernia > /dev/null
       - name: Template with external database and ingress
         run: |
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set postgresql.enabled=false \
             --set externalDatabase.url=postgresql://tap:tap@db.example:5432/tap \
             --set ingress.enabled=true \
             --set ingress.host=tap.example.org > /dev/null
       - name: Template with scaling, VPA, backup and PG tuning
         run: |
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set tapApi.replicas=3 \
             --set tapExecutor.replicas=2 \
             --set results.accessModes={ReadWriteMany} \
@@ -178,61 +178,61 @@ jobs:
             | grep -qE "kind: (PodDisruptionBudget|VerticalPodAutoscaler|CronJob)"
       - name: Template with several API workers
         run: |
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set tapApi.workers=4 --set tapApi.port=9090 \
             | grep -q 'TAP_API_WORKERS: "4"'
           # the port the deployment declares has to be the port the app uses
-          helm template egernia etc/helm --set tapApi.port=9090 \
+          helm template egernia charts/egernia --set tapApi.port=9090 \
             | grep -q 'TAP_API_PORT: "9090"'
           # and rendering those values is only useful if the pod reads them:
           # without this the ConfigMap could stop being consumed and the greps
           # above would still pass
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --show-only templates/api-deployment.yaml \
             | grep -A2 'envFrom:' | grep -q 'configMapRef'
       - name: Template with the metrics stack
         run: |
           # annotations on by default, so an existing Prometheus finds the pods
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             | grep -q 'prometheus.io/scrape: "true"'
           # the chart scrapes nothing itself: the deployment stack runs the
           # Prometheus, and two scrapers on one set of endpoints is one too many
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             | grep -q 'app.kubernetes.io/component: prometheus' \
             && { echo "::error::the chart rendered a Prometheus of its own"; exit 1; }
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set tracing.otlpEndpoint=http://collector:4317 \
             | grep -q 'OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4317"'
       - name: Template with horizontal autoscaling
         run: |
           # nothing rendered, and the deployments keep their own replica count
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             | grep -qE "kind: (HorizontalPodAutoscaler|ScaledObject)" \
             && { echo "::error::an autoscaler rendered by default"; exit 1; }
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapApi.enabled=true \
             | grep -q "kind: HorizontalPodAutoscaler"
           # while an autoscaler owns the count, the chart must not send one:
           # a helm upgrade would reset what the autoscaler had chosen
-          test "$(helm template egernia etc/helm \
+          test "$(helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapApi.enabled=true \
             --show-only templates/api-deployment.yaml | grep -c 'replicas:')" = 0
           # the PDB follows minReplicas, which is the floor a drain sees
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapApi.enabled=true \
             --show-only templates/pdb.yaml | grep -q "kind: PodDisruptionBudget"
           # KEDA by default, with max() rather than sum(): every replica
           # reports the same shared queue, so sum() would scale on the replica
           # count and then feed on its own output
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.prometheusAddress=http://prometheus.monitoring:9090 \
             | grep -q 'query: "max(tap_jobs{phase=\\"QUEUED\\",namespace=\\"default\\"})"'
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.prometheusAddress=http://prometheus.monitoring:9090 | grep -q "kind: ScaledObject"
           # and a plain HPA for a cluster that already serves external metrics
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --show-only templates/hpa.yaml \
@@ -240,12 +240,12 @@ jobs:
           # that path is scoped by a label selector, not by `query`, so a
           # provider publishing no labels has to be able to remove it: a
           # selector matching no series is a dead autoscaler, not a strict one
-          test "$(helm template egernia etc/helm \
+          test "$(helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --set-json 'horizontalAutoscaling.tapExecutor.externalMetricSelector={}' \
             --show-only templates/hpa.yaml | grep -c 'matchLabels')" = 0
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --set-json 'horizontalAutoscaling.tapExecutor.externalMetricSelector={"job":"tap-executor"}' \
@@ -253,13 +253,13 @@ jobs:
           # the annotation says what the provider must publish, so it has to
           # follow the selector: claiming a namespace match that the HPA is
           # not asking for sends whoever debugs this to the wrong place
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --set-json 'horizontalAutoscaling.tapExecutor.externalMetricSelector={}' \
             --show-only templates/hpa.yaml \
             | grep -q 'expected-query: "max(tap_jobs_queued)"'
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.scaler=external \
             --set horizontalAutoscaling.tapExecutor.externalMetricName=tap_backlog \
@@ -268,19 +268,19 @@ jobs:
           # scale-to-zero is refused for the default query and allowed for one
           # that survives having no executors — and the activation threshold
           # is rendered only where it can do anything
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.minReplicas=0 \
             --set horizontalAutoscaling.tapExecutor.prometheusAddress=http://prometheus.monitoring:9090 \
             --set 'horizontalAutoscaling.tapExecutor.query=max(from_the_database)' \
             --show-only templates/hpa.yaml | grep -q "activationThreshold"
-          test "$(helm template egernia etc/helm \
+          test "$(helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.prometheusAddress=http://prometheus.monitoring:9090 \
             --show-only templates/hpa.yaml | grep -c activationThreshold)" = 0
           # a live VPA sizing memory beside a CPU HPA is supported: one
           # controller per resource, which is the pattern that is not
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set horizontalAutoscaling.tapApi.enabled=true \
             --set verticalAutoscaling.enabled=true \
             --set verticalAutoscaling.updateMode=Auto \
@@ -291,7 +291,7 @@ jobs:
       - name: Unworkable autoscaling configurations are refused
         run: |
           refuses() {
-            if helm template egernia etc/helm "$@" >/dev/null 2>&1; then
+            if helm template egernia charts/egernia "$@" >/dev/null 2>&1; then
               echo "::error::chart rendered an unworkable autoscaling config: $*"
               exit 1
             fi
@@ -328,21 +328,21 @@ jobs:
           refuses "${api[@]}" --set tapApi.workers=4 \
                   --set postgresql.tuning.max_connections=100
           # and the same numbers under the limit still render
-          helm template egernia etc/helm "${api[@]}" \
+          helm template egernia charts/egernia "${api[@]}" \
             --set tapApi.workers=4 --set postgresql.tuning.max_connections=250 \
             >/dev/null
           # recommendation-only VPA alongside a CPU HPA is supported and useful
-          helm template egernia etc/helm "${api[@]}" \
+          helm template egernia charts/egernia "${api[@]}" \
             --set verticalAutoscaling.enabled=true >/dev/null
       - name: Template with authentication enabled
         run: |
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set auth.enabled=true \
             --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
             --set auth.iam.audience=science-metadata \
             --set 'auth.roles.metadata\.delete.groups={/ska/oper}' \
             | grep -q 'TAP_AUTH_ROLES'
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set auth.enabled=true \
             --set auth.plugin=permissions-api \
             --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
@@ -351,7 +351,7 @@ jobs:
             | grep -q 'TAP_PERMISSIONS_API_URL'
       - name: Template serving anonymous VO clients
         run: |
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set auth.enabled=true \
             --set auth.anonymousQueries=true \
             --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
@@ -360,7 +360,7 @@ jobs:
             | grep -q 'TAP_AUTH_ANONYMOUS_QUERIES: "true"'
       - name: Template with the token requirement relaxed
         run: |
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set auth.enabled=true \
             --set auth.requireToken=false \
             --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
@@ -369,7 +369,7 @@ jobs:
             | grep -q 'TAP_AUTH_REQUIRE_TOKEN: "false"'
       - name: Template with querying gated as well
         run: |
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set auth.enabled=true \
             --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
             --set auth.iam.audience=science-metadata \
@@ -379,7 +379,7 @@ jobs:
             --set 'auth.roles.jobs\.delete.groups={/ska/oper}' \
             --set 'auth.roles.query\.sync.anyVerifiedToken=true' \
             | grep -q 'TAP_AUTH_GATED_OPERATIONS: "jobs.create,jobs.mutate,jobs.delete,query.sync"'
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set auth.enabled=true \
             --set auth.iam.issuer=https://ska-iam.stfc.ac.uk \
             --set auth.iam.audience=science-metadata \
@@ -388,7 +388,7 @@ jobs:
             | grep -q 'TAP_AUTH_GATED_OPERATIONS: "none"'
       - name: Template with the VOResource record enabled
         run: |
-          helm template egernia etc/helm \
+          helm template egernia charts/egernia \
             --set voRegistry.enabled=true \
             --set voRegistry.authorityId=skao.int \
             --set voRegistry.resourceKey=srcnet/tap \
@@ -404,7 +404,7 @@ jobs:
       - name: Incomplete VOResource configurations are refused
         run: |
           refuses() {
-            if helm template egernia etc/helm "$@" >/dev/null 2>&1; then
+            if helm template egernia charts/egernia "$@" >/dev/null 2>&1; then
               echo "::error::chart rendered an incomplete VOResource config: $*"
               exit 1
             fi
@@ -428,7 +428,7 @@ jobs:
                   --set voRegistry.title="   "
           refuses "${complete[@]}" --set-json 'voRegistry.subjects=[" "]'
           # padding is trimmed on the way out, so it cannot reach the identifier
-          helm template egernia etc/helm "${complete[@]}" \
+          helm template egernia charts/egernia "${complete[@]}" \
             --set 'voRegistry.subjects={radio}' \
             --set voRegistry.authorityId="skao.int " \
             | grep -q 'TAP_REGISTRY_IDENTIFIER: "ivo://skao.int/srcnet/tap"'
@@ -437,7 +437,7 @@ jobs:
       - name: Unsafe authentication configurations are refused
         run: |
           refuses() {
-            if helm template egernia etc/helm "$@" >/dev/null 2>&1; then
+            if helm template egernia charts/egernia "$@" >/dev/null 2>&1; then
               echo "::error::chart rendered an unsafe auth config: $*"
               exit 1
             fi
@@ -501,7 +501,7 @@ jobs:
           kind load docker-image egernia-e2e/tap-db:e2e --name egernia-e2e
       - name: Install chart (in-chart PostgreSQL)
         run: |
-          helm install egernia etc/helm \
+          helm install egernia charts/egernia \
             --set image.registry=egernia-e2e \
             --set image.tag=e2e \
             --set image.pullPolicy=Never \
