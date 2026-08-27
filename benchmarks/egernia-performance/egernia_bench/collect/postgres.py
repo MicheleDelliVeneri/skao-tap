@@ -281,14 +281,21 @@ FULL_SCAN_BY_DESIGN = frozenset({"Q13", "Q14"})
 # buries the ones that do matter.
 ESTIMATE_MIN_NODE_MS = 5.0
 
+# ivoa.obscore is a view over srcnet.data_products, so a plan against it names
+# the base table's indexes. The position index is the service's own, created
+# from the ODP model at bootstrap; the rest are added by the suite's schema.sql
+# for the corpus's filter columns.
+#
+# Q02 has no entry: it matches on obs_publisher_did, which the view *computes*
+# from the key chain, so no index on the base table can serve it and asserting
+# one would fire the flag on every run.
 EXPECTED_INDEXES = {
-    "Q02": "obscore_obs_id_idx",
-    "Q03": "obscore_collection_type_idx",
-    "Q04": "obscore_time_idx",
-    "Q05": "obscore_spoint_gist",
-    "Q06": "obscore_spoint_gist",
-    "Q07": "obscore_spoint_gist",
-    "Q12": "obscore_spoint_gist",
+    "Q03": "data_products_type_calib_idx",
+    "Q04": "data_products_time_idx",
+    "Q05": "data_products_spoint_gist",
+    "Q06": "data_products_spoint_gist",
+    "Q07": "data_products_spoint_gist",
+    "Q12": "data_products_spoint_gist",
 }
 
 
@@ -305,7 +312,7 @@ def table_sizes(conn) -> dict[str, int]:
             """
             SELECT c.relname, pg_table_size(c.oid)
               FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE n.nspname IN ('caom', 'ivoa') AND c.relkind = 'r'
+             WHERE n.nspname IN ('srcnet', 'ivoa') AND c.relkind = 'r'
             """
         ).fetchall()
     }

@@ -129,9 +129,9 @@ SHAPES = (
     "CIRCLE('ICRS', ra, dec, 0.1), CIRCLE('ICRS', 10.0, 20.0, 2.0))",
     "SELECT TOP 100 s.ra, s.dec FROM ska.continuum_sources AS s "
     "WHERE s.source_id = 42 ORDER BY s.ra",
-    "SELECT o.obs_id, p.plane_id FROM caom.observation AS o "
-    "JOIN caom.plane AS p ON o.obs_id = p.obs_id WHERE o.collection = 'X'",
-    "SELECT collection, COUNT(*) FROM caom.observation GROUP BY collection",
+    "SELECT o.obs_id, p.product_id FROM srcnet.observations AS o "
+    "JOIN srcnet.data_products AS p ON o.obs_id = p.obs_id WHERE o.collection = 'X'",
+    "SELECT collection, COUNT(*) FROM srcnet.observations GROUP BY collection",
     "SELECT DISTANCE(POINT('ICRS', 10, 20), POINT('ICRS', 11, 21)) FROM ska.continuum_sources",
     "SELECT ra FROM ska.continuum_sources WHERE dec BETWEEN -10 AND 10",
     # ADQL 2.1 shapes: the fast path must agree on the new grammar too
@@ -215,9 +215,10 @@ def test_tables_come_from_the_single_parse():
     from egernia_core.query.adql import translate
 
     result = translate(
-        "SELECT o.obs_id FROM caom.observation AS o JOIN caom.plane AS p ON o.obs_id = p.obs_id"
+        "SELECT o.obs_id FROM srcnet.observations AS o"
+        " JOIN srcnet.data_products AS p ON o.obs_id = p.obs_id"
     )
-    assert result.tables == frozenset({"caom.observation", "caom.plane"})
+    assert result.tables == frozenset({"srcnet.observations", "srcnet.data_products"})
 
 
 # ---------------------------------------------------------------------------

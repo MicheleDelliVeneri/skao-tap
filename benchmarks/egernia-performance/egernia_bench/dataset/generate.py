@@ -13,6 +13,7 @@ from the highest observation index already present.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import logging
@@ -25,189 +26,319 @@ log = logging.getLogger("egernia_bench.dataset")
 
 HERE = pathlib.Path(__file__).parent
 
-# The hierarchy is recomputed from the observation index at each level rather
-# than read back from the table above it. That keeps the CAOM tables free of a
-# synthetic join column they would not have in reality, and every level stays
-# a pure function of (seed, index) — so a re-run of a batch writes the same
-# rows, which is what makes ON CONFLICT DO NOTHING a resume rather than a
+# Where a load parks the index definitions it dropped, so a run that is
+# killed rather than raised can still be recovered from by the next one.
+STASH = "srcnet._bench_stashed_indexes"
+
+# The hierarchy is recomputed from the project index at each level rather than
+# read back from the table above it. That keeps the ODP tables free of a
+# synthetic join column the model does not have, and every level stays a pure
+# function of (seed, index) — so a re-run of a batch writes the same rows,
+# which is what makes ON CONFLICT DO NOTHING a resume rather than a
 # corruption.
-OBSERVATIONS = """
-INSERT INTO caom.observation (
-    obs_id, collection, telescope_name, instrument_name, target_name,
-    intent, obs_type, proposal_id, sequence_number, meta_release,
-    obs_release_date)
+# One project's fan-out, and the arithmetic that makes every level derivable
+# from the project index alone. A project yields 4 observations, each split
+# into 2 scheduling blocks, each executed twice, each execution producing 8
+# data products with 2 artifacts apiece: 128 products and 256 artifacts per
+# project. Chosen so the joins cost something and a project reads like an
+# observing programme, not to hit a row count.
+OBS_PER_PROJECT = 4
+SBD_PER_OBS = 2
+EB_PER_SBD = 2
+PRODUCTS_PER_EB = 8
+ARTIFACTS_PER_PRODUCT = 2
+
+# Identifier formats, shared by every level so the keys line up without any
+# level reading the one above it. The width is fixed: these are text primary
+# keys and a b-tree over them is part of what is being measured.
+_PROJECT_ID = "format('SKAO-P%%s', lpad(i::text, 9, '0'))"
+_OBS_ID = (
+    "format('%%s-%%s-%%s', bench.pick(%(seed)s, i * 8 + o, 'inst', %(instruments)s),"
+    " lpad(i::text, 9, '0'), lpad(o::text, 2, '0'))"
+)
+_SBD_ID = (
+    "format('sbd-%%s-%%s-%%s', lpad(i::text, 9, '0'), lpad(o::text, 2, '0'), lpad(s::text, 2, '0'))"
+)
+_EB_ID = (
+    "format('eb-%%s-%%s-%%s-%%s', lpad(i::text, 9, '0'), lpad(o::text, 2, '0'),"
+    " lpad(s::text, 2, '0'), lpad(e::text, 3, '0'))"
+)
+
+# A distinct deterministic stream per row at each level: bench.rnd is keyed on
+# a single bigint, so the child indices are folded into it. Without this every
+# data product of one execution block would draw the same "random" values.
+_PRODUCT_IX = "((((i * 8 + o) * 4 + s) * 4 + e) * 16 + p)"
+
+PROJECTS = f"""
+INSERT INTO srcnet.projects (
+    schema_version, project_id, group_ids, project_title, pi_name, data_rights)
 SELECT
-    format('ska:obs:%%s', lpad(i::text, 12, '0')),
-    bench.pick(%(seed)s, i, 'coll', %(collections)s),
-    split_part(bench.pick(%(seed)s, i, 'coll', %(collections)s), '-', 1),
-    bench.pick(%(seed)s, i, 'inst', %(instruments)s),
-    format('FIELD-%%s', bench.rint(%(seed)s, i, 'target', 1, 40000)),
-    CASE WHEN bench.rnd(%(seed)s, i, 'intent') < 0.85 THEN 'science' ELSE 'calibration' END,
-    bench.pick(%(seed)s, i, 'otype', ARRAY['object', 'field', 'scan']),
-    format('PROP-%%s-%%s', 2020 + bench.rint(%(seed)s, i, 'py', 0, 5),
-           lpad(bench.rint(%(seed)s, i, 'pn', 1, 999)::text, 3, '0')),
-    i,
-    to_timestamp(%(mjd_lo)s * 86400.0 + bench.rnd(%(seed)s, i, 'mrel') * %(mjd_span)s * 86400.0
-                 - 3506716800.0),
-    to_timestamp(%(mjd_lo)s * 86400.0 + bench.rnd(%(seed)s, i, 'orel') * %(mjd_span)s * 86400.0
-                 - 3506716800.0)
+    '2.1',
+    {_PROJECT_ID},
+    to_jsonb(ARRAY[format('SKAO-P%%s_group', lpad(i::text, 9, '0'))]),
+    format('%%s programme %%s', bench.pick(%(seed)s, i, 'sci', %(science)s), i),
+    format('Dr. %%s', bench.pick(%(seed)s, i, 'pi', %(surnames)s)),
+    bench.pick(%(seed)s, i, 'rights', ARRAY['public', 'proprietary', 'private'])
 FROM generate_series(%(lo)s::bigint, %(hi)s::bigint) AS i
-ON CONFLICT (obs_id) DO NOTHING
+ON CONFLICT (project_id) DO NOTHING
 """
 
-PLANES = """
-INSERT INTO caom.plane (
-    plane_id, obs_id, product_id, calib_level, data_product_type,
-    time_bounds_lower, time_bounds_upper, time_exposure,
-    energy_bounds_lower, energy_bounds_upper,
-    position_ra, position_dec, position_sample_size, data_release)
+OBSERVATIONS = f"""
+INSERT INTO srcnet.observations (
+    project_id, obs_id, obs_title, collection, instrument_name, facility_name)
 SELECT
-    format('ska:plane:%%s:%%s', lpad(i::text, 12, '0'), k),
-    format('ska:obs:%%s', lpad(i::text, 12, '0')),
-    format('product-%%s', k),
-    bench.rint(%(seed)s, i * 8 + k, 'calib', 0, 3),
-    bench.pick(%(seed)s, i * 8 + k, 'dptype', %(dataproduct_types)s),
-    t.t_min, t.t_min + t.exptime / 86400.0, t.exptime,
-    e.em_min, e.em_min * 1.35,
-    360.0 * bench.rnd(%(seed)s, i, 'ra'),
-    bench.sky_dec(%(seed)s, i),
-    0.0001 + bench.rnd(%(seed)s, i * 8 + k, 'sample') * 0.01,
-    to_timestamp(%(mjd_lo)s * 86400.0 + bench.rnd(%(seed)s, i * 8 + k, 'drel')
-                 * %(mjd_span)s * 86400.0 - 3506716800.0)
-FROM generate_series(%(lo)s::bigint, %(hi)s::bigint) AS i
-CROSS JOIN LATERAL generate_series(1, bench.rint(%(seed)s, i, 'nplane', 1, 3)) AS k
-CROSS JOIN LATERAL (
-    SELECT %(mjd_lo)s + bench.rnd(%(seed)s, i * 8 + k, 'tmin') * %(mjd_span)s AS t_min,
-           10.0 + bench.rnd(%(seed)s, i * 8 + k, 'exp') * 28790.0 AS exptime) AS t
-CROSS JOIN LATERAL (
-    SELECT 0.0002 + bench.rnd(%(seed)s, i * 8 + k, 'em') * 0.2 AS em_min) AS e
-ON CONFLICT (plane_id) DO NOTHING
+    {_PROJECT_ID},
+    {_OBS_ID},
+    format('%%s observation of %%s',
+           bench.pick(%(seed)s, i * 8 + o, 'sci', %(science)s),
+           bench.pick(%(seed)s, i * 8 + o, 'target', %(targets)s)),
+    format('SKAO/%%s', bench.pick(%(seed)s, i * 8 + o, 'inst', %(instruments)s)),
+    bench.pick(%(seed)s, i * 8 + o, 'inst', %(instruments)s),
+    'Square Kilometre Array Observatory'
+FROM generate_series(%(lo)s::bigint, %(hi)s::bigint) AS i,
+     generate_series(0, {OBS_PER_PROJECT - 1}) AS o
+ON CONFLICT (project_id, obs_id) DO NOTHING
 """
 
-# ObsCore is plane-level, and deliberately wide: s_region, access_url and
-# obs_publisher_did are what decide how many rows fit in a page, and page
-# count is most of what an I/O benchmark measures.
-OBSCORE = """
-INSERT INTO ivoa.obscore (
-    obs_publisher_did, obs_id, obs_collection, dataproduct_type, calib_level,
-    target_name, facility_name, instrument_name,
-    s_ra, s_dec, s_fov, s_region, s_resolution,
-    t_min, t_max, t_exptime, t_resolution,
-    em_min, em_max, em_res_power, o_ucd, pol_states,
-    access_url, access_format, access_estsize)
-SELECT
-    format('ivo://skao.int/srcnet?ska:obs:%%s/product-%%s', lpad(i::text, 12, '0'), k),
-    format('ska:obs:%%s', lpad(i::text, 12, '0')),
-    bench.pick(%(seed)s, i, 'coll', %(collections)s),
-    bench.pick(%(seed)s, i * 8 + k, 'dptype', %(dataproduct_types)s),
-    bench.rint(%(seed)s, i * 8 + k, 'calib', 0, 3),
-    format('FIELD-%%s', bench.rint(%(seed)s, i, 'target', 1, 40000)),
-    split_part(bench.pick(%(seed)s, i, 'coll', %(collections)s), '-', 1),
-    bench.pick(%(seed)s, i, 'inst', %(instruments)s),
-    p.ra, p.dec, p.fov,
-    format('CIRCLE ICRS %%s %%s %%s', round(p.ra::numeric, 5), round(p.dec::numeric, 5),
-           round((p.fov / 2.0)::numeric, 5)),
-    p.fov / 40.0,
-    t.t_min, t.t_min + t.exptime / 86400.0, t.exptime, t.exptime / 8.0,
-    e.em_min, e.em_min * 1.35, 1000.0 + bench.rnd(%(seed)s, i * 8 + k, 'emres') * 9000.0,
-    'em.radio', bench.pick(%(seed)s, i * 8 + k, 'pol', ARRAY['I', 'I/Q/U/V', 'I/V']),
-    format('https://data.srcnet.skao.int/artifact/ska:obs:%%s/product-%%s/data.fits',
-           lpad(i::text, 12, '0'), k),
-    'application/fits',
-    (1000000 + bench.rnd(%(seed)s, i * 8 + k, 'size') * 4000000000)::bigint
-FROM generate_series(%(lo)s::bigint, %(hi)s::bigint) AS i
-CROSS JOIN LATERAL generate_series(1, bench.rint(%(seed)s, i, 'nplane', 1, 3)) AS k
-CROSS JOIN LATERAL (
-    SELECT 360.0 * bench.rnd(%(seed)s, i, 'ra') AS ra,
-           bench.sky_dec(%(seed)s, i) AS dec,
-           0.02 + bench.rnd(%(seed)s, i * 8 + k, 'fov') * 4.0 AS fov) AS p
-CROSS JOIN LATERAL (
-    SELECT %(mjd_lo)s + bench.rnd(%(seed)s, i * 8 + k, 'tmin') * %(mjd_span)s AS t_min,
-           10.0 + bench.rnd(%(seed)s, i * 8 + k, 'exp') * 28790.0 AS exptime) AS t
-CROSS JOIN LATERAL (
-    SELECT 0.0002 + bench.rnd(%(seed)s, i * 8 + k, 'em') * 0.2 AS em_min) AS e
-ON CONFLICT (obs_publisher_did) DO NOTHING
+SCHEDULING_BLOCKS = f"""
+INSERT INTO srcnet.scheduling_blocks (project_id, obs_id, sbd_id)
+SELECT {_PROJECT_ID}, {_OBS_ID}, {_SBD_ID}
+FROM generate_series(%(lo)s::bigint, %(hi)s::bigint) AS i,
+     generate_series(0, {OBS_PER_PROJECT - 1}) AS o,
+     generate_series(0, {SBD_PER_OBS - 1}) AS s
+ON CONFLICT (project_id, obs_id, sbd_id) DO NOTHING
 """
 
-ARTIFACTS = """
-INSERT INTO caom.artifact (
-    artifact_id, plane_id, uri, product_type, content_type, content_length,
-    release_type)
-SELECT
-    format('ska:artifact:%%s:%%s:%%s', lpad(i::text, 12, '0'), k, a),
-    format('ska:plane:%%s:%%s', lpad(i::text, 12, '0'), k),
-    format('https://data.srcnet.skao.int/artifact/ska:obs:%%s/product-%%s/part-%%s.fits',
-           lpad(i::text, 12, '0'), k, a),
-    bench.pick(%(seed)s, i * 64 + k * 8 + a, 'ptype',
-               ARRAY['science', 'calibration', 'preview', 'auxiliary']),
-    'application/fits',
-    (100000 + bench.rnd(%(seed)s, i * 64 + k * 8 + a, 'clen') * 2000000000)::bigint,
-    'data'
-FROM generate_series(%(lo)s::bigint, %(hi)s::bigint) AS i
-CROSS JOIN LATERAL generate_series(1, bench.rint(%(seed)s, i, 'nplane', 1, 3)) AS k
-CROSS JOIN LATERAL generate_series(1, bench.rint(%(seed)s, i * 8 + k, 'nart', 1, 4)) AS a
-ON CONFLICT (artifact_id) DO NOTHING
+EXECUTION_BLOCKS = f"""
+INSERT INTO srcnet.execution_blocks (project_id, obs_id, sbd_id, eb_id)
+SELECT {_PROJECT_ID}, {_OBS_ID}, {_SBD_ID}, {_EB_ID}
+FROM generate_series(%(lo)s::bigint, %(hi)s::bigint) AS i,
+     generate_series(0, {OBS_PER_PROJECT - 1}) AS o,
+     generate_series(0, {SBD_PER_OBS - 1}) AS s,
+     generate_series(0, {EB_PER_SBD - 1}) AS e
+ON CONFLICT (project_id, obs_id, sbd_id, eb_id) DO NOTHING
 """
 
-PARTS = """
-INSERT INTO caom.part (part_id, artifact_id, part_name, product_type)
+# The wide one, and the only level that costs real time: it carries the
+# footprint polygon, the spectral and temporal axes, and the instrument
+# configuration. Products of one execution block cluster within half a degree
+# of its pointing, so the sky looks like observations rather than confetti and
+# a cone search returns a plausible group instead of one row from everywhere.
+DATA_PRODUCTS = f"""
+INSERT INTO srcnet.data_products (
+    project_id, obs_id, sbd_id, eb_id, product_id,
+    data_product_origin, o_ucd, dataproduct_type, calib_level, target_name,
+    is_calibrator, calibrator_type, em_band,
+    s_ra, s_dec, s_fov, s_region, s_region_geom,
+    em_wlen, em_min, em_max, t_min, t_max, t_exptime,
+    s_xel1, s_xel2, em_xel, t_xel,
+    baseline_min, baseline_max, num_baselines, num_antennas,
+    beam_size, beam_maj, beam_min, beam_pa, pol_states, pol_xel,
+    baselines, calibrator_targets)
 SELECT
-    format('ska:part:%%s:%%s:%%s:%%s', lpad(i::text, 12, '0'), k, a, pr),
-    format('ska:artifact:%%s:%%s:%%s', lpad(i::text, 12, '0'), k, a),
-    format('HDU%%s', pr),
-    bench.pick(%(seed)s, i * 512 + k * 64 + a * 8 + pr, 'ptype',
-               ARRAY['science', 'calibration', 'auxiliary'])
-FROM generate_series(%(lo)s::bigint, %(hi)s::bigint) AS i
-CROSS JOIN LATERAL generate_series(1, bench.rint(%(seed)s, i, 'nplane', 1, 3)) AS k
-CROSS JOIN LATERAL generate_series(1, bench.rint(%(seed)s, i * 8 + k, 'nart', 1, 4)) AS a
-CROSS JOIN LATERAL generate_series(1, bench.rint(%(seed)s, i * 64 + k * 8 + a, 'npart', 1, 2)) AS pr
-ON CONFLICT (part_id) DO NOTHING
+    {_PROJECT_ID}, {_OBS_ID}, {_SBD_ID}, {_EB_ID},
+    format('%%s-%%s', {_EB_ID}, lpad(p::text, 3, '0')),
+    CASE WHEN p %% 4 = 0 THEN 'ADP' ELSE 'ODP' END,
+    'phot.flux.density;em.radio',
+    bench.pick(%(seed)s, ix, 'dptype', %(dataproduct_types)s),
+    bench.rint(%(seed)s, ix, 'calib', 0, 3),
+    bench.pick(%(seed)s, ix, 'target', %(targets)s),
+    cal.is_cal,
+    CASE WHEN cal.is_cal
+         THEN bench.pick(%(seed)s, ix, 'caltype',
+                         ARRAY['flux', 'bandpass', 'phase', 'polarization', 'delay'])
+    END,
+    bench.pick(%(seed)s, ix, 'band', %(bands)s),
+    sky.ra, sky.dec, sky.fov,
+    format('CIRCLE %%s %%s %%s',
+           to_char(sky.ra, 'FM990.999999'), to_char(sky.dec, 'FM990.999999'),
+           to_char(sky.fov / 2.0, 'FM990.999999')),
+    bench.circle_spoly(sky.ra, sky.dec, sky.fov / 2.0),
+    band.wlen, band.lo, band.hi,
+    tim.t_min, tim.t_min + tim.exptime / 86400.0, tim.exptime,
+    128 * bench.rint(%(seed)s, ix, 'sx1', 8, 32),
+    128 * bench.rint(%(seed)s, ix, 'sx2', 8, 32),
+    bench.rint(%(seed)s, ix, 'emx', 1, 4096),
+    bench.rint(%(seed)s, ix, 'tx', 1, 120),
+    bench.rnd(%(seed)s, ix, 'blmin') * 65.0 + 15.0,
+    bench.rnd(%(seed)s, ix, 'blmax') * 149000.0 + 1000.0,
+    ant.n * (ant.n - 1) / 2, ant.n,
+    bench.rnd(%(seed)s, ix, 'beam') * 19.5 + 0.5,
+    bench.rnd(%(seed)s, ix, 'bmaj') * 24.0 + 1.0,
+    bench.rnd(%(seed)s, ix, 'bmin') * 19.5 + 0.5,
+    bench.rnd(%(seed)s, ix, 'bpa') * 360.0 - 180.0,
+    bench.pick(%(seed)s, ix, 'pol', ARRAY['/I/', '/I/Q/U/V/', '/XX/YY/', '/XX/XY/YX/YY/']),
+    1 + 2 * bench.rint(%(seed)s, ix, 'polx', 0, 1),
+    to_jsonb(ARRAY[
+        round((bench.rnd(%(seed)s, ix, 'b0') * 149971.0 + 29.0)::numeric, 2),
+        round((bench.rnd(%(seed)s, ix, 'b1') * 149971.0 + 29.0)::numeric, 2),
+        round((bench.rnd(%(seed)s, ix, 'b2') * 149971.0 + 29.0)::numeric, 2),
+        round((bench.rnd(%(seed)s, ix, 'b3') * 149971.0 + 29.0)::numeric, 2),
+        round((bench.rnd(%(seed)s, ix, 'b4') * 149971.0 + 29.0)::numeric, 2),
+        round((bench.rnd(%(seed)s, ix, 'b5') * 149971.0 + 29.0)::numeric, 2)]),
+    CASE WHEN cal.is_cal
+         THEN to_jsonb(ARRAY[bench.pick(%(seed)s, ix, 'caltgt', %(targets)s)])
+         ELSE '[]'::jsonb END
+FROM generate_series(%(lo)s::bigint, %(hi)s::bigint) AS i,
+     generate_series(0, {OBS_PER_PROJECT - 1}) AS o,
+     generate_series(0, {SBD_PER_OBS - 1}) AS s,
+     generate_series(0, {EB_PER_SBD - 1}) AS e,
+     generate_series(0, {PRODUCTS_PER_EB - 1}) AS p,
+     LATERAL (SELECT {_PRODUCT_IX} AS ix) AS ixs,
+     LATERAL (SELECT (p %% 8) = 0 AS is_cal) AS cal,
+     LATERAL (SELECT bench.rnd(%(seed)s, i, 'ra') * 360.0
+                     + bench.rnd(%(seed)s, ix, 'dra') - 0.5 + 360.0 AS ra) AS raw,
+     LATERAL (SELECT
+        -- The project's pointing, then a degree-wide scatter per product, so
+        -- a project reads as a survey field rather than as confetti.
+        --
+        -- Keyed on the project index with salts 'ra' and 'dec', which is
+        -- exactly what corpus.object_position recomputes in Python: the cone
+        -- searches aim at real fields by deriving the centre rather than by
+        -- reading a row back, and that only works while the two agree.
+        raw.ra - floor(raw.ra / 360.0) * 360.0 AS ra,
+        greatest(-89.9, least(89.9,
+            bench.sky_dec(%(seed)s, i) + bench.rnd(%(seed)s, ix, 'ddec') - 0.5)) AS dec,
+        bench.rnd(%(seed)s, ix, 'fov') * 1.45 + 0.05 AS fov) AS sky,
+     LATERAL (SELECT bench.rnd(%(seed)s, ix, 'wlen') * 1.15 + 0.05 AS wlen) AS w,
+     LATERAL (SELECT w.wlen AS wlen,
+        greatest(0.0195, w.wlen * (1.0 - bench.rnd(%(seed)s, ix, 'bw') * 0.4)) AS lo,
+        least(6.0, w.wlen * (1.0 + bench.rnd(%(seed)s, ix, 'bw') * 0.4)) AS hi) AS band,
+     LATERAL (SELECT
+        %(mjd_lo)s + bench.rnd(%(seed)s, ix, 'tmin') * %(mjd_span)s AS t_min,
+        bench.rnd(%(seed)s, ix, 'exp') * 21000.0 + 600.0 AS exptime) AS tim,
+     LATERAL (SELECT bench.rint(%(seed)s, ix, 'ant', 64, 197) AS n) AS ant
+ON CONFLICT (project_id, obs_id, sbd_id, eb_id, product_id) DO NOTHING
 """
 
-CHUNKS = """
-INSERT INTO caom.chunk (
-    chunk_id, part_id, naxis, position_axis_1, position_axis_2,
-    energy_axis, time_axis, polarization_axis, observable_axis, sample_size)
+# Artifacts carry access metadata and nothing spatial: that is how the ODP
+# model's own example payload is shaped, and ivoa.obscore joins this table
+# only for access_url/access_format/access_estsize. Giving each artifact a
+# copy of its product's footprint would double the spoly construction — the
+# most expensive thing in this file — for a column no query reads.
+ARTIFACTS = f"""
+INSERT INTO srcnet.artifacts (
+    project_id, obs_id, sbd_id, eb_id, product_id, artifact_id,
+    access_url, access_format, access_estsize, path_to_parent, semantics)
 SELECT
-    format('ska:chunk:%%s:%%s:%%s:%%s:%%s', lpad(i::text, 12, '0'), k, a, pr, c),
-    format('ska:part:%%s:%%s:%%s:%%s', lpad(i::text, 12, '0'), k, a, pr),
-    bench.rint(%(seed)s, i * 4096 + k * 512 + a * 64 + pr * 8 + c, 'naxis', 2, 4),
-    1, 2, 3, 4, 5, 6,
-    0.0001 + bench.rnd(%(seed)s, i * 4096 + k * 512 + a * 64 + pr * 8 + c, 'ss') * 0.01
-FROM generate_series(%(lo)s::bigint, %(hi)s::bigint) AS i
-CROSS JOIN LATERAL generate_series(1, bench.rint(%(seed)s, i, 'nplane', 1, 3)) AS k
-CROSS JOIN LATERAL generate_series(1, bench.rint(%(seed)s, i * 8 + k, 'nart', 1, 4)) AS a
-CROSS JOIN LATERAL generate_series(1, bench.rint(%(seed)s, i * 64 + k * 8 + a, 'npart', 1, 2)) AS pr
-CROSS JOIN LATERAL generate_series(
-    1, bench.rint(%(seed)s, i * 512 + k * 64 + a * 8 + pr, 'nchunk', 1, 2)) AS c
-ON CONFLICT (chunk_id) DO NOTHING
+    {_PROJECT_ID}, {_OBS_ID}, {_SBD_ID}, {_EB_ID},
+    format('%%s-%%s', {_EB_ID}, lpad(p::text, 3, '0')),
+    format('%%s-%%s-%%s', {_EB_ID}, lpad(p::text, 3, '0'), lpad(a::text, 2, '0')),
+    format('https://data.srcnet.skao.int/%%s/%%s-%%s-%%s.%%s',
+           {_PROJECT_ID}, {_EB_ID}, lpad(p::text, 3, '0'), lpad(a::text, 2, '0'),
+           CASE WHEN a = 0 THEN 'fits' ELSE 'ms' END),
+    CASE WHEN a = 0 THEN 'image/fits' ELSE 'application/x-casa-measurementset' END,
+    (bench.rnd(%(seed)s, {_PRODUCT_IX} * 4 + a, 'size') * 7990000000.0 + 10000000.0)::bigint,
+    format('./%%ss/', bench.pick(%(seed)s, {_PRODUCT_IX}, 'dptype', %(dataproduct_types)s)),
+    CASE WHEN (p %% 8) = 0 THEN 'calibration'
+         ELSE bench.pick(%(seed)s, {_PRODUCT_IX} * 4 + a, 'sem',
+                         ARRAY['science', 'auxiliary', 'noise']) END
+FROM generate_series(%(lo)s::bigint, %(hi)s::bigint) AS i,
+     generate_series(0, {OBS_PER_PROJECT - 1}) AS o,
+     generate_series(0, {SBD_PER_OBS - 1}) AS s,
+     generate_series(0, {EB_PER_SBD - 1}) AS e,
+     generate_series(0, {PRODUCTS_PER_EB - 1}) AS p,
+     generate_series(0, {ARTIFACTS_PER_PRODUCT - 1}) AS a
+ON CONFLICT (project_id, obs_id, sbd_id, eb_id, product_id, artifact_id) DO NOTHING
 """
 
+# The software discovery model. Not size-driven: a catalogue of tools is
+# hundreds of rows in reality and stays that way however large the data
+# holdings get, so it is written once at the start of a build rather than
+# grown. It exists because the service publishes two models under one query
+# language, and a benchmark over only one of them would not exercise that.
+SOFTWARE = """
+INSERT INTO srcnet.software (
+    uri, description, release_date, changelog, status,
+    discovery_science_category, discovery_function_category,
+    discovery_science_working_group, discovery_tools_included,
+    data_compatibility_data_input_type, data_compatibility_data_output_type,
+    resources_requires_gpu, resources_min_memory, resources_recommended_memory,
+    provenance_repository_url, provenance_registered_by, provenance_registration_date)
+SELECT
+    format('%%s:%%s:%%s.%%s.%%s', pub.name, tool.name,
+           1 + i %% 4, i %% 10, i %% 7),
+    format('%%s, packaged by %%s for SRCNet', tool.name, pub.name),
+    rel.at, format('https://gitlab.com/%%s/%%s/-/blob/CHANGELOG.md', pub.name, tool.name),
+    bench.pick(%(seed)s, i, 'status',
+               ARRAY['ALPHA', 'BETA', 'TESTING', 'STABLE', 'DEPRECATED']),
+    to_jsonb(ARRAY[bench.pick(%(seed)s, i, 'swsci', %(science)s)]),
+    to_jsonb(ARRAY[bench.pick(%(seed)s, i, 'swfun',
+                              ARRAY['calibration', 'imaging', 'source-finding',
+                                    'visualisation', 'simulation'])]),
+    to_jsonb(ARRAY[bench.pick(%(seed)s, i, 'swwg', %(science)s)]),
+    to_jsonb(ARRAY[tool.name]),
+    to_jsonb(ARRAY[bench.pick(%(seed)s, i, 'swin',
+                              ARRAY['visibility', 'image', 'cube', 'catalogue'])]),
+    to_jsonb(ARRAY[bench.pick(%(seed)s, i, 'swout',
+                              ARRAY['visibility', 'image', 'cube', 'catalogue'])]),
+    (i %% 5) = 0,
+    (1 + bench.rint(%(seed)s, i, 'swmem', 1, 7)) * 1073741824::bigint,
+    (8 + bench.rint(%(seed)s, i, 'swrec', 8, 56)) * 1073741824::bigint,
+    format('https://gitlab.com/%%s/%%s', pub.name, tool.name),
+    format('%%s-ci', pub.name),
+    rel.at
+FROM generate_series(0::bigint, %(software)s::bigint - 1) AS i,
+     LATERAL (SELECT bench.pick(%(seed)s, i, 'pub',
+                     ARRAY['skao', 'srcnet', 'cadc', 'astron', 'inaf']) AS name) AS pub,
+     LATERAL (SELECT bench.pick(%(seed)s, i, 'tool',
+                     ARRAY['rascil', 'casa', 'wsclean', 'carta', 'aoflagger', 'sofia',
+                           'dask-ms', 'katdal', 'oskar', 'casacore', 'topcat']) AS name) AS tool,
+     LATERAL (SELECT to_timestamp(1672531200 + bench.rint(%(seed)s, i, 'rel', 0, 900) * 86400)
+                     AS at) AS rel
+ON CONFLICT (uri) DO NOTHING
+"""
+
+SOFTWARE_ARTIFACTS = """
+INSERT INTO srcnet.software_artifacts (
+    uri, kind, location, cpu_architecture, digest, entrypoint, supported_modes)
+SELECT
+    s.uri,
+    k.kind,
+    format('registry.gitlab.com/%%s:%%s', split_part(s.uri, ':', 2), lower(k.kind)),
+    CASE WHEN k.n = 0 THEN '["x86_64"]'::jsonb ELSE '["x86_64", "aarch64"]'::jsonb END,
+    format('sha256:%%s%%s', md5(s.uri || k.kind), md5(k.kind || s.uri)),
+    format('/opt/%%s/bin/%%s', split_part(s.uri, ':', 2), split_part(s.uri, ':', 2)),
+    '["batch", "interactive"]'::jsonb
+FROM srcnet.software AS s,
+     LATERAL (SELECT n, (ARRAY['DOCKER', 'SINGULARITY', 'OCI'])[n + 1] AS kind
+                FROM generate_series(0, 1) AS n) AS k
+ON CONFLICT (uri, location) DO NOTHING
+"""
+
+# Parents first: every level carries a foreign key to the one above it.
 LEVELS = (
+    ("project", PROJECTS),
     ("observation", OBSERVATIONS),
-    ("plane", PLANES),
-    ("obscore", OBSCORE),
+    ("scheduling_block", SCHEDULING_BLOCKS),
+    ("execution_block", EXECUTION_BLOCKS),
+    ("data_product", DATA_PRODUCTS),
     ("artifact", ARTIFACTS),
-    ("part", PARTS),
-    ("chunk", CHUNKS),
 )
 
 TABLES = (
-    "caom.observation",
-    "caom.plane",
-    "caom.artifact",
-    "caom.part",
-    "caom.chunk",
-    "ivoa.obscore",
+    "srcnet.projects",
+    "srcnet.observations",
+    "srcnet.scheduling_blocks",
+    "srcnet.execution_blocks",
+    "srcnet.data_products",
+    "srcnet.artifacts",
+    "srcnet.software",
+    "srcnet.software_artifacts",
 )
 
-# Maintained during load, so the cone-search corpus has an index to use at
-# every checkpoint. Dropped only while a tier is growing towards the next one:
-# a GiST index maintained row-by-row through a hundred million inserts is the
-# single slowest thing in this file, and rebuilding it once is minutes.
-SPATIAL_INDEX = """
-CREATE INDEX IF NOT EXISTS obscore_spoint_gist
-    ON ivoa.obscore USING gist (spoint(radians(s_ra), radians(s_dec)))
+# The spatial indexes belong to the service, which creates them from the ODP
+# model at bootstrap. The suite drops them for the duration of a load and
+# rebuilds them once at the end: a GiST index maintained row by row through
+# tens of millions of inserts is the single slowest thing in this file, and
+# rebuilding each one from the finished table is minutes.
+#
+# Read from pg_indexes rather than written out here, so the suite rebuilds
+# whatever the service actually declared rather than a stale copy of it.
+SPATIAL_INDEX_QUERY = """
+SELECT indexname, indexdef FROM pg_indexes
+ WHERE schemaname = 'srcnet' AND indexdef LIKE '%USING gist%'
+ ORDER BY indexname
 """
 
 
@@ -236,9 +367,13 @@ def _params(cfg: dict, lo: int, hi: int) -> dict:
         "seed": str(gen["seed"]),
         "lo": lo,
         "hi": hi,
-        "collections": gen["collections"],
         "instruments": gen["instruments"],
         "dataproduct_types": gen["dataproduct_types"],
+        "bands": gen["bands"],
+        "science": gen["science_categories"],
+        "targets": gen["targets"],
+        "surnames": gen["surnames"],
+        "software": gen["software_packages"],
         "mjd_lo": mjd_lo,
         "mjd_span": mjd_hi - mjd_lo,
     }
@@ -248,105 +383,62 @@ def database_bytes(conn) -> int:
     return conn.execute("SELECT pg_database_size(current_database())").fetchone()[0]
 
 
-def highest_observation(conn) -> int:
-    """Where a previous, interrupted generation got to."""
-    row = conn.execute("SELECT max(sequence_number) FROM caom.observation").fetchone()
+def highest_project(conn) -> int:
+    """Where a previous, interrupted generation got to.
+
+    Read off the *deepest* level, not the first one. Levels are written parent
+    first and committed one at a time, so a run that dies between them leaves
+    projects whose children were never generated. Resuming from the highest
+    project id would step straight over those and leave a block of the corpus
+    permanently empty — which is not a visible failure, just a sky with holes
+    in it and cone searches that mysteriously find nothing.
+
+    Taking the maximum from srcnet.artifacts means the resume point is the last
+    project that made it all the way down, and the partial ones are generated
+    again. That is safe because every statement is ON CONFLICT DO NOTHING.
+
+    The index is read off the identifier rather than a sequence column: every
+    level derives its keys from the project index, so the index is what a
+    resume needs and the ODP model has no synthetic counter to carry it.
+    """
+    row = conn.execute(
+        """
+        SELECT coalesce(
+            -- the project before the first one whose children are missing
+            (SELECT min(substring(p.project_id from 7)::bigint) - 1
+               FROM srcnet.projects AS p
+              WHERE NOT EXISTS (SELECT 1 FROM srcnet.artifacts AS a
+                                 WHERE a.project_id = p.project_id)),
+            -- nothing incomplete: carry on from the deepest level written
+            (SELECT max(substring(project_id from 7)::bigint) FROM srcnet.artifacts),
+            0)
+        """
+    ).fetchone()
     return int(row[0] or 0)
 
 
 def apply_schema(conn) -> None:
-    # On a fresh cluster the API boots before any dataset exists, and its
-    # ObsCore plugin installs ivoa.obscore as a view over the (empty) ODP
-    # tables. The suite publishes its synthetic table under that name — the
-    # service's bootstrap explicitly leaves a non-view obscore alone for
-    # exactly this case — but CREATE TABLE IF NOT EXISTS skips over a view
-    # silently, and the index DDL then fails on it. So the view is dropped
-    # rather than skipped over; only a view, because a table under that name
-    # is the suite's own data and must survive a resume.
-    existing = conn.execute(
-        "SELECT c.relkind FROM pg_class c"
-        " JOIN pg_namespace n ON n.oid = c.relnamespace"
-        " WHERE n.nspname = 'ivoa' AND c.relname = 'obscore'"
-    ).fetchone()
-    if existing and existing[0] == "v":
-        log.info("ivoa.obscore exists as the service's view; replacing it with the dataset table")
-        conn.execute("DROP VIEW ivoa.obscore")
+    """Load the suite's additions on top of the service's own schema.
+
+    The srcnet tables and the ivoa.obscore view are created by the metadata
+    plugins at API bootstrap, so this waits for them rather than defining its
+    own. Nothing here drops or replaces the view: the suite now generates the
+    same ODP model the service publishes, so the two no longer collide over
+    the ObsCore name — which is what used to make TAP_SCHEMA advertise columns
+    the relation did not have.
+    """
+    missing = conn.execute(
+        "SELECT to_regclass('srcnet.data_products') IS NULL"
+        "    OR to_regclass('ivoa.obscore') IS NULL"
+    ).fetchone()[0]
+    if missing:
+        raise RuntimeError(
+            "srcnet.data_products or ivoa.obscore is absent: the ODP metadata plugin "
+            "creates them at API bootstrap, so deploy the service against this "
+            "database before generating a dataset"
+        )
     for name in ("generate.sql", "schema.sql"):
         conn.execute((HERE / name).read_text())
-    conn.execute(SPATIAL_INDEX)
-    conn.commit()
-
-
-def register_columns(conn) -> None:
-    """Publish the columns in TAP_SCHEMA, read from the database itself.
-
-    Introspected rather than written out by hand, and ``indexed`` is taken
-    from pg_index rather than asserted: a hand-maintained copy of the DDL
-    drifts, and an ``indexed`` flag that lies is worse than none — it is the
-    column a client uses to decide what to filter on.
-    """
-    conn.execute(
-        """
-        WITH cols AS (
-            SELECT c.table_schema, c.table_name, c.column_name, c.ordinal_position,
-                   c.data_type,
-                   format('%s.%s', c.table_schema, c.table_name) AS qualified
-              FROM information_schema.columns c
-             WHERE c.table_schema IN ('caom', 'ivoa')
-        ), indexed AS (
-            SELECT format('%s.%s', n.nspname, t.relname) AS qualified, a.attname
-              FROM pg_index x
-              JOIN pg_class t ON t.oid = x.indrelid
-              JOIN pg_namespace n ON n.oid = t.relnamespace
-              JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY (x.indkey)
-             WHERE n.nspname IN ('caom', 'ivoa')
-        )
-        INSERT INTO tap_schema.columns
-            (table_name, column_name, datatype, arraysize, description,
-             indexed, principal, std, column_index)
-        SELECT cols.qualified, cols.column_name,
-               CASE
-                   WHEN cols.data_type LIKE 'double%' THEN 'double'
-                   WHEN cols.data_type = 'bigint' THEN 'long'
-                   WHEN cols.data_type = 'smallint' THEN 'short'
-                   WHEN cols.data_type = 'integer' THEN 'int'
-                   WHEN cols.data_type LIKE 'timestamp%' THEN 'char'
-                   ELSE 'char'
-               END,
-               CASE WHEN cols.data_type IN ('text', 'character varying')
-                         OR cols.data_type LIKE 'timestamp%' THEN '*' END,
-               format('synthetic benchmark column %s', cols.column_name),
-               CASE WHEN EXISTS (SELECT 1 FROM indexed
-                                  WHERE indexed.qualified = cols.qualified
-                                    AND indexed.attname = cols.column_name)
-                    THEN 1 ELSE 0 END,
-               1, 0, cols.ordinal_position
-          FROM cols
-        ON CONFLICT (table_name, column_name) DO UPDATE
-           SET indexed = excluded.indexed
-        """
-    )
-    # Then drop what no longer exists. The insert above only upserts, and this
-    # generator *replaces* ivoa.obscore: it drops the ODP plugin's view and
-    # creates its own CAOM-flavoured table in its place. Every column the view
-    # had and the table has not — s_region_geom, s_xel1, t_xel and the rest —
-    # would otherwise stay advertised in TAP_SCHEMA forever.
-    #
-    # That is not a cosmetic leak. TAP_SCHEMA is the contract a client reads
-    # before writing a query, so an orphaned row is the service asserting a
-    # column exists and then answering 500 when someone believes it. Scoped to
-    # the two schemas this generator owns, so a deployment's own tables are
-    # never touched.
-    conn.execute(
-        """
-        DELETE FROM tap_schema.columns c
-         WHERE split_part(c.table_name, '.', 1) IN ('caom', 'ivoa')
-           AND NOT EXISTS (
-               SELECT 1 FROM information_schema.columns i
-                WHERE format('%s.%s', i.table_schema, i.table_name) = c.table_name
-                  AND i.column_name = c.column_name)
-        """
-    )
     conn.commit()
 
 
@@ -365,31 +457,34 @@ def collect_stats(conn, name: str, observations: int, seconds: float) -> Dataset
         table_bytes=table_bytes,
         index_bytes=index_bytes,
         row_counts=rows,
-        obscore_rows=rows["ivoa.obscore"],
+        # one data product is one ObsCore row: the view is 1:1 over them,
+        # and counting it through the view would re-run the join for a
+        # number the base table already has
+        obscore_rows=rows["srcnet.data_products"],
         index_to_table_ratio=sum(index_bytes.values()) / total_table,
         observations_generated=observations,
         seconds=seconds,
     )
 
 
-def grow_to(conn, cfg: dict, target_bytes: int, batch_rows: int) -> int:
-    """Generate until the database reaches target_bytes. Returns observations."""
-    index = highest_observation(conn)
+def grow_to(conn, cfg: dict, target_bytes: int, batch_projects: int) -> int:
+    """Generate until the database reaches target_bytes. Returns the highest
+    project index written."""
+    index = highest_project(conn)
     if index:
-        log.info("resuming generation from observation %d", index)
+        log.info("resuming generation from project %d", index)
     while True:
         size = database_bytes(conn)
         if size >= target_bytes:
             return index
-        remaining = target_bytes - size
         log.info(
-            "%.2f/%.2f GiB (%.1f%%), %d observations",
+            "%.2f/%.2f GiB (%.1f%%), %d projects",
             size / 2**30,
             target_bytes / 2**30,
             100.0 * size / target_bytes,
             index,
         )
-        lo, hi = index + 1, index + batch_rows
+        lo, hi = index + 1, index + batch_projects
         for level, statement in LEVELS:
             with conn.cursor() as cur:
                 cur.execute(statement, _params(cfg, lo, hi))
@@ -404,7 +499,48 @@ def grow_to(conn, cfg: dict, target_bytes: int, batch_rows: int) -> int:
                 f"batch {lo}-{hi} did not grow the database ({size} bytes); "
                 "generation would not terminate"
             )
-        del remaining
+
+
+@contextlib.contextmanager
+def _spatial_indexes_set_aside(conn):
+    """Drop the service's GiST indexes for the load, rebuild them after.
+
+    Measured while loading the demo corpus: with the indexes live the load ran
+    at roughly a third of the rate, because every spoly insert pays a GiST
+    descent and a page split one row at a time. Building each index once from
+    the finished table is minutes.
+
+    The dropped definitions are stashed in the database, in the same
+    transaction as the DROP, rather than only in this process's memory. A
+    finally covers an exception but not a kill, and the failure that leaves
+    behind is the quiet one: the indexes stay dropped, the next run finds
+    nothing to set aside, and every spatial query silently sequential-scans.
+    Stashed, the next run puts them back.
+    """
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {STASH} (name text PRIMARY KEY, ddl text NOT NULL)")
+    live = conn.execute(SPATIAL_INDEX_QUERY).fetchall()
+    for name, ddl in live:
+        conn.execute(
+            f"INSERT INTO {STASH} (name, ddl) VALUES (%s, %s) ON CONFLICT DO NOTHING", (name, ddl)
+        )
+        conn.execute(f"DROP INDEX IF EXISTS srcnet.{name}")
+    conn.commit()
+    saved = conn.execute(f"SELECT name, ddl FROM {STASH} ORDER BY name").fetchall()
+    log.info("set aside %d GiST index(es) for the load", len(saved))
+    try:
+        yield
+    finally:
+        # Roll back first: if the load failed mid-statement the transaction is
+        # aborted, and every rebuild would then fail with "current transaction
+        # is aborted" — burying the error that actually mattered under one
+        # that does not.
+        conn.rollback()
+        started = time.monotonic()
+        for _, ddl in saved:
+            conn.execute(ddl)
+        conn.execute(f"DROP TABLE IF EXISTS {STASH}")
+        conn.commit()
+        log.info("rebuilt %d GiST index(es) in %.0fs", len(saved), time.monotonic() - started)
 
 
 def build(dsn: str, cfg: dict, targets: list[dict], out_dir: pathlib.Path) -> list[DatasetStats]:
@@ -413,7 +549,13 @@ def build(dsn: str, cfg: dict, targets: list[dict], out_dir: pathlib.Path) -> li
     built = []
     with psycopg.connect(dsn, autocommit=False) as conn:
         apply_schema(conn)
-        register_columns(conn)
+        # The software catalogue is a fixed few hundred rows whatever the tier,
+        # so it is written once rather than grown.
+        params = _params(cfg, 0, 0)
+        for statement in (SOFTWARE, SOFTWARE_ARTIFACTS):
+            with conn.cursor() as cur:
+                cur.execute(statement, params)
+        conn.commit()
         for target in targets:
             marker = out_dir / f"{target['name']}.json"
             if marker.exists():
@@ -421,15 +563,14 @@ def build(dsn: str, cfg: dict, targets: list[dict], out_dir: pathlib.Path) -> li
                 built.append(DatasetStats(**json.loads(marker.read_text())))
                 continue
             started = time.monotonic()
-            observations = grow_to(
-                conn, cfg, target["target_bytes"], cfg["generation"]["batch_rows"]
-            )
-            conn.execute(SPATIAL_INDEX)
-            conn.commit()
+            with _spatial_indexes_set_aside(conn):
+                projects = grow_to(
+                    conn, cfg, target["target_bytes"], cfg["generation"]["batch_projects"]
+                )
             log.info("VACUUM ANALYZE for %s", target["name"])
             with psycopg.connect(dsn, autocommit=True) as vac:
                 vac.execute("VACUUM ANALYZE")
-            stats = collect_stats(conn, target["name"], observations, time.monotonic() - started)
+            stats = collect_stats(conn, target["name"], projects, time.monotonic() - started)
             marker.write_text(json.dumps(stats.to_json(), indent=2, sort_keys=True))
             log.info(
                 "%s built: %.2f GiB, %d obscore rows, index/table %.2f",

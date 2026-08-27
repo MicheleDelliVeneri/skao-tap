@@ -446,7 +446,11 @@ def test_every_expected_index_is_created_by_the_schema():
     from egernia_bench.collect import postgres as pg_mod
 
     schema = (SUITE / "egernia_bench/dataset/schema.sql").read_text()
-    for index_name in set(pg_mod.EXPECTED_INDEXES.values()):
+    # The spatial index is created by the service from the ODP model at
+    # bootstrap, not by this file; everything else the corpus leans on is the
+    # suite's own addition on top.
+    service_owned = {"data_products_spoint_gist"}
+    for index_name in set(pg_mod.EXPECTED_INDEXES.values()) - service_owned:
         assert f"CREATE INDEX IF NOT EXISTS {index_name}" in schema, index_name
 
 
@@ -494,26 +498,43 @@ def test_start_opens_a_family_in_the_documented_order(monkeypatch):
     assert cfg is cfg_obj and run is run_obj and digests == {"img": "digest"}
 
 
-def test_register_columns_prunes_what_the_relation_no_longer_has():
-    """This generator replaces ivoa.obscore: it drops the ODP plugin's view and
-    creates its own CAOM-flavoured table. The insert only upserts, so without a
-    prune every column the view had and the table has not — s_region_geom,
-    s_xel1, t_xel — stays advertised in TAP_SCHEMA.
+def test_the_generator_no_longer_replaces_the_obscore_view():
+    """The whole class of bug behind issue #96 was this generator dropping the
+    ODP plugin's ivoa.obscore view and creating a CAOM-flavoured table under
+    the same name: TAP_SCHEMA kept advertising the view's columns, and a client
+    that believed them got a 500.
 
-    That is the service asserting a column exists and then answering 500 when a
-    client believes it, which is exactly what happened on the demo cluster.
+    Now that the suite generates the same ODP model the service publishes,
+    there is nothing to replace — so the fix is the absence of that code, and
+    this is the test that keeps it absent.
     """
     import inspect
 
     from egernia_bench.dataset import generate as dataset_mod
 
-    source = inspect.getsource(dataset_mod.register_columns)
-    assert "DELETE FROM tap_schema.columns" in source, "orphaned columns are never pruned"
-    # scoped to the two schemas this generator owns — a deployment's own tables
-    # must not be touched
-    delete = source.split("DELETE FROM tap_schema.columns", 1)[1]
-    assert "('caom', 'ivoa')" in delete
-    assert "information_schema.columns" in delete, "prune by what the relation actually has"
+    source = inspect.getsource(dataset_mod.apply_schema)
+    assert "DROP VIEW" not in source, "the ObsCore view is the service's, not the suite's"
+    assert not hasattr(dataset_mod, "register_columns"), (
+        "the service publishes its own tables in TAP_SCHEMA; a second writer is "
+        "how the two got out of step"
+    )
+
+
+def test_every_generated_level_targets_the_odp_schema():
+    """One data model, in the suite as well as in the service."""
+    from egernia_bench.dataset import generate as dataset_mod
+
+    for name, statement in dataset_mod.LEVELS:
+        assert "srcnet." in statement, f"{name} does not write to the ODP schema"
+        assert "caom" not in statement.lower(), f"{name} still references CAOM"
+    assert [name for name, _ in dataset_mod.LEVELS] == [
+        "project",
+        "observation",
+        "scheduling_block",
+        "execution_block",
+        "data_product",
+        "artifact",
+    ]
 
 
 def test_a_demo_only_tier_is_not_swept_by_default():
@@ -629,3 +650,25 @@ def test_an_empty_docs_directory_still_renders(tmp_path):
     docs = tmp_path / "performance"
     docs.mkdir(parents=True)
     assert "_No runs published yet._" in publish_mod._write_index(docs).read_text()
+
+
+def test_the_resume_point_is_the_first_incomplete_project():
+    """Levels are written parent-first and committed one at a time, so a run
+    that dies between them leaves projects whose children were never generated.
+
+    Resuming from the highest project id steps straight over those, and the
+    result is not a visible failure — it is a sky with holes in it and cone
+    searches that mysteriously find nothing. That is exactly what happened
+    while this generator was being written: 400 projects existed with zero data
+    products, and the corpus's derived cone centres found data 13 times out of
+    60 instead of every time.
+    """
+    import inspect
+
+    from egernia_bench.dataset import generate as dataset_mod
+
+    source = inspect.getsource(dataset_mod.highest_project)
+    assert "srcnet.artifacts" in source, "the resume point must come from the deepest level"
+    assert "NOT EXISTS" in source, "a gap earlier than the maximum has to be found, not skipped"
+    # max() alone is the bug: it reports the highest, not the contiguous prefix
+    assert source.count("min(") >= 1, "resume from the first incomplete project"

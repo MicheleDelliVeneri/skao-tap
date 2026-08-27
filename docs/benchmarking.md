@@ -42,7 +42,7 @@ Needs Docker, `kind`, `kubectl` and **Helm 4** — the chart is applied
 server-side with `--force-conflicts`, which Helm 3 does not have and reports
 as `unknown flag`. The suite builds the images from the working tree, brings
 up a single-node cluster, installs KEDA and a Prometheus that scrapes at
-2-second resolution, deploys the chart, and grows a synthetic CAOM/ObsCore
+2-second resolution, deploys the chart, and grows a synthetic ODP/ObsCore
 database to a measured size before measuring anything.
 
 Every public image it needs — KEDA's three, Prometheus, kube-state-metrics —

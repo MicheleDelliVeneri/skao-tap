@@ -33,21 +33,31 @@ datasets:
 
 generation:
   seed: 20260823
-  # Rows per COPY batch. Sized so a size check happens roughly every ~50 MB:
-  # often enough to stop within a percent of the target, rarely enough that
-  # pg_database_size() is not itself the workload.
-  batch_rows: 50000
-  # Planes per observation, artifacts per plane, and so on — the fan-out that
-  # makes the CAOM joins mean something.
-  planes_per_observation: [1, 3]
-  artifacts_per_plane: [1, 4]
-  parts_per_artifact: [1, 2]
-  chunks_per_part: [1, 2]
-  collections: ["SKA-LOW", "SKA-MID", "SKA-VLBI", "PRECURSOR-ASKAP", "PRECURSOR-MEERKAT"]
-  instruments: ["LOW-AA4", "MID-AA4", "LOW-AA2", "MID-AA0.5", "ASKAP-36", "MEERKAT-64"]
+  # Projects per batch. Each project expands to 128 data products and 256
+  # artifacts, so a batch is ~100k rows: often enough that generation stops
+  # within a percent of the target, rarely enough that pg_database_size() is
+  # not itself the workload.
+  batch_projects: 400
+  # The software catalogue, written once per build rather than grown: a
+  # catalogue of tools is hundreds of rows in reality however large the data
+  # holdings become.
+  software_packages: 400
+  instruments: ["SKA-Mid", "SKA-Low", "SKA-VLBI", "ASKAP", "MeerKAT"]
+  # What srcnet.observations.collection actually holds, which the ODP
+  # generator writes as SKAO/<instrument>. Spelled out rather than derived
+  # so the corpus binds the literal the rows contain: a predicate that
+  # matches nothing measures an empty scan, not a filter.
+  collections: ["SKAO/SKA-Mid", "SKAO/SKA-Low", "SKAO/SKA-VLBI", "SKAO/ASKAP",
+                "SKAO/MeerKAT"]
   bands: ["Radio", "Millimeter"]
-  dataproduct_types: ["cube", "image", "visibility", "spectrum", "timeseries"]
-  calib_levels: [0, 1, 2, 3]
+  dataproduct_types: ["cube", "image", "visibility", "spectrum", "timeseries", "sed", "table"]
+  science_categories:
+    ["Cosmology", "Cradle of Life", "Epoch of Reionisation", "Extragalactic Continuum",
+     "HI Galaxy Science", "Magnetism", "Pulsars", "Transients"]
+  targets:
+    ["Abell 2744", "NGC 253", "Centaurus A", "Fornax A", "Vela X-1", "LMC", "SMC",
+     "Sagittarius A*", "M83", "Circinus", "Pictor A", "Hydra A", "PKS 1934-638"]
+  surnames: ["Smith", "Okafor", "Nakamura", "Rossi", "Dlamini", "Moreau"]
   # MJD span: ten years of observing, so temporal queries have selectivity to
   # find rather than a uniform smear.
   mjd_range: [58849.0, 62501.0]

@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# The demo's ~100 GiB dataset: generate it once, snapshot it, restore it in
-# minutes every time after.
+# The demo's dataset: generate it once, snapshot it, restore it in minutes
+# every time after.
 #
-# Generation runs the benchmark suite's generator against the in-cluster
-# database through a port-forward. Every row therefore crosses that
-# port-forward, so run this from a machine with a fast path to the cluster —
-# not from the laptop that will present the demo over hotel wifi. It is
-# resumable and checkpointed: a run that dies at 60 GiB restarts near 60, not
-# at zero, so an interrupted generation is an inconvenience rather than a
-# lost evening.
+# This fills the models the service implements — the ODP hierarchy and the
+# software discovery model — and leaves ivoa.obscore as the plugin's view over
+# them. Same generator the benchmark suite uses, so the demo and the numbers
+# describe the same schema.
+#
+# Every row crosses a port-forward, so run this from a machine with a fast
+# path to the cluster — not from the laptop that will present the demo over
+# hotel wifi.
 set -euo pipefail
 
 action=${1:-generate}
@@ -43,7 +44,8 @@ case "$action" in
 generate)
   pod=$(require_pod)
   echo "generating tier $tier into '$namespace' (context $(kubectl config current-context))"
-  echo "this is hours the first time; it is resumable, and 'snapshot' makes it once"
+  echo "resumable and checkpointed: a run that dies part-way restarts near where"
+  echo "it stopped, and 'snapshot' means it only has to happen once"
 
   kubectl port-forward -n "$namespace" "pod/$pod" "$local_port:5432" >/dev/null 2>&1 &
   forward=$!
@@ -58,9 +60,8 @@ generate)
              -o jsonpath='{.data.postgres-password}' 2>/dev/null | base64 -d 2>/dev/null || echo tap)
   dsn="postgresql://tap:${password}@127.0.0.1:${local_port}/tap"
 
-  # dataset.build() takes a DSN; only ensure_dataset() is bound to the kind
-  # cluster's port-forward, and that is the one thing a remote cluster cannot
-  # reuse. Markers are written beside the repo so a resumed run finds them.
+  # The suite's generator, which builds the ODP hierarchy the service
+  # publishes. Markers live beside the repo so a resumed run finds them.
   markers=${MARKER_DIR:-$repo_root/.demo-datasets}
   cd "$bench_dir"
   PYTHONPATH="$bench_dir:$repo_root" DSN="$dsn" TIER="$tier" MARKERS="$markers" \
@@ -80,7 +81,7 @@ if not targets:
 wanted = [d for d in cfg["datasets"] if d["target_bytes"] <= targets[0]["target_bytes"]]
 stats = dataset_mod.build(os.environ["DSN"], cfg, wanted, pathlib.Path(os.environ["MARKERS"]))
 for stat in stats:
-    print(f"  {stat.name}: {stat.database_bytes / 2**30:.1f} GiB")
+    print(f"  {stat.name}: {stat.database_bytes / 2**30:.1f} GiB, {stat.obscore_rows:,} ObsCore rows")
 PY
 
   echo

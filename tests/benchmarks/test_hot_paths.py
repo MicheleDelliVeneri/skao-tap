@@ -150,13 +150,13 @@ OBSCORE_FIELDS = (
     ("t_max", 701),
     ("access_url", 25),
 )
-CAOM_JOIN_FIELDS = (
+ODP_JOIN_FIELDS = (
     ("obs_id", 25),
     ("collection", 25),
     ("instrument_name", 25),
-    ("plane_id", 25),
+    ("product_id", 25),
     ("calib_level", 23),
-    ("data_product_type", 25),
+    ("dataproduct_type", 25),
 )
 METADATA_FIELDS = (("table_name", 25), ("description", 25))
 
@@ -177,12 +177,12 @@ def _obscore_row(index: int) -> tuple:
     )
 
 
-def _caom_row(index: int) -> tuple:
+def _odp_row(index: int) -> tuple:
     return (
-        f"ska:obs:{index:012d}",
-        "SKA-MID",
-        "MID-AA4",
-        f"ska:plane:{index:012d}",
+        f"SKA-Mid-{index:09d}-00",
+        "SKAO/SKA-Mid",
+        "SKA-Mid",
+        f"eb-{index:09d}-00-00-000-000",
         2,
         "visibility",
     )
@@ -258,11 +258,12 @@ CLASSES = {
     ),
     "Q08": (
         "SELECT TOP 200 o.obs_id, o.collection, o.instrument_name, p.plane_id,"
-        " p.calib_level, p.data_product_type FROM caom.observation AS o"
-        " JOIN caom.plane AS p ON o.obs_id = p.obs_id"
+        " p.calib_level, p.dataproduct_type FROM srcnet.observations AS o"
+        " JOIN srcnet.data_products AS p"
+        " ON o.project_id = p.project_id AND o.obs_id = p.obs_id"
         " WHERE o.collection = 'SKA-MID' AND p.calib_level = 2",
-        CAOM_JOIN_FIELDS,
-        _caom_row,
+        ODP_JOIN_FIELDS,
+        _odp_row,
         200,
     ),
     "Q10": (
@@ -311,15 +312,16 @@ _DESCRIPTIONS = {
 # read — so the stub answers them without pretending to be a database.
 _TAP_SCHEMA_COLUMNS = tuple(
     (name, "deg" if name.startswith("s_") else None, f"pos.eq.{name}", f"the {name} column")
-    for name, _oid in OBSCORE_FIELDS + CAOM_JOIN_FIELDS + METADATA_FIELDS
+    for name, _oid in OBSCORE_FIELDS + ODP_JOIN_FIELDS + METADATA_FIELDS
 )
 _PUBLISHED_TABLES = (
     ("ivoa.obscore",),
-    ("caom.observation",),
-    ("caom.plane",),
-    ("caom.artifact",),
-    ("caom.part",),
-    ("caom.chunk",),
+    ("srcnet.projects",),
+    ("srcnet.observations",),
+    ("srcnet.scheduling_blocks",),
+    ("srcnet.execution_blocks",),
+    ("srcnet.data_products",),
+    ("srcnet.artifacts",),
     ("tap_schema.tables",),
     ("tap_schema.columns",),
 )
