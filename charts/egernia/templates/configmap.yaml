@@ -1,0 +1,162 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "egernia.fullname" . }}-config
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+data:
+  TAP_BASE_URL: {{ include "egernia.baseUrl" . | quote }}
+  TAP_TRUSTED_HOSTS: {{ include "egernia.trustedHosts" . | quote }}
+  TAP_RESULTS_DIR: /results
+  TAP_QUERY_ROLE: {{ .Values.config.queryRole | quote }}
+  {{- /* int64 guards against Helm rendering large numbers as 1e+06 */}}
+  TAP_DEFAULT_MAXREC: {{ .Values.config.defaultMaxrec | int64 | quote }}
+  TAP_HARD_MAXREC: {{ .Values.config.hardMaxrec | int64 | quote }}
+  TAP_SYNC_TIMEOUT: {{ .Values.config.syncTimeoutSeconds | int64 | quote }}
+  TAP_ASYNC_EXEC_DURATION: {{ .Values.config.asyncExecDurationSeconds | int64 | quote }}
+  TAP_JOB_RETENTION: {{ .Values.config.jobRetentionSeconds | int64 | quote }}
+  TAP_WAIT_MAX: {{ .Values.config.waitMaxSeconds | int64 | quote }}
+  TAP_MODEL_PLUGINS: {{ .Values.config.modelPlugins | quote }}
+  TAP_OBSCORE_DID_PREFIX: {{ .Values.config.obscoreDidPrefix | quote }}
+  TAP_OBSCORE_DID_COLUMNS: {{ .Values.config.obscoreDidColumns | quote }}
+  TAP_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  {{- /* the container listens where the deployment says it does: without this
+         a tapApi.port other than the image default would leave uvicorn on
+         8080 while the probes and Service looked elsewhere */}}
+  TAP_EXECUTOR_METRICS_PORT: {{ .Values.config.executorMetricsPort | int64 | quote }}
+  {{- if .Values.tracing.otlpEndpoint }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.tracing.otlpEndpoint | quote }}
+  OTEL_SERVICE_NAME: {{ include "egernia.fullname" . | quote }}
+  {{- end }}
+  TAP_DB_POOL_MIN: {{ .Values.config.dbPoolMin | int64 | quote }}
+  TAP_DB_POOL_MAX: {{ .Values.config.dbPoolMax | int64 | quote }}
+  TAP_DB_POOL_TIMEOUT: {{ .Values.config.dbPoolTimeoutSeconds | quote }}
+  TAP_API_PORT: {{ .Values.tapApi.port | int64 | quote }}
+  TAP_API_WORKERS: {{ .Values.tapApi.workers | int64 | quote }}
+  TAP_API_BACKLOG: {{ .Values.tapApi.backlog | int64 | quote }}
+  {{- /* unset means unlimited in the image, so 0 sends nothing at all */}}
+  {{- if gt (int .Values.tapApi.limitConcurrency) 0 }}
+  TAP_API_LIMIT_CONCURRENCY: {{ .Values.tapApi.limitConcurrency | int64 | quote }}
+  {{- end }}
+  {{- /* VOResource record; disabled by default, see values.yaml */}}
+  TAP_REGISTRY_ENABLED: {{ .Values.voRegistry.enabled | quote }}
+  {{- if .Values.voRegistry.enabled }}
+  {{- /* trimmed, like the service does: a whitespace-only value would pass a
+         nil/empty check here and then fail at runtime, which is the failure
+         this validation exists to move forward to deploy time */}}
+  {{- range $key := list "authorityId" "resourceKey" "title" "shortName" "description" "referenceUrl" "publisher" "created" }}
+  {{- if not (trim (toString (get $.Values.voRegistry $key))) }}
+  {{- fail (printf "voRegistry.%s is required when voRegistry.enabled=true: a VOResource record missing it is rejected by a publishing registry. See docs/registry.md." $key) }}
+  {{- end }}
+  {{- end }}
+  {{- $subjects := list }}
+  {{- range $subject := default (list) .Values.voRegistry.subjects }}
+  {{- if trim (toString $subject) }}
+  {{- $subjects = append $subjects $subject }}
+  {{- end }}
+  {{- end }}
+  {{- if not $subjects }}
+  {{- fail "voRegistry.subjects needs at least one non-blank term when voRegistry.enabled=true (e.g. [\"radio astronomy\"]); the record's content requires a subject" }}
+  {{- end }}
+  {{- if gt (len (trim .Values.voRegistry.shortName)) 16 }}
+  {{- fail (printf "voRegistry.shortName is %d characters; VOResource allows at most 16" (len (trim .Values.voRegistry.shortName))) }}
+  {{- end }}
+  {{- /* trimmed on the way out, like the service trims on the way in: a
+         padded authorityId would otherwise reach the identifier as
+         "ivo://skao.int /srcnet/tap", valid to this chart and rejected by a
+         registry */}}
+  TAP_REGISTRY_IDENTIFIER: {{ printf "ivo://%s/%s" (trim .Values.voRegistry.authorityId) (trim .Values.voRegistry.resourceKey) | quote }}
+  TAP_REGISTRY_TITLE: {{ trim .Values.voRegistry.title | quote }}
+  TAP_REGISTRY_SHORT_NAME: {{ trim .Values.voRegistry.shortName | quote }}
+  TAP_REGISTRY_DESCRIPTION: {{ trim .Values.voRegistry.description | quote }}
+  TAP_REGISTRY_REFERENCE_URL: {{ trim .Values.voRegistry.referenceUrl | quote }}
+  TAP_REGISTRY_PUBLISHER: {{ trim .Values.voRegistry.publisher | quote }}
+  TAP_REGISTRY_CREATOR: {{ trim .Values.voRegistry.creator | quote }}
+  TAP_REGISTRY_CONTACT_NAME: {{ trim .Values.voRegistry.contact.name | quote }}
+  TAP_REGISTRY_CONTACT_EMAIL: {{ trim .Values.voRegistry.contact.email | quote }}
+  TAP_REGISTRY_SUBJECTS: {{ join "," .Values.voRegistry.subjects | quote }}
+  TAP_REGISTRY_TYPES: {{ join "," .Values.voRegistry.types | quote }}
+  TAP_REGISTRY_CONTENT_LEVELS: {{ join "," .Values.voRegistry.contentLevels | quote }}
+  TAP_REGISTRY_CREATED: {{ trim .Values.voRegistry.created | quote }}
+  TAP_REGISTRY_UPDATED: {{ trim (.Values.voRegistry.updated | default .Values.voRegistry.created) | quote }}
+  {{- end }}
+  {{- /* authn/authz; disabled by default, see values.yaml */}}
+  TAP_AUTH_ENABLED: {{ .Values.auth.enabled | quote }}
+  {{- if .Values.auth.enabled }}
+  TAP_AUTH_PLUGIN: {{ .Values.auth.plugin | quote }}
+  TAP_AUTH_REQUIRE_TOKEN: {{ .Values.auth.requireToken | quote }}
+  TAP_AUTH_ANONYMOUS_QUERIES: {{ .Values.auth.anonymousQueries | quote }}
+  TAP_IAM_ISSUER: {{ required "auth.iam.issuer is required when auth.enabled=true (tokens are always verified against the IAM)" .Values.auth.iam.issuer | quote }}
+  {{- if not (or .Values.auth.iam.audience .Values.auth.iam.allowAnyAudience) }}
+  {{- fail "auth.iam.audience is required when auth.enabled=true: without it, a token issued to any other client of the same IAM is accepted here. Set auth.iam.allowAnyAudience=true to accept that risk deliberately." }}
+  {{- end }}
+  TAP_IAM_AUDIENCE: {{ .Values.auth.iam.audience | quote }}
+  TAP_IAM_ALLOW_ANY_AUDIENCE: {{ .Values.auth.iam.allowAnyAudience | quote }}
+  TAP_IAM_GROUP_CLAIMS: {{ .Values.auth.iam.groupClaims | quote }}
+  TAP_IAM_WELL_KNOWN_URL: {{ .Values.auth.iam.wellKnownUrl | quote }}
+  TAP_IAM_JWKS_CACHE: {{ .Values.auth.iam.jwksCacheSeconds | int64 | quote }}
+  {{- /* the one spelling that enforces nothing; anything else is a policy */}}
+  {{- $gatesNothing := and (eq (len .Values.auth.gatedOperations) 1) (eq (lower (first .Values.auth.gatedOperations)) "none") }}
+  {{- if eq .Values.auth.plugin "iam-groups" }}
+  {{- if not .Values.auth.roles }}
+  {{- fail "auth.plugin=iam-groups needs auth.roles: every gated operation must name the groups or scopes that grant it (or set anyVerifiedToken), otherwise nothing is granted. See docs/auth.md." }}
+  {{- end }}
+  {{- /* an operation enforced but never granted denies everyone, which reads
+         as a broken deployment rather than as a policy */}}
+  {{- if not $gatesNothing }}
+  {{- range $operation := .Values.auth.gatedOperations }}
+  {{- if not (hasKey $.Values.auth.roles $operation) }}
+  {{- fail (printf "auth.gatedOperations enforces %s but auth.roles has no entry for it, so it would be denied to everyone. Grant it under auth.roles, or drop it from auth.gatedOperations." $operation) }}
+  {{- end }}
+  {{- /* present but empty grants nobody, which is the same outcome by a
+         longer route: an unfinished policy rather than a decision */}}
+  {{- $rule := get $.Values.auth.roles $operation }}
+  {{- if not (kindIs "map" $rule) }}
+  {{- fail (printf "auth.roles.%s must be a mapping with groups, scopes or anyVerifiedToken" $operation) }}
+  {{- end }}
+  {{- if not (or $rule.groups $rule.scopes $rule.anyVerifiedToken) }}
+  {{- fail (printf "auth.roles.%s names no group or scope and does not set anyVerifiedToken, so %s would be denied to everyone while auth.gatedOperations enforces it. Grant it, or drop it from auth.gatedOperations." $operation $operation) }}
+  {{- end }}
+  {{- /* a blank entry is a grant to the group named "" — never intended,
+         and it makes a rule look populated while granting nobody */}}
+  {{- range $entry := concat (default (list) $rule.groups) (default (list) $rule.scopes) }}
+  {{- if not (trim (toString $entry)) }}
+  {{- fail (printf "auth.roles.%s has a blank group or scope entry, which grants nobody while looking like a grant" $operation) }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- if not $gatesNothing }}
+  {{- /* the query surface is enforced as a group: a caller refused at
+         POST /tap/async runs the same query at /tap/sync, and gating job
+         mutation without job creation hands a client a job it cannot start */}}
+  {{- $queryOps := list "jobs.create" "jobs.mutate" "jobs.delete" "query.sync" }}
+  {{- $missing := list }}
+  {{- range $operation := $queryOps }}
+  {{- if not (has $operation $.Values.auth.gatedOperations) }}
+  {{- $missing = append $missing $operation }}
+  {{- end }}
+  {{- end }}
+  {{- if and $missing (lt (len $missing) (len $queryOps)) }}
+  {{- fail (printf "auth.gatedOperations enforces part of the query surface but not %s. Enforce these four together or not at all: a caller refused at POST /tap/async runs the same query at /tap/sync, and gating job mutation without job creation hands a VO client a job it cannot start. See docs/auth.md." (join ", " $missing)) }}
+  {{- end }}
+  {{- $known := list "metadata.ingest" "metadata.amend" "metadata.delete" "jobs.create" "jobs.mutate" "jobs.delete" "query.sync" }}
+  {{- range $operation := .Values.auth.gatedOperations }}
+  {{- if not (has $operation $known) }}
+  {{- fail (printf "auth.gatedOperations names unknown operation %s; known operations: %s (or the single entry \"none\" to enforce nothing)" $operation (join ", " $known)) }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- /* empty means the service default: metadata mutation only */}}
+  TAP_AUTH_GATED_OPERATIONS: {{ join "," .Values.auth.gatedOperations | quote }}
+  {{- /* camelCase in values, snake_case in the policy the service parses */}}
+  TAP_AUTH_ROLES: {{ .Values.auth.roles | toJson | replace "\"anyVerifiedToken\"" "\"any_verified_token\"" | quote }}
+  {{- if eq .Values.auth.plugin "permissions-api" }}
+  TAP_PERMISSIONS_API_URL: {{ required "auth.permissionsApi.url is required when auth.plugin=permissions-api" .Values.auth.permissionsApi.url | quote }}
+  TAP_PERMISSIONS_SERVICE_NAME: {{ .Values.auth.permissionsApi.serviceName | quote }}
+  TAP_PERMISSIONS_SERVICE_VERSION: {{ .Values.auth.permissionsApi.serviceVersion | quote }}
+  TAP_PERMISSIONS_TIMEOUT: {{ .Values.auth.permissionsApi.timeoutSeconds | int64 | quote }}
+  {{- end }}
+  {{- end }}

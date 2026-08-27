@@ -1,0 +1,32 @@
+{{- /*
+A headless Service for the executor, whose only purpose is to give a
+Prometheus something stable to scrape. The executor serves no API — it takes
+work from the database — so this deliberately publishes only the metrics
+port and sets clusterIP: None: there is nothing here to load-balance, and a
+virtual IP in front of a metrics endpoint would hide which replica answered.
+
+The scrape annotations on the pods remain the mechanism where a Prometheus
+discovers pods itself. This exists for the ones that do not, which includes
+the Prometheus Operator: it selects ServiceMonitors and static targets, and
+reads no annotation of ours.
+*/}}
+{{- if .Values.metrics.executorService }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "egernia.fullname" . }}-tap-executor-metrics
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tap-executor
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: tap-executor
+  ports:
+    - name: metrics
+      port: {{ .Values.config.executorMetricsPort }}
+      # the executor container declares no named ports, so this is numeric
+      targetPort: {{ .Values.config.executorMetricsPort }}
+{{- end }}

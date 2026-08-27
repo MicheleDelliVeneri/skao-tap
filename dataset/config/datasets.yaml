@@ -1,0 +1,63 @@
+# Sizes are ACTUAL pg_database_size(), indexes included — not row counts.
+# Generation is one growing database checkpointed at each target, so D4 costs
+# 45 GB of disk rather than D1+D2+D3+D4 = 82 GB, and every tier is a real
+# prefix of the next.
+datasets:
+  - name: D1
+    target_bytes: 2147483648        # 2 GiB
+  - name: D2
+    target_bytes: 10737418240       # 10 GiB
+  # The larger tiers carry their own warmup. The measured fact behind it:
+  # with the default 60 s warmup the first repetition at each size was
+  # colder than the rest (D1's first window read 280 MiB, D2's 1,091 MiB),
+  # so the first repetition was a property of the cache, not the service.
+  # A working set bigger than memory never becomes "warm" — the target is
+  # the steady-state hit ratio, which takes as long as reading the hot set
+  # once.
+  - name: D3
+    target_bytes: 26843545600       # 25 GiB
+    warmup_seconds: 300
+  - name: D4
+    target_bytes: 48318382080       # 45 GiB
+    warmup_seconds: 600
+  # A demonstration tier. Not part of any benchmark family: the size sweep's
+  # story is told by D1-D4, and a fifth point costs another 55 GiB of
+  # generation for a curve that already has its shape. This exists so a
+  # walkthrough can say "a hundred gigabytes" and mean it.
+  - name: D5
+    target_bytes: 107374182400      # 100 GiB
+    warmup_seconds: 900
+    # Kept out of the families that sweep every tier by default. Named
+    # explicitly (`--datasets D5`) it behaves like any other.
+    demo_only: true
+
+generation:
+  seed: 20260823
+  # Projects per batch. Each project expands to 128 data products and 256
+  # artifacts, so a batch is ~100k rows: often enough that generation stops
+  # within a percent of the target, rarely enough that pg_database_size() is
+  # not itself the workload.
+  batch_projects: 400
+  # The software catalogue, written once per build rather than grown: a
+  # catalogue of tools is hundreds of rows in reality however large the data
+  # holdings become.
+  software_packages: 400
+  instruments: ["SKA-Mid", "SKA-Low", "SKA-VLBI", "ASKAP", "MeerKAT"]
+  # What srcnet.observations.collection actually holds, which the ODP
+  # generator writes as SKAO/<instrument>. Spelled out rather than derived
+  # so the corpus binds the literal the rows contain: a predicate that
+  # matches nothing measures an empty scan, not a filter.
+  collections: ["SKAO/SKA-Mid", "SKAO/SKA-Low", "SKAO/SKA-VLBI", "SKAO/ASKAP",
+                "SKAO/MeerKAT"]
+  bands: ["Radio", "Millimeter"]
+  dataproduct_types: ["cube", "image", "visibility", "spectrum", "timeseries", "sed", "table"]
+  science_categories:
+    ["Cosmology", "Cradle of Life", "Epoch of Reionisation", "Extragalactic Continuum",
+     "HI Galaxy Science", "Magnetism", "Pulsars", "Transients"]
+  targets:
+    ["Abell 2744", "NGC 253", "Centaurus A", "Fornax A", "Vela X-1", "LMC", "SMC",
+     "Sagittarius A*", "M83", "Circinus", "Pictor A", "Hydra A", "PKS 1934-638"]
+  surnames: ["Smith", "Okafor", "Nakamura", "Rossi", "Dlamini", "Moreau"]
+  # MJD span: ten years of observing, so temporal queries have selectivity to
+  # find rather than a uniform smear.
+  mjd_range: [58849.0, 62501.0]

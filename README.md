@@ -97,7 +97,7 @@ standards-mandated XML at `/api/v1` — see the [JSON API][json-api].
 ## Deploy
 
 ```bash
-helm upgrade --install egernia etc/helm \
+helm upgrade --install egernia charts/egernia \
   --namespace egernia --create-namespace \
   --set tapApi.baseUrl=https://tap.example.org/tap
 helm test egernia -n egernia       # in-cluster VOSI + sync smoke test

@@ -1,0 +1,249 @@
+{{- /*
+Horizontal autoscaling (roadmap package 9): more pods when there is more
+work. Off by default — a single-replica deployment is a valid one, and an
+autoscaler that owns the Deployment's replica count is a change an operator
+should ask for.
+
+Two different signals, because the two services are limited by different
+things. The API is CPU-bound (pure-Python ANTLR translation, GIL-held), so
+CPU utilisation says what it is doing and metrics-server alone can measure
+it. An executor spends its life waiting on PostgreSQL, so its CPU says
+nothing; the queue is what says whether the executors are keeping up, and
+its *depth* (tap_jobs{phase="QUEUED"}) is the signal — the oldest job's age
+saturates near one job's service time as soon as the queue drains at all
+(measured: 1,713 jobs queued, oldest 54 s, one pod asked for), so scaling
+on age under-scales exactly when it matters and no threshold fixes that.
+*/}}
+{{- $hpa := .Values.horizontalAutoscaling }}
+
+{{- /* -- renamed values ---------------------------------------------------- */}}
+
+{{- /*
+The scaling knob changed meaning when the signal changed from the oldest
+job's age to the queue's depth. A value carrying seconds silently read as a
+job count would scale wrongly without a word, so the old names are refused
+with the new ones.
+*/}}
+{{- if hasKey $hpa.tapExecutor "backlogSecondsPerReplica" }}
+{{- fail "horizontalAutoscaling.tapExecutor.backlogSecondsPerReplica was renamed: the executor now scales on queue depth (tap_jobs{phase=\"QUEUED\"}), not the oldest job's age, which saturates under load. Set queuedJobsPerReplica — QUEUED jobs one replica absorbs (an executor's fixed cost is ~5 ms of CPU per job since package 20, so 10 queued jobs are typically well under a second of queue). See docs/autoscaling.md." }}
+{{- end }}
+{{- if hasKey $hpa.tapExecutor "activationBacklogSeconds" }}
+{{- fail "horizontalAutoscaling.tapExecutor.activationBacklogSeconds was renamed to activationQueuedJobs: the executor now scales on queue depth, not the oldest job's age. See docs/autoscaling.md." }}
+{{- end }}
+
+{{- /* -- validation ------------------------------------------------------ */}}
+
+{{- if $hpa.tapApi.enabled }}
+{{- if gt (int $hpa.tapApi.minReplicas) (int $hpa.tapApi.maxReplicas) }}
+{{- fail (printf "horizontalAutoscaling.tapApi.minReplicas (%d) is above maxReplicas (%d)" (int $hpa.tapApi.minReplicas) (int $hpa.tapApi.maxReplicas)) }}
+{{- end }}
+{{- if lt (int $hpa.tapApi.minReplicas) 1 }}
+{{- fail "horizontalAutoscaling.tapApi.minReplicas must be at least 1: a HorizontalPodAutoscaler cannot scale to zero without the HPAScaleToZero feature gate, and an API with no pods answers nothing" }}
+{{- end }}
+{{- if not (dig "requests" "cpu" "" (default dict .Values.tapApi.resources)) }}
+{{- fail "horizontalAutoscaling.tapApi needs tapApi.resources.requests.cpu set: a CPU utilisation target is a percentage of the request, so without one the metric is unavailable and the autoscaler never acts" }}
+{{- end }}
+{{- if and .Values.verticalAutoscaling.enabled (ne .Values.verticalAutoscaling.updateMode "Off") (has "cpu" .Values.verticalAutoscaling.controlledResources) }}
+{{- fail (printf "horizontalAutoscaling.tapApi and verticalAutoscaling.updateMode=%q both change CPU, which Kubernetes does not support: the VPA resizes the pod while the HPA counts pods against a percentage of the size it just changed. Either keep updateMode \"Off\" (recommendations only), or set verticalAutoscaling.controlledResources to [\"memory\"] so the VPA sizes memory while the HPA counts pods on CPU — that combination is supported. See docs/autoscaling.md." .Values.verticalAutoscaling.updateMode) }}
+{{- end }}
+{{- end }}
+
+{{- if $hpa.tapExecutor.enabled }}
+{{- if gt (int $hpa.tapExecutor.minReplicas) (int $hpa.tapExecutor.maxReplicas) }}
+{{- fail (printf "horizontalAutoscaling.tapExecutor.minReplicas (%d) is above maxReplicas (%d)" (int $hpa.tapExecutor.minReplicas) (int $hpa.tapExecutor.maxReplicas)) }}
+{{- end }}
+{{- if lt (int $hpa.tapExecutor.minReplicas) 1 }}
+{{- /*
+Scale-to-zero deadlocks on the *default* query, because the series it reads is
+exported by the executor: with no executors nothing reports the queue that
+would start one. An operator whose own query comes from somewhere the
+executors do not have to be running for — a recording rule, a database
+exporter — has no such problem, so the refusal is scoped to the case that
+actually breaks. A plain HPA cannot do zero at all without a feature gate.
+*/}}
+{{- if ne $hpa.tapExecutor.scaler "keda" }}
+{{- fail "horizontalAutoscaling.tapExecutor.minReplicas must be at least 1 with scaler=external: a HorizontalPodAutoscaler cannot scale to zero without the HPAScaleToZero feature gate" }}
+{{- end }}
+{{- if not $hpa.tapExecutor.query }}
+{{- fail "horizontalAutoscaling.tapExecutor.minReplicas 0 needs your own horizontalAutoscaling.tapExecutor.query: the default reads tap_jobs{phase=\"QUEUED\"}, which the executor itself exports, so with no executors running nothing reports the queue, the series goes stale, and no amount of queued work can start a pod again. Point `query` at a series that survives having no executors (a recording rule, or an exporter reading the database) and scale-to-zero is sound. See docs/autoscaling.md." }}
+{{- end }}
+{{- end }}
+{{- if not (has $hpa.tapExecutor.scaler (list "keda" "external")) }}
+{{- fail (printf "horizontalAutoscaling.tapExecutor.scaler is %q; expected \"keda\" or \"external\"" $hpa.tapExecutor.scaler) }}
+{{- end }}
+{{- if lt (int $hpa.tapExecutor.queuedJobsPerReplica) 1 }}
+{{- fail "horizontalAutoscaling.tapExecutor.queuedJobsPerReplica must be at least 1: it is the divisor that turns queue depth into a replica count" }}
+{{- end }}
+{{- end }}
+
+{{- /*
+The connection ceiling moves when the replica count does. Only checked when
+postgresql.tuning.max_connections says what the limit is; an operator who has
+not said cannot be told they are over it.
+*/}}
+{{- if or $hpa.tapApi.enabled $hpa.tapExecutor.enabled }}
+{{- $limit := int (dig "max_connections" 0 (default dict .Values.postgresql.tuning)) }}
+{{- if and .Values.postgresql.enabled (gt $limit 0) }}
+{{- $apiPods := int (ternary $hpa.tapApi.maxReplicas .Values.tapApi.replicas $hpa.tapApi.enabled) }}
+{{- $executorPods := int (ternary $hpa.tapExecutor.maxReplicas .Values.tapExecutor.replicas $hpa.tapExecutor.enabled) }}
+{{- $pool := int .Values.config.dbPoolMax }}
+{{- $peak := add (mul $apiPods (int .Values.tapApi.workers) $pool) (mul $executorPods $pool) }}
+{{- /* PostgreSQL keeps superuser_reserved_connections (3 by default) back */}}
+{{- $usable := sub $limit 3 }}
+{{- if gt $peak $usable }}
+{{- fail (printf "fully scaled out, this release would open %d database connections (API: %d pods x %d workers x dbPoolMax %d; executor: %d x %d), but postgresql.tuning.max_connections is %d and PostgreSQL holds 3 back for superusers, leaving %d. Autoscaling into a connection wall turns a busy service into a broken one: lower config.dbPoolMax or the maxReplicas, or raise max_connections. See docs/autoscaling.md." $peak $apiPods (int .Values.tapApi.workers) $pool $executorPods $pool $limit $usable) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- /* -- tap-api: CPU ---------------------------------------------------- */}}
+
+{{- if $hpa.tapApi.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "egernia.fullname" . }}-tap-api
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tap-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "egernia.fullname" . }}-tap-api
+  minReplicas: {{ int $hpa.tapApi.minReplicas }}
+  maxReplicas: {{ int $hpa.tapApi.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ int $hpa.tapApi.targetCPUUtilizationPercentage }}
+    {{- if gt (int $hpa.tapApi.targetMemoryUtilizationPercentage) 0 }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ int $hpa.tapApi.targetMemoryUtilizationPercentage }}
+    {{- end }}
+  {{- with $hpa.tapApi.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+
+{{- /* -- tap-executor: queue depth --------------------------------------- */}}
+
+{{- if $hpa.tapExecutor.enabled }}
+{{- if eq $hpa.tapExecutor.scaler "keda" }}
+{{- /*
+A ScaledObject rather than an HPA because the PromQL belongs with the metric
+it queries: KEDA creates the HPA itself, from this, and the query above ships
+reviewed with the chart. The `external` scaler below is the same autoscaling
+with the query moved into somebody else's component.
+*/}}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "egernia.fullname" . }}-tap-executor
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tap-executor
+spec:
+  scaleTargetRef:
+    name: {{ include "egernia.fullname" . }}-tap-executor
+  minReplicaCount: {{ int $hpa.tapExecutor.minReplicas }}
+  maxReplicaCount: {{ int $hpa.tapExecutor.maxReplicas }}
+  pollingInterval: {{ int $hpa.tapExecutor.pollingIntervalSeconds }}
+  {{- with $hpa.tapExecutor.behavior }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        {{- toYaml . | nindent 8 }}
+  {{- end }}
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: {{ include "egernia.queueDepthPrometheus" . | quote }}
+        query: {{ include "egernia.queueDepthQuery" . | quote }}
+        # queued jobs per replica: 50 queued against 10 here asks for
+        # 5 executors
+        threshold: {{ int $hpa.tapExecutor.queuedJobsPerReplica | quote }}
+        {{- /* Only when it can do something: activationThreshold governs the
+               0-to-1 transition alone, so at a minimum of 1 it would be a
+               setting that looks live and is not. Damping for the scaling
+               range belongs in `behavior`. */}}
+        {{- if eq (int $hpa.tapExecutor.minReplicas) 0 }}
+        activationThreshold: {{ int $hpa.tapExecutor.activationQueuedJobs | quote }}
+        {{- end }}
+---
+{{- else }}
+{{- /*
+A plain HPA on an external metric, for a cluster that already serves one.
+The query is not here — whatever publishes this metric owns it, and it has
+to aggregate with max() across executor pods for the same reason the KEDA
+query does. docs/autoscaling.md has the prometheus-adapter rule.
+*/}}
+{{- /*
+The selector decides which series this HPA reads, so it also decides what the
+metrics provider has to publish. Both are derived from the same value here:
+unset means namespace-scoped, an explicit {} means no matchers at all.
+*/}}
+{{- $selector := $hpa.tapExecutor.externalMetricSelector }}
+{{- if kindIs "invalid" $selector }}
+{{- $selector = dict "namespace" .Release.Namespace }}
+{{- end }}
+{{- $matchers := list }}
+{{- range $label, $value := $selector }}
+{{- $matchers = append $matchers (printf "%s=\"%s\"" $label (toString $value)) }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "egernia.fullname" . }}-tap-executor
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "egernia.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tap-executor
+  annotations:
+    # What the cluster's metrics provider has to return for this to work,
+    # built from the name and selector below rather than from the KEDA query:
+    # a selector of {} means no matchers, and an annotation still claiming a
+    # namespace match would send whoever is debugging this to the wrong place.
+    egernia/expected-query: {{ printf "max(%s%s)" $hpa.tapExecutor.externalMetricName (ternary (printf "{%s}" (join "," $matchers)) "" (gt (len $matchers) 0)) | quote }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "egernia.fullname" . }}-tap-executor
+  minReplicas: {{ int $hpa.tapExecutor.minReplicas }}
+  maxReplicas: {{ int $hpa.tapExecutor.maxReplicas }}
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: {{ $hpa.tapExecutor.externalMetricName | quote }}
+          {{- /* A selector that matches no series is not a stricter
+                 autoscaler, it is a dead one — so {} sends none at all. */}}
+          {{- with $selector }}
+          selector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+        target:
+          # AverageValue, so the HPA divides the depth by the replica count:
+          # desired = ceil(queued / queuedJobsPerReplica)
+          type: AverageValue
+          averageValue: {{ int $hpa.tapExecutor.queuedJobsPerReplica | quote }}
+  {{- with $hpa.tapExecutor.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+{{- end }}

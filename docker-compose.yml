@@ -61,7 +61,7 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=24h
     volumes:
-      - ./etc/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./charts/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - promdata:/prometheus
     ports:
       - "9090:9090"

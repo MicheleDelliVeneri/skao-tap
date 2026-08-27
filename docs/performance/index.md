@@ -1,8 +1,16 @@
 # Performance
 
-Benchmark results from `benchmarks/egernia-performance`, which measures the
-service, PostgreSQL as the data grows, replica scaling and autoscaling
-behaviour separately — because they fail separately.
+Archived benchmark results. They were produced by
+`benchmarks/egernia-performance`, a cluster benchmark harness this repository
+used to carry, which measured the service, PostgreSQL as the data grows,
+replica scaling and autoscaling behaviour separately — because they fail
+separately.
+
+That harness has been removed in favour of the timing guards in the
+integration suite and the CPU microbenchmarks (see
+[Performance testing](../benchmarking.md)). The measurements below stand as
+records; the `make benchmark-*` targets and `egernia_bench` commands the pages
+reference no longer exist, and the harness itself is in the git history.
 
 Each run below is published in full: the graphs, the per-measurement CSV,
 and the provenance needed to know whether two runs are comparable at all

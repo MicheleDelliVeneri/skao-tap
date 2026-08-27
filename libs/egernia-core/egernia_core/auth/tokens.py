@@ -158,13 +158,23 @@ class IAMTokenVerifier:
         if not token:
             raise AuthenticationError("no bearer token supplied")
         key = self._signing_key(token)
-        options = {"require": ["exp", "iss", "sub"], "verify_aud": self.audience is not None}
+        # The issuer is checked below rather than by PyJWT, which compares the
+        # `iss` claim verbatim. `self.issuer` has had its trailing slash
+        # stripped (as has the discovery document's, so those two agree), and
+        # an IAM that advertises `https://iam.test/` mints tokens carrying the
+        # slash — so handing the stripped form to PyJWT rejected every token
+        # from a correctly configured deployment, with an error naming two
+        # strings that look identical. `require` still keeps `iss` mandatory.
+        options = {
+            "require": ["exp", "iss", "sub"],
+            "verify_aud": self.audience is not None,
+            "verify_iss": False,
+        }
         try:
             claims = jwt.decode(
                 token,
                 key=key,
                 algorithms=["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"],
-                issuer=self.issuer,
                 audience=self.audience,
                 options=options,
             )
@@ -175,10 +185,17 @@ class IAMTokenVerifier:
                 "bearer token is not addressed to this service"
                 f" (expected audience {self.audience!r})"
             ) from exc
-        except jwt.InvalidIssuerError as exc:
-            raise AuthenticationError(f"bearer token was not issued by {self.issuer}") from exc
         except jwt.InvalidTokenError as exc:
             raise AuthenticationError(f"bearer token is not valid: {exc}") from exc
+        # Compared with the same normalisation applied to both sides, so a
+        # configured `https://iam.test` accepts a token from `https://iam.test/`
+        # and vice versa. Only the trailing slash is forgiven; any other issuer
+        # is still refused.
+        token_issuer = str(claims["iss"]).rstrip("/")
+        if token_issuer != self.issuer:
+            raise AuthenticationError(
+                f"bearer token was issued by {token_issuer!r}, not {self.issuer!r}"
+            )
         return Principal(
             subject=str(claims["sub"]),
             groups=_groups(claims, self.group_claims),

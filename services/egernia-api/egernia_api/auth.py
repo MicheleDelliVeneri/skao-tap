@@ -117,6 +117,14 @@ ANONYMOUS_PATHS = frozenset(
         # authentication.
         "/health/live",
         "/health/ready",
+        # Prometheus holds no token either. The scrape configs in every SRC
+        # deployment name a target and a metrics path and nothing else, so
+        # gating this is what the comment above calls a service that cannot be
+        # monitored — turning authentication on would silently stop the
+        # deployment's own scrape, and the autoscaler that reads the queue
+        # depth from it with it. Operational counters only: no row of anyone's
+        # data reaches this endpoint.
+        "/metrics",
         "/tap/availability",
         "/tap/capabilities",
         "/tap/tables",
