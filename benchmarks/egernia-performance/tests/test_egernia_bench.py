@@ -672,3 +672,27 @@ def test_the_resume_point_is_the_first_incomplete_project():
     assert "NOT EXISTS" in source, "a gap earlier than the maximum has to be found, not skipped"
     # max() alone is the bug: it reports the highest, not the contiguous prefix
     assert source.count("min(") >= 1, "resume from the first incomplete project"
+
+
+def test_seeding_asks_for_the_size_it_was_given():
+    """A seeded deployment is described by a size, not by a benchmark tier.
+
+    The suite's tiers are checkpoints for a size sweep. Passing the ones below
+    the requested size would write their stats files on the way past without
+    changing the result, so seeding asks for exactly one target — and reuses a
+    tier's name when the size happens to be one, so the stats file stays
+    comparable with a benchmark run's.
+    """
+    from egernia_bench.dataset import seed
+
+    cfg = yaml.safe_load((SUITE / "config/datasets.yaml").read_text())
+
+    # 20 GiB is nobody's tier: D2 is 10 and D3 is 25.
+    targets = seed.targets_for(cfg, 20 * 2**30)
+    assert len(targets) == 1, "one target, not every tier below it"
+    assert targets[0]["target_bytes"] == 20 * 2**30
+    assert targets[0]["name"] == "seed-20GiB"
+
+    # A size that is a tier borrows the tier, name and all.
+    d2 = next(d for d in cfg["datasets"] if d["name"] == "D2")
+    assert seed.targets_for(cfg, d2["target_bytes"]) == [d2]
