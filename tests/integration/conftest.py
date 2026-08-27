@@ -43,6 +43,11 @@ AAPI_URL = os.getenv("AAPI_URL", "https://aapi.test/api").rstrip("/")
 AAPI_SERVICE_VERSION = os.getenv("AAPI_SERVICE_VERSION", "v1")
 TEST_USER = os.getenv("TEST_USER", "test1")
 TEST_USER_PASSWORD = os.getenv("TEST_USER_PASSWORD", "test")
+# A user holding roles/dev/user and not roles/dev/oper. Every other seeded IAM
+# user holds oper, so without this one the suite can only prove the policy
+# permits — never that it denies, which is the half worth proving.
+TEST_READER_USER = os.getenv("TEST_READER_USER", "")
+TEST_READER_PASSWORD = os.getenv("TEST_READER_PASSWORD", "test")
 
 AAPI_SERVICE_URL = f"{AAPI_URL}/{AAPI_SERVICE_VERSION}"
 TAP_URL = f"{EGERNIA_URL}/tap"
@@ -138,12 +143,14 @@ def api_url() -> str:
     return API_URL
 
 
-def _mint_token() -> str:
+def _mint_token(username: str = "", password: str = "") -> str:
     """Drive the AAPI device flow and exchange for this service's audience."""
     from ska_src_auth_api.client.integration import AuthenticationIntegrationClient
 
-    logger.info("minting a token via the AAPI device flow at %s", AAPI_SERVICE_URL)
-    with AuthenticationIntegrationClient(AAPI_SERVICE_URL, TEST_USER, TEST_USER_PASSWORD) as flow:
+    username = username or TEST_USER
+    password = password or TEST_USER_PASSWORD
+    logger.info("minting a token for %s via the AAPI device flow", username)
+    with AuthenticationIntegrationClient(AAPI_SERVICE_URL, username, password) as flow:
         flow.authorize()
         raw = flow.fetch_token()["token"]["access_token"]
         # The device-flow token's audience is the Authentication API. egernia
@@ -311,6 +318,59 @@ def session(token: str) -> requests.Session:
     s = requests.Session()
     s.headers.update({"Authorization": f"Bearer {token}"})
     return s
+
+
+@pytest.fixture(scope="session")
+def reader_session() -> requests.Session:
+    """A session for a user with reads but no mutation grant.
+
+    Skips rather than fails when TEST_READER_USER is unset, so a deployment
+    whose IAM has not been reseeded with that user still runs the rest of the
+    suite — the skip is the signal that the deny direction is unproven there.
+    """
+    if not TEST_READER_USER:
+        pytest.skip(
+            "TEST_READER_USER is unset: seed an IAM user with roles/dev/user and "
+            "without roles/dev/oper to exercise the deny direction"
+        )
+    cache = pathlib.Path(os.getenv("EGERNIA_READER_TOKEN_CACHE", "/tmp/egernia-reader.json"))
+    with _locked_cache(cache) as state:
+        token = state.get("token", "")
+        if not token or time.time() >= state.get("expires_at", 0):
+            token = _mint_token(TEST_READER_USER, TEST_READER_PASSWORD)
+            cache.write_text(json.dumps({"token": token, "expires_at": time.time() + 1800}))
+    s = requests.Session()
+    s.headers.update({"Authorization": f"Bearer {token}"})
+    return s
+
+
+@pytest.fixture
+def timing(request: pytest.FixtureRequest):
+    """Record a measurement so a run leaves a trend, not just a verdict.
+
+    One JSON object per line, prefixed `TIMING`, because that is the only
+    artefact that survives: the stack streams the pod's log and keeps nothing
+    else, and pytest-xdist forwards worker logs to it. Extract a run with
+
+        kubectl logs -n egernia -l component=integration-test \
+          | sed -n 's/.*TIMING //p'
+
+    Also attached as a JUnit property, for whenever the runner starts
+    collecting the XML.
+    """
+
+    def record(label: str, seconds: float, budget: float) -> None:
+        entry = {
+            "test": request.node.name,
+            "label": label,
+            "seconds": round(seconds, 3),
+            "budget": budget,
+            "headroom": round(budget - seconds, 3),
+        }
+        logger.info("TIMING %s", json.dumps(entry, sort_keys=True))
+        request.node.user_properties.append((f"timing.{label}", seconds))
+
+    return record
 
 
 @pytest.fixture(scope="session")

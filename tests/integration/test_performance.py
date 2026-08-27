@@ -61,17 +61,18 @@ def _rows(response) -> list[dict]:
     return list(csv.DictReader(io.StringIO(response.text)))
 
 
-def _report(request, label: str, elapsed: float, budget: int) -> None:
-    """Print the timing whether it passed or failed.
+def _report(timing, label: str, elapsed: float, budget: int) -> None:
+    """Record the timing whether it passed or failed.
 
-    A guard that only speaks when it trips tells you nothing about the trend;
-    the pod's log is where someone looks after a deployment feels slow.
+    A guard that only speaks when it trips tells you nothing about the trend.
+    The recorder emits one JSON line per measurement, which is the only
+    artefact that outlives the run.
     """
     print(f"\n[timing] {label}: {elapsed:.2f}s (budget {budget}s)")
-    del request
+    timing(label, elapsed, budget)
 
 
-def test_a_keyed_lookup_is_index_served(session, request, dataset_ready):
+def test_a_keyed_lookup_is_index_served(session, timing, dataset_ready):
     """WHERE on a primary key. If this is slow, nothing else will be fast."""
     first = sync_query(session, "SELECT TOP 1 obs_id FROM ivoa.obscore")
     assert first.status_code == 200, first.text
@@ -80,7 +81,7 @@ def test_a_keyed_lookup_is_index_served(session, request, dataset_ready):
     response, elapsed = _timed(
         lambda: sync_query(session, f"SELECT obs_id FROM ivoa.obscore WHERE obs_id = '{obs_id}'")
     )
-    _report(request, "keyed lookup", elapsed, POINT_BUDGET_S)
+    _report(timing, "keyed lookup", elapsed, POINT_BUDGET_S)
     assert response.status_code == 200, response.text
     assert _rows(response), "the keyed lookup found nothing"
     assert elapsed < POINT_BUDGET_S, (
@@ -89,19 +90,19 @@ def test_a_keyed_lookup_is_index_served(session, request, dataset_ready):
     )
 
 
-def test_a_top_n_read_is_not_a_full_scan(session, request, dataset_ready):
+def test_a_top_n_read_is_not_a_full_scan(session, timing, dataset_ready):
     """TOP N with no predicate should stop early, not read the table."""
     response, elapsed = _timed(
         lambda: sync_query(session, "SELECT TOP 100 obs_id, s_ra, s_dec FROM ivoa.obscore")
     )
-    _report(request, "TOP 100", elapsed, POINT_BUDGET_S)
+    _report(timing, "TOP 100", elapsed, POINT_BUDGET_S)
     assert response.status_code == 200, response.text
     assert elapsed < POINT_BUDGET_S, (
         f"TOP 100 took {elapsed:.1f}s against a {POINT_BUDGET_S}s budget"
     )
 
 
-def test_a_cone_search_uses_the_footprint_index(session, request, dataset_ready):
+def test_a_cone_search_uses_the_footprint_index(session, timing, dataset_ready):
     """The test the GiST indexes exist for.
 
     The seeder drops them for its load and rebuilds them afterwards. A rebuild
@@ -117,7 +118,7 @@ def test_a_cone_search_uses_the_footprint_index(session, request, dataset_ready)
             "CIRCLE('ICRS', 201.365, -43.019, 2.0))",
         )
     )
-    _report(request, "cone search", elapsed, CONE_BUDGET_S)
+    _report(timing, "cone search", elapsed, CONE_BUDGET_S)
     assert response.status_code == 200, response.text
     assert elapsed < CONE_BUDGET_S, (
         f"a cone search took {elapsed:.1f}s against a {CONE_BUDGET_S}s budget; "
@@ -126,7 +127,7 @@ def test_a_cone_search_uses_the_footprint_index(session, request, dataset_ready)
     )
 
 
-def test_a_full_table_aggregate_completes_within_the_sync_timeout(session, request, dataset_ready):
+def test_a_full_table_aggregate_completes_within_the_sync_timeout(session, timing, dataset_ready):
     """The expensive one, and correctly so: no index helps a full scan.
 
     This is the query whose failure mode is a proxy timeout rather than a slow
@@ -142,7 +143,7 @@ def test_a_full_table_aggregate_completes_within_the_sync_timeout(session, reque
             "FROM ivoa.obscore GROUP BY dataproduct_type",
         )
     )
-    _report(request, "full-table aggregate", elapsed, AGGREGATE_BUDGET_S)
+    _report(timing, "full-table aggregate", elapsed, AGGREGATE_BUDGET_S)
     assert response.status_code == 200, (
         f"the aggregate failed after {elapsed:.1f}s: {response.text[:300]}"
     )
@@ -152,7 +153,7 @@ def test_a_full_table_aggregate_completes_within_the_sync_timeout(session, reque
     )
 
 
-def test_an_async_round_trip_completes_within_budget(session, tap_url, request, dataset_ready):
+def test_an_async_round_trip_completes_within_budget(session, tap_url, timing, dataset_ready):
     """The path a long query is supposed to take, timed end to end.
 
     Mostly a check that the executor is picking work up: a fleet with no
@@ -185,7 +186,7 @@ def test_an_async_round_trip_completes_within_budget(session, tap_url, request, 
         return job_url
 
     job_url, elapsed = _timed(run)
-    _report(request, "async round trip", elapsed, ASYNC_BUDGET_S)
+    _report(timing, "async round trip", elapsed, ASYNC_BUDGET_S)
 
     results = session.get(f"{job_url}/results/result", timeout=QUERY_TIMEOUT_S)
     assert results.status_code == 200, results.text
@@ -197,7 +198,7 @@ def test_an_async_round_trip_completes_within_budget(session, tap_url, request, 
 
 
 @pytest.mark.parametrize("fmt", ["csv", "votable", "parquet"])
-def test_result_writers_stream_rather_than_buffer(session, request, fmt, dataset_ready):
+def test_result_writers_stream_rather_than_buffer(session, timing, fmt, dataset_ready):
     """Ten thousand rows in three formats, each inside the point budget.
 
     A writer that buffers the whole result before emitting a byte scales with
@@ -209,7 +210,7 @@ def test_result_writers_stream_rather_than_buffer(session, request, fmt, dataset
             session, "SELECT TOP 10000 obs_id, s_ra, s_dec FROM ivoa.obscore", fmt=fmt
         )
     )
-    _report(request, f"10k rows as {fmt}", elapsed, POINT_BUDGET_S)
+    _report(timing, f"10k rows as {fmt}", elapsed, POINT_BUDGET_S)
     assert response.status_code == 200, f"{fmt}: {response.text[:200]}"
     assert response.content, f"{fmt} returned an empty body"
     assert elapsed < POINT_BUDGET_S, (

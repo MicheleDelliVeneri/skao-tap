@@ -496,3 +496,73 @@ def test_software_ingest_amend_and_delete(session, api_url, dataset_ready):
 
     assert session.delete(f"{api_url}/software/{uri}", timeout=30).status_code in (200, 204)
     assert session.get(f"{api_url}/software/{uri}", timeout=30).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# The deny direction: a policy that only ever permits proves nothing.
+# ---------------------------------------------------------------------------
+
+
+def test_a_reader_may_query(reader_session, dataset_ready):
+    """roles/dev/user is enough to read.
+
+    Half of the pair below. If this failed the next test would pass for the
+    wrong reason — a reader refused everything would look like a working
+    policy while actually being a broken token.
+    """
+    response = sync_query(reader_session, "SELECT TOP 1 obs_id FROM ivoa.obscore")
+    assert response.status_code == 200, response.text
+    assert _rows(response), "the reader's query returned no rows"
+
+
+def test_a_reader_may_not_ingest(reader_session, api_url, dataset_ready):
+    """roles/dev/user is not enough to write, and the service must say so.
+
+    This is the assertion the suite was missing: egernia's route policy grants
+    reads to "dev-user or dev-oper" and mutations to "dev-oper" alone, and
+    every seeded IAM user held oper — so the deny half of that expression was
+    never exercised. A policy that only ever permits is indistinguishable from
+    no policy at all.
+
+    403 rather than 401: the token is valid and verified, and it is the
+    Permissions API's decision that refuses it.
+    """
+    uri = f"integration:reader-denied-{uuid.uuid4().hex[:8]}:1.0.0"
+    response = reader_session.post(
+        f"{api_url}/software",
+        json={
+            "uri": uri,
+            "description": "must never be stored",
+            "status": "TESTING",
+            "artifacts": [
+                {
+                    "kind": "DOCKER",
+                    "location": f"registry.test/reader-denied-{uuid.uuid4().hex[:8]}:1.0.0",
+                    "cpu_architecture": ["amd64"],
+                }
+            ],
+        },
+        timeout=60,
+    )
+    assert response.status_code == 403, (
+        f"a reader without roles/dev/oper was allowed to ingest "
+        f"(HTTP {response.status_code}): {response.text[:300]}"
+    )
+
+
+def test_a_reader_may_not_delete(reader_session, api_url, dataset_ready):
+    """The same for deletion, which is the mutation that cannot be undone."""
+    listing = reader_session.get(f"{api_url}/software", timeout=60)
+    assert listing.status_code == 200, listing.text
+    payload = listing.json()
+    items = payload["software"] if isinstance(payload, dict) else payload
+    assert items, "the software listing is empty; has the seeder run?"
+
+    victim = items[0]["uri"]
+    response = reader_session.delete(f"{api_url}/software/{victim}", timeout=30)
+    assert response.status_code == 403, (
+        f"a reader without roles/dev/oper was allowed to delete {victim} "
+        f"(HTTP {response.status_code}): {response.text[:300]}"
+    )
+    # and the document is still there
+    assert reader_session.get(f"{api_url}/software/{victim}", timeout=30).status_code == 200
