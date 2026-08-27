@@ -88,6 +88,54 @@ def test_metrics_expose_the_tap_series(anonymous, base_url, series):
     assert series in body, f"{series} absent from /metrics"
 
 
+def _metric(body: str, name: str) -> float:
+    """One counter's total from a /metrics body, summed over its labels.
+
+    Summed rather than matched per label because the question here is "did this
+    happen at all", and the labels (a fallback's reason) are exactly what is
+    not known in advance.
+    """
+    total = 0.0
+    for line in body.splitlines():
+        if line.startswith(f"{name}_total") or line.startswith(f"{name}_total{{"):
+            total += float(line.rsplit(" ", 1)[1])
+    return total
+
+
+def test_dsv_is_served_by_the_server_not_the_python_writer(session, anonymous, base_url):
+    """The fast path has to be the path a deployment actually takes.
+
+    #106 moved DSV serialisation into PostgreSQL, behind a fallback to the
+    Python writer for any result whose bytes it cannot promise. Every
+    correctness test passes either way — the fallback is by construction right
+    — so nothing else in this repository would notice a deployment silently
+    serving every CSV response the slow way. This is the only check that would.
+
+    Scraped before and after so a counter left over from the seeding job or an
+    earlier test cannot make it pass, and the pod is asked directly: through
+    the ingress a second replica could answer the scrape.
+    """
+    before = anonymous.get(f"{base_url}/metrics", timeout=30).text
+    served, declined = (
+        _metric(before, "tap_copy_dsv_results"),
+        _metric(before, "tap_copy_dsv_fallbacks"),
+    )
+
+    response = sync_query(
+        session, "SELECT TOP 50 obs_id, s_ra, s_dec, t_min, calib_level FROM ivoa.obscore"
+    )
+    assert response.status_code == 200, response.text
+
+    after = anonymous.get(f"{base_url}/metrics", timeout=30).text
+    assert _metric(after, "tap_copy_dsv_results") > served, (
+        "a CSV query did not increment tap_copy_dsv_results_total: this "
+        "deployment is serving DSV with the Python writer. Either TAP_COPY_DSV "
+        "is off, or the result was declined -- "
+        f"tap_copy_dsv_fallbacks_total went from {declined} to "
+        f"{_metric(after, 'tap_copy_dsv_fallbacks')}."
+    )
+
+
 # ---------------------------------------------------------------------------
 # VOSI: what a VO client reads before it asks anything.
 # ---------------------------------------------------------------------------

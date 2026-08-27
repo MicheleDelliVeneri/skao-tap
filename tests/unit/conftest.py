@@ -7,7 +7,9 @@ PostgreSQL server.
 """
 
 import contextlib
+import csv
 import datetime
+import io
 import json
 import re
 
@@ -64,6 +66,39 @@ class FakeStreamCursor:
         self.stream_chunk_rows = size
         self.execute(sql, params)
         yield from list(self._db.result_rows)
+
+    def copy(self, statement):
+        """psycopg's `Copy`, enough of it for the server-side DSV path.
+
+        One block per row, because that is what libpq does and what the row
+        accounting counts. Rendering with `csv.writer` is the faithful stand-in
+        rather than a shortcut: the COPY projection exists precisely to make
+        PostgreSQL emit what `csv.writer` emits, so a fake that agrees with the
+        writer is a fake that agrees with a correct server. Whether the real
+        server actually obliges is not a question a fake can answer, and
+        `tests/component/test_copy_dsv_differential.py` is where it is asked.
+        """
+        self._db.statements.append(statement.strip())
+        if self._db.result_error is not None:
+            raise self._db.result_error
+        return _FakeCopy(self._db.result_rows)
+
+
+class _FakeCopy:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __iter__(self):
+        for row in self._rows:
+            out = io.StringIO()
+            csv.writer(out, lineterminator="\n").writerow(row)
+            yield out.getvalue().encode()
 
 
 class FakeConnection:

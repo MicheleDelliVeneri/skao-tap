@@ -7,7 +7,6 @@ writes the serialized result to the shared results volume, and finalizes
 the job phase. Also garbage-collects jobs past their destruction time.
 """
 
-import contextlib
 import datetime
 import os
 import shutil
@@ -17,7 +16,6 @@ from types import SimpleNamespace
 
 from egernia_core import uws
 from egernia_core.config import settings
-from egernia_core.db import StreamedRows
 from egernia_core.db import connection as db_connection
 from egernia_core.observability import (
     JOBS_BY_PHASE,
@@ -30,7 +28,8 @@ from egernia_core.observability import (
     tag_sql,
 )
 from egernia_core.query.adql import apply_maxrec, touched_tables
-from egernia_core.query.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
+from egernia_core.query.copy_dsv import result_stream
+from egernia_core.query.results import tap_schema_metadata
 from egernia_core.query.upload import (
     create_upload_tables,
     load_uploads,
@@ -289,15 +288,15 @@ def _execute_job_inner(job: dict, job_id, params, duration) -> None:
             # a cursor forbids. statement_timeout (the job's execution
             # duration) consequently bounds the whole statement, which is
             # what UWS executionDuration means.
-            with _AbortWatchdog(job_id, pid), conn.cursor() as cur:
-                rows = StreamedRows(cur, sql, chunk_rows=5000)
-                with contextlib.closing(rows):
-                    duration.query_ran = True
-                    columns = columns_from_cursor(cur.description, tap_meta)
-                    limiter = RowLimiter(rows, maxrec)
-                    with open(result_path, "wb") as fh:
-                        for chunk in stream(columns, limiter, fmt_key):
-                            result_size += fh.write(chunk)
+            with (
+                _AbortWatchdog(job_id, pid),
+                conn.cursor() as cur,
+                result_stream(cur, sql, tap_meta, fmt_key, maxrec, 5000) as (chunks, limiter),
+            ):
+                duration.query_ran = True
+                with open(result_path, "wb") as fh:
+                    for chunk in chunks:
+                        result_size += fh.write(chunk)
 
         with db_connection() as conn:
             # atomic transition: an ABORT committed at any point (even
