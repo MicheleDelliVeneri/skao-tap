@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # The two lines that put the service on the notebook machine's localhost.
 #
-# The ingress routes by Host as well as by path, so the name has to be in the
-# request rather than only in the URL bar — which is what the /etc/hosts line
-# is for. `.test` is reserved by RFC 6761 for exactly this and can never
-# collide with a real domain.
+# The ingress routes by Host as well as by path, which is what the /etc/hosts
+# line is for: it puts the name in the request rather than only in the URL bar.
+# `.test` is reserved by RFC 6761 for exactly this and can never collide with a
+# real domain. It is a convenience, not a prerequisite — the deployment also
+# answers to localhost, and to anything else when ingress.catchAll is on.
 set -uo pipefail
 
 namespace=${1:-egernia-demo}
@@ -61,7 +62,7 @@ fi
 
 echo "the ingress is reachable from the cluster host at $target ($mode)"
 echo
-echo "1. on THIS machine, once:"
+echo "1. on THIS machine, once (optional — see the note at the end):"
 echo "     echo '127.0.0.1 $ingress_host' | sudo tee -a /etc/hosts"
 echo
 echo "2. open the tunnel (leave it running):"
@@ -75,8 +76,10 @@ echo
 echo "4. point the notebook at it:"
 echo "     make demo-notebook BASE_URL=http://$ingress_host:$local_port"
 echo
-echo "Use the name, not 127.0.0.1: the ingress matches on the Host header, and"
-echo "a request to http://localhost:$local_port carries the wrong one."
+echo "http://localhost:$local_port works too, async jobs included: the ingress"
+echo "serves that name as well, and every URL the service prints back names the"
+echo "host you reached it by. Use $ingress_host if you want the demo to look"
+echo "like a real deployment; that is the only difference."
 
 if [ -n "$host" ]; then
   echo

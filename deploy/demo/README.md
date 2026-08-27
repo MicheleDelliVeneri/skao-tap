@@ -29,6 +29,13 @@ the name has to be in the request, not just in the address bar. `.test` is
 reserved by RFC 6761 for exactly this and can never collide with a real
 domain.
 
+The `/etc/hosts` line is a convenience, not a prerequisite. The deployment
+also answers to `localhost` and to any name at all, and every URL it prints
+back — job locations, result links, the capabilities `accessURL` — names the
+host you actually reached it by. So `http://localhost:8080` works end to end,
+async jobs included, with nothing added to `/etc/hosts`; use the name if you
+want the demo to look like a real deployment.
+
 ## On the cluster
 
 A StorageClass that can give it ~200 GiB, an ingress controller, and
@@ -50,7 +57,7 @@ cluster is not an undo-able mistake.
 ## On the laptop
 
 ```bash
-echo '127.0.0.1 egernia.test' | sudo tee -a /etc/hosts   # once
+echo '127.0.0.1 egernia.test' | sudo tee -a /etc/hosts   # optional, once
 make demo-tunnel HOST=user@cluster-host
 ```
 

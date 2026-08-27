@@ -6,6 +6,7 @@ metadata:
     {{- include "egernia.labels" . | nindent 4 }}
 data:
   TAP_BASE_URL: {{ include "egernia.baseUrl" . | quote }}
+  TAP_TRUSTED_HOSTS: {{ include "egernia.trustedHosts" . | quote }}
   TAP_RESULTS_DIR: /results
   TAP_QUERY_ROLE: {{ .Values.config.queryRole | quote }}
   {{- /* int64 guards against Helm rendering large numbers as 1e+06 */}}

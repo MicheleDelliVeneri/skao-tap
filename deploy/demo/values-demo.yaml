@@ -34,6 +34,14 @@ ingress:
   # -- The name the notebook machine maps to 127.0.0.1. `.test` is reserved
   # by RFC 6761 for exactly this: it can never collide with a real domain.
   host: egernia.test
+  # -- So the /etc/hosts line stays a convenience rather than a prerequisite:
+  # a colleague who only forwards a port reaches the service as `localhost`,
+  # and gets job URLs naming `localhost` back.
+  extraHosts:
+    - localhost
+  # -- and the same for anyone who types the IP instead. Safe here because
+  # the demo cluster's ingress controller serves nothing else.
+  catchAll: true
   # -- REQUIRED on most clusters: nginx, traefik, alb... An empty className
   # means "the cluster default", which many clusters do not define.
   className: ""

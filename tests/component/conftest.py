@@ -87,6 +87,10 @@ def tap_service(database_url, tmp_path_factory):
         "TAP_RESULTS_DIR": str(results_dir),
         "TAP_DEFAULT_MAXREC": "10000",
         "TAP_SYNC_TIMEOUT": "10",
+        # 127.0.0.1 is how the tests reach the service, so on its own it would
+        # never show a request-derived URL differing from the configured one.
+        # egernia.test is the second name that makes the difference visible.
+        "TAP_TRUSTED_HOSTS": "127.0.0.1,localhost,egernia.test",
     }
     # fixed location so CI can dump the logs on failure (pytest swallows
     # session-fixture teardown output)
