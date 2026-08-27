@@ -1,140 +1,76 @@
-# Benchmarking
+# Performance testing
 
-The numbers under [Performance](performance/index.md) come from
-`benchmarks/egernia-performance` in this repository. This page is what you need to
-reproduce them or to judge whether they apply to your deployment.
+Performance is checked in two places, and neither of them is a benchmark suite
+in this repository any more.
 
-## Reproducing a run
+## Timing guards in the integration suite
+
+`tests/integration/test_performance.py` runs against a deployed service in the
+SRC integration environment and asserts that a handful of queries finish inside
+a budget. Deliberately coarse: a shared cluster has neighbours, so every number
+measured there is a fact about the cluster that afternoon rather than about the
+service. Each budget sits an order of magnitude above the expected time, which
+is enough to catch the failures that change the shape of a query plan:
+
+- a GiST footprint index the seeder dropped and never rebuilt, turning a cone
+  search into a sequential scan;
+- a b-tree lost in a migration, doing the same to a keyed lookup;
+- a connection pool sized so requests queue rather than run;
+- a result writer that buffers a whole table before emitting a byte.
+
+Each of those costs a factor rather than a few percent. A regression smaller
+than that is one only dedicated hardware could honestly detect, and these tests
+do not pretend to.
 
 ```bash
-make benchmark-smoke                  # ~10 min: everything wired, nothing measured for long
-make benchmark-db-scaling             # concurrency sweep at each dataset size
-make benchmark-fixed-scaling          # replica scaling, autoscalers off
-make benchmark-keda                   # autoscaling scenarios K1-K7
-make benchmark-result-formats         # every result writer over the same rows
-make benchmark-stress                 # just Q09/Q11/Q13/Q14, each on its own
-make benchmark-shedding               # held overload: 503s versus socket drops
-make benchmark-profile                # where a request's CPU goes, and a token's cost
-make benchmark-replicas               # a bracketed capacity per replica count
-make benchmark-serialize              # the writers alone, in process, no cluster
-make benchmark-full                   # every family, every dataset
-make benchmark-publish RUN=<run-dir>  # graphs and CSV into this site
+# in the deployment stack
+stack test egernia
+
+# or against any deployment
+EGERNIA_RUN_INTEGRATION_TESTS=1 EGERNIA_URL=http://egernia.test \
+  uv run pytest tests/integration -v
 ```
 
-`benchmark-profile` needs two things nothing else here does: `py-spy`
-installed against the same interpreter (`uv pip install --python .venv/bin/python
-py-spy==0.4.2`) and passwordless `sudo`. The worker it profiles lives in the
-node's namespaces, so reading its stacks is a root operation on the host —
-nothing is installed into the image, and the pod being measured is the one
-every other family measures. It is also the only family that turns
-authentication on, which it does by deploying a small OIDC issuer into the
-cluster and layering `config/auth-values.yaml` over the suite's values; both
-are undone before it returns.
+Every budget is overridable — `EGERNIA_BUDGET_POINT_S`,
+`EGERNIA_BUDGET_CONE_S`, `EGERNIA_BUDGET_AGGREGATE_S`,
+`EGERNIA_BUDGET_ASYNC_S` — because "generous" depends on the hardware the
+environment happens to run on. Each test prints its measured time whether it
+passes or fails, so the log shows a trend rather than only a breach.
 
-`benchmark-serialize` is the exception to everything else on this page: it
-needs no cluster, no database and no Docker, and it finishes in seconds. It
-runs the result writers in process against rows it builds itself, which is the
-only way to measure what a writer costs — behind an HTTP request the writer is
-a tenth of the response time and the database is most of the rest. See
-[Result formats](result-formats.md) for what it currently says.
+## CPU microbenchmarks
 
-Needs Docker, `kind`, `kubectl` and **Helm 4** — the chart is applied
-server-side with `--force-conflicts`, which Helm 3 does not have and reports
-as `unknown flag`. The suite builds the images from the working tree, brings
-up a single-node cluster, installs KEDA and a Prometheus that scrapes at
-2-second resolution, deploys the chart, and grows a synthetic ODP/ObsCore
-database to a measured size before measuring anything.
+`tests/benchmarks/test_hot_paths.py` measures the hot paths in process, with no
+cluster involved, via `pytest-benchmark`. Run by
+[`python-performance.yml`](python-performance.md); these are the numbers that
+say where a request's CPU goes.
 
-Every public image it needs — KEDA's three, Prometheus, kube-state-metrics —
-is pulled on the host and imported into the node rather than pulled by the
-node, so a host that reaches a registry through a proxy or a mirror can still
-set the cluster up.
+```bash
+uv run pytest tests/benchmarks --benchmark-only
+```
 
-Every target takes `RESUME=<run-dir>` and continues where it stopped.
-`benchmark-full` is a 25-40 hour run; that is why it is resumable.
+## The dataset
 
-## What the numbers mean
+Both need something to query. `dataset/` generates the ODP hierarchy and the
+software catalogue deterministically and resumably, and the deployment stack
+runs it as egernia's post-deploy job:
 
-**They are hardware-specific.** Each run records the host, the node's CPU and
-memory caps, the image ids, the chart values hash, the seed and the query
-corpus hash. Two runs are comparable when those match and not otherwise — the
-provenance is published with the graphs so this can be checked rather than
-assumed.
+```bash
+TAP_DATABASE_URL=postgresql://... TARGET_PRODUCTS=500000 \
+  python -m egernia_dataset.seed
+```
 
-**Capacity is quoted inside an SLO.** "C1" is the highest throughput one
-replica sustained with p95 within 2 seconds and under 1% errors, not the peak
-it reached. Peak throughput usually comes with a latency distribution nobody
-would ship, and expressing autoscaling scenarios as multiples of an unusable
-number would make them all tests of overload.
+Row-driven rather than size-driven. Two limits are properties of the model
+rather than knobs: one project expands to 4 observations, 8 scheduling blocks,
+16 execution blocks, 128 data products and 256 artifacts, so the ODP tables
+cannot hold equal row counts; and the software catalogue's
+`{publisher}:{tool}:{semver}` identity admits 7,700 distinct uris and no more.
 
-**The bottleneck classification is the actionable part.** The same flat
-throughput curve is produced by a CPU-bound service, an I/O-bound database, an
-exhausted connection pool and a saturated load generator, and the fix for each
-is useless for the others. Each class is a rule over measured quantities and is
-reported with the numbers that made it fire.
+## The archived results
 
-**A saturated load generator invalidates everything else.** It is checked
-first, and when it fires the rest of that measurement describes the client.
-
-## Deliberate choices worth knowing
-
-- **Dataset sizes are `pg_database_size()`**, indexes included, not row counts
-  times an assumed width. One database is grown through every target, so each
-  tier is a prefix of the next rather than an independent load.
-- **The corpus is deterministic and aimed at the data.** Parameters come from
-  the same hash the generator used, so a cone search points where objects
-  actually are — without querying first. 12,000 distinct combinations, so no
-  measurement is a page-cache benchmark on one coordinate.
-- **Two load shapes.** Closed loop for capacity at a known parallelism; open
-  loop, Poisson arrivals, for anything involving a queue — a closed-loop client
-  cannot overload anything, because it slows down exactly as much as the
-  service does.
-- **The API's CPU ceiling is `min(pod limit, workers)`.** ADQL translation is
-  pure-Python and holds the GIL, so one worker cannot exceed one core whatever
-  the cgroup allows.
-- **Autoscaling scenarios drive `/tap/async`.** The chart's ScaledObject scales
-  executors on queue depth, so only work that creates jobs moves the scaler
-  metric.
-- **Every measurement records its result format.** The load generator
-  defaults to CSV, which for a long time meant every published latency was a
-  CSV latency with nothing saying so. It is now recorded per measurement, and
-  `benchmark-result-formats` varies it deliberately.
-- **Every published capacity figure is an unauthenticated one, except the
-  profile family's.** No other family sends a bearer token, so nothing else on
-  this page includes the cost of verifying one. `benchmark-profile` measures
-  the same rung with authentication off, with every token verified, and with
-  the whole query surface additionally gated, so the difference is a number
-  rather than an assumption.
-- **A profile is refused if the profiler moved the throughput.** The profiled
-  window is compared against an unprofiled one at the same concurrency on the
-  same pod, and a profile that cost more than 10% of throughput is marked
-  invalid rather than published: a breakdown of a worker slowed by its own
-  profiler describes a service nobody runs. This is not hypothetical. py-spy's
-  default mode pauses the process to walk its stacks, which cost this service
-  74% of its throughput and then stalled it past its one-second liveness
-  timeout, so Kubernetes restarted a worker that was busy rather than broken.
-  Sampling is nonblocking by default because of that measurement, and it trades
-  the perturbation for torn stacks — roughly half the reads discarded, recorded
-  with the profile.
-- **Cone search needs an expression index.** The translator emits
-  `spoint(RADIANS(s_ra), RADIANS(s_dec)) @ scircle(...)`, so the GiST index has
-  to be on that expression — see [Autoscaling](autoscaling.md) and the suite's
-  README for the full note.
-
-## Constraints on reading and comparing results
-
-- **Every run is pinned to a build.** The image tag is recorded with the run,
-  so numbers compare only against runs of the same build: a service change
-  means a new baseline, not a delta against yesterday's.
-- **A sustained-overload point is not measurable open-loop.** Past capacity
-  the queue grows without bound, so nothing in that region is a steady state
-  to report — the suite can show *that* overload sheds and how, not a
-  throughput "at" it.
-- **Guards mark runs invalid rather than deleting them.** Read the run's
-  `invalid.json` before concluding the harness broke: the run is there, with
-  the reason it cannot be trusted.
-- **`egernia_bench reclassify` fixes analysis mistakes without re-measuring.** The
-  raw measurements are kept, so a wrong bottleneck classification is corrected
-  by re-running the rules, not the load.
-
-Full method, layout and wall-clock estimates: `benchmarks/egernia-performance/README.md`.
+[Performance](performance/index.md) holds runs published by
+`benchmarks/egernia-performance`, a cluster benchmark harness this repository
+used to carry. It has been removed in favour of the two mechanisms above, so
+those pages are records of what was measured rather than instructions you can
+follow — the `make benchmark-*` targets and the `egernia_bench` CLI they name no
+longer exist. The measurements stand; the harness that produced them is in the
+git history.

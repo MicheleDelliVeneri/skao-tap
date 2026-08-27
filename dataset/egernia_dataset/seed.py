@@ -6,13 +6,11 @@ measurement describe the same schema and the same row shapes.
 
 Run as the post-deploy step of a deployment:
 
-    TAP_DATABASE_URL=postgresql://... python -m egernia_bench.dataset.seed
+    TAP_DATABASE_URL=postgresql://... python -m egernia_dataset.seed
 
-Row-driven, where the suite's own generation is size-driven. A benchmark cares
-what 10 GiB of database does to a query plan; a seeded environment cares that
-there are enough rows to ask interesting questions about, and a row count is
-what someone asking for one can state. `grow_to` stops on
-``pg_database_size()``; this stops on ``count(*)``.
+Row-driven. A size is what a benchmark wants of a database; a row count is
+what someone asking for a populated environment can state. `generate.grow_to`
+stops on ``pg_database_size()``; the loop here stops on ``count(*)``.
 
 Two things make it safe to run on every deploy rather than once: generation
 stops once the target row count is present, and every statement is idempotent
@@ -37,12 +35,13 @@ import time
 import psycopg
 import yaml
 
-from egernia_bench.dataset import generate
+from egernia_dataset import generate
 
-log = logging.getLogger("egernia_bench.seed")
+log = logging.getLogger("egernia_dataset.seed")
 
-# config/datasets.yaml, three levels up from this module inside the suite.
-SUITE = pathlib.Path(__file__).resolve().parents[2]
+# config/datasets.yaml, beside the package rather than three levels up as it
+# was inside the benchmark suite.
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 # What the ODP plugin creates at API bootstrap. Both, because the view is what
 # TAP publishes and the table is what the generator writes.
@@ -179,7 +178,7 @@ def main() -> int:
     software_candidates = int(os.environ.get("SOFTWARE_CANDIDATES", "100000"))
     wait_s = float(os.environ.get("SCHEMA_WAIT_SECONDS", "900"))
 
-    cfg = yaml.safe_load((SUITE / "config" / "datasets.yaml").read_text())
+    cfg = yaml.safe_load((ROOT / "config" / "datasets.yaml").read_text())
     batch = int(os.environ.get("BATCH_PROJECTS", str(cfg["generation"]["batch_projects"])))
 
     wait_for_schema(dsn, wait_s)

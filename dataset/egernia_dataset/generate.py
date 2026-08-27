@@ -22,7 +22,7 @@ import time
 
 import psycopg
 
-log = logging.getLogger("egernia_bench.dataset")
+log = logging.getLogger("egernia_dataset")
 
 HERE = pathlib.Path(__file__).parent
 

@@ -44,16 +44,19 @@ demo = [
     "altair>=5.4",
     "pandas>=2.2",
 ]
-# benchmarks/egernia-performance. Kept out of `dev` because it is heavier than the
-# test suite needs and nothing in CI imports it.
-benchmark = [
-    "matplotlib>=3.9",
-    "numpy>=2.0",
-    "pyarrow>=17",
-    "psutil>=6.0",
+# The dataset generator in `dataset/`, whose seeding image installs the same two
+# libraries. Here so tests/unit/test_dataset_seed.py can import the package;
+# nothing else in the repository needs them.
+dataset = [
     "pyyaml>=6.0",
     "psycopg[binary]>=3.2",
-    "jinja2>=3.1",
+]
+# tests/benchmarks: CPU microbenchmarks of the hot paths, run by
+# python-performance.yml. Previously bundled with the cluster benchmark suite's
+# dependencies, and left behind when that went — the tests skip themselves
+# without it, so its absence is silent.
+microbenchmark = [
+    "pytest-benchmark>=5.0",
 ]
 
 [tool.ruff]

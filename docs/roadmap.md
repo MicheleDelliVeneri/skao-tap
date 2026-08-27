@@ -13,13 +13,15 @@ lands.
 ## Measured findings
 
 A running log of what the benchmark suite
-(`benchmarks/egernia-performance`, see [Benchmarking](benchmarking.md)) has
+(the cluster benchmark harness this repository used to carry, since removed —
+see [Performance testing](benchmarking.md)) has
 established, newest first. Each entry is a measurement rather than an opinion,
 so it can be checked and it can go stale — the run that produced it is named.
 
 Like delivered packages, findings whose fixes have shipped and been verified
 are removed from this page; git history keeps them, and the runs that
-produced them remain in `benchmarks/egernia-performance/results/`.
+produced them are in the git history, under
+`benchmarks/egernia-performance/results/`.
 
 ### 2026-08-25 — ADQL 2.1, by forking the grammar rather than replacing the parser (package 21, delivered)
 

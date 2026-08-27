@@ -68,8 +68,8 @@ jobs:
           # benchmarks and pathological once the suite drives an ASGI app with
           # an event loop and a threadpool: measured at 2h29m against 15s, for
           # 19s of actual benchmarking. The same mode costs a saturated
-          # tap-api worker 74% of its throughput (see the profile family in
-          # benchmarks/egernia-performance), so this is the same finding
+          # tap-api worker 74% of its throughput (measured by the profile family of
+          # the since-removed cluster benchmark harness), so this is the same finding
           # arriving in CI.
           #
           # What it costs is torn stacks — py-spy discards the reads it detects

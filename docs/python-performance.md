@@ -30,7 +30,7 @@ translation for months after the fast path took translation from 41 ms to
 uvicorn does: a scope, a `receive` that hands over the form body, a `send`
 that collects the response. Two things are deliberately absent, and both are
 named subsystems in the cluster profile
-(`benchmarks/egernia-performance`, `make benchmark-profile`), so the gap
+(the cluster benchmark harness, since removed), so the gap
 between this figure and a measured per-request CPU is attributable rather than
 mysterious:
 

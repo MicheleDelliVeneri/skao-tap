@@ -94,8 +94,11 @@ def resolve_token() -> tuple[str, str]:
         raise RuntimeError(
             f"No token in {'/'.join(TOKEN_ENV_KEYS)} and ska-src-auth-api's "
             "integration client is not installed. Either set EGERNIA_TOKEN, or "
-            "install it: `uv sync --group integration` (it is published on the "
-            "SKAO index, not PyPI)."
+            "install it from the SKAO index (it is not on PyPI): "
+            "`uv pip install --index "
+            "https://artefact.skao.int/repository/pypi-internal/simple "
+            "'ska-src-auth-api[integration]'`. In the deployment stack's test "
+            "image it is already present, installed from the submodule."
         ) from exc
     except Exception as exc:
         raise RuntimeError(

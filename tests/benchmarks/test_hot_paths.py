@@ -126,7 +126,8 @@ def test_benchmark_json_serialization(benchmark):
 #   HTTP parse and the write are absent.
 #
 # Both are named subsystems in the cluster profile
-# (`egernia_bench.collect.pyspy`), so the residual between this figure and the
+# (the since-removed cluster harness's py-spy collector), so the residual
+# between this figure and the
 # measured per-request CPU is attributable rather than mysterious. That
 # comparison is what the number is for: it is a hot-path guard whose scale can
 # be checked against a saturation measurement, not an SLO.
