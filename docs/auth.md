@@ -235,7 +235,7 @@ discover it by trial:
  "token_required": true, "anonymous_queries": false,
  "anonymous_tap_queries": false,
  "discovery_url": "https://ska-iam.stfc.ac.uk/.well-known/openid-configuration",
- "issuer": "https://ska-iam.stfc.ac.uk", "audience": "science-metadata-api",
+ "issuer": "https://ska-iam.stfc.ac.uk", "audience": "egernia",
  "gated_operations": {"metadata.ingest": "POST /api/v1/<mount>", ...}}
 ```
 
@@ -317,7 +317,7 @@ auth:
   plugin: iam-groups
   iam:
     issuer: https://ska-iam.stfc.ac.uk
-    audience: science-metadata-api
+    audience: egernia
   roles:
     metadata.ingest:
       groups: ["/ska/science-metadata/oper"]
@@ -358,7 +358,7 @@ auth:
     issuer: https://ska-iam.stfc.ac.uk
   permissionsApi:
     url: https://permissions.srcnet.skao.int/api/v1
-    serviceName: science-metadata-api
+    serviceName: egernia
     serviceVersion: "1"
 ```
 

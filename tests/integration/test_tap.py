@@ -167,7 +167,7 @@ def test_a_query_without_a_token_is_refused(anonymous, tap_url):
 
 def test_a_query_with_a_token_is_served(session, tap_url):
     """The whole auth chain in one assertion: IAM issued a token, the exchange
-    gave it the science-metadata-api audience, egernia verified it against the
+    gave it the egernia audience, egernia verified it against the
     IAM's JWKS over the cluster's own CA, and the Permissions API approved."""
     response = sync_query(session, "SELECT TOP 1 obs_id FROM ivoa.obscore")
     assert response.status_code == 200, response.text

@@ -46,10 +46,11 @@ AAPI_SERVICE_URL = f"{AAPI_URL}/{AAPI_SERVICE_VERSION}"
 TAP_URL = f"{EGERNIA_URL}/tap"
 API_URL = f"{EGERNIA_URL}/api/v1"
 
-# The service name registered with the Permissions API — the directory under
-# its etc/permissions/<env>/ — and so also the audience the exchanged token
-# carries. `science-metadata` without the suffix is not registered.
-EGERNIA_SERVICE = "science-metadata-api"
+# The policy egernia is authorised against in the Permissions API — the `name`
+# inside etc/permissions/<env>/egernia/v1/, which is what PAPI resolves by, and
+# also the audience the exchanged token carries. Not `science-metadata-api`:
+# that policy names itself `science-metadata` and its routes are CAOM-shaped.
+EGERNIA_SERVICE = "egernia"
 EGERNIA_SERVICE_VERSION = "1"
 
 # How long a full-table aggregate over the seeded dataset may take. Generous:
@@ -136,7 +137,7 @@ def _mint_token() -> str:
 
 @pytest.fixture(scope="session")
 def token() -> str:
-    """A science-metadata-api-audience access token for the seeded test user.
+    """An egernia-audience access token for the seeded test user.
 
     Minted once for the whole run, not once per worker. The stack's test
     entrypoint runs pytest with `-n auto`, and a session-scoped fixture is
@@ -160,17 +161,44 @@ def token() -> str:
     # browser ever runs, so the losers wait rather than racing.
     with open(lock, "w") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
-        if cache.exists():
-            # suppress rather than try/except: with ruff targeting py314 the
-            # formatter rewrites `except (A, B):` to PEP 758's unparenthesized
-            # form, which the stack's Python 3.13 test image cannot parse. A
-            # truncated or unreadable cache is just a cache miss either way.
-            with contextlib.suppress(ValueError, OSError):
-                cached = json.loads(cache.read_text())
-                if cached.get("token") and time.time() < cached.get("expires_at", 0):
-                    logger.info("reusing the token minted by another worker")
-                    return cached["token"]
-        minted = _mint_token()
+        # Default to a miss, and bind before the read: a truncated or
+        # unreadable cache is just a miss, and `cached` has to exist either
+        # way for the checks below.
+        #
+        # suppress rather than try/except: with ruff targeting py314 the
+        # formatter rewrites `except (A, B):` into PEP 758's unparenthesized
+        # form, which the stack's Python 3.13 test image cannot parse.
+        cached: dict = {}
+        with contextlib.suppress(ValueError, OSError):
+            cached = json.loads(cache.read_text())
+
+        if not cached or time.time() >= cached.get("expires_at", 0):
+            pass  # nothing usable; fall through and mint
+        elif cached.get("token"):
+            logger.info("reusing the token minted by another worker")
+            return cached["token"]
+        elif cached.get("error"):
+            # A failure is cached too. Without this every worker in turn drove
+            # its own browser against a broken IAM: the run that exposed it
+            # took 8m56s to report the same error 24 times, and hammered IAM
+            # into 500s on the way. The first failure decides for the run.
+            pytest.fail(
+                f"token minting already failed in this run: {cached['error']}",
+                pytrace=False,
+            )
+
+        try:
+            minted = _mint_token()
+        except Exception as exc:
+            cache.write_text(
+                json.dumps(
+                    {
+                        "error": f"{type(exc).__name__}: {exc}"[:500],
+                        "expires_at": time.time() + 1800,
+                    }
+                )
+            )
+            raise
         # Well inside a token's own lifetime, so a long suite re-mints rather
         # than carrying one that expires mid-run.
         cache.write_text(json.dumps({"token": minted, "expires_at": time.time() + 1800}))

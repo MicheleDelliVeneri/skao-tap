@@ -308,13 +308,14 @@ auth:
     # -- How long the discovery document and signing keys are cached.
     jwksCacheSeconds: 300
   # -- Used when plugin=permissions-api. The service name must match a route
-  # policy published by the Permissions API. `science-metadata-api` is the one
-  # registered — it is the directory name under the Permissions API's own
-  # etc/permissions/<env>/, and the same string the AAPI token exchange is
-  # asked for, so the audience below and this must agree.
+  # policy published by the Permissions API: the `name` field inside
+  # etc/permissions/<env>/<dir>/v<n>/route.json there, which is what it
+  # resolves by — not the directory, and the two are not always the same. It is
+  # also the string the AAPI token exchange is asked for, so the audience above
+  # and this have to agree.
   permissionsApi:
     url: ""          # e.g. https://permissions.srcnet.skao.int/api/v1
-    serviceName: science-metadata-api
+    serviceName: egernia
     serviceVersion: "1"
     timeoutSeconds: 10
   # -- Which operations the gate enforces. Empty means the service default:

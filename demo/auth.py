@@ -16,12 +16,15 @@ from __future__ import annotations
 
 import os
 
-# The service name registered with the Permissions API — the directory under
-# its etc/permissions/<env>/ — and therefore also the audience the exchanged
-# token carries. `science-metadata`, without the suffix, is not registered and
-# the exchange fails with a policy lookup error rather than a 401, which is a
-# confusing way to find out.
-EGERNIA_SERVICE = "science-metadata-api"
+# The policy egernia is authorised against in the Permissions API — the `name`
+# inside etc/permissions/<env>/egernia/v1/, which is what PAPI resolves by, and
+# also the audience the exchanged token carries.
+#
+# Not `science-metadata-api`: that policy's file says `"name":
+# "science-metadata"` while its directory says otherwise, so PAPI answers "The
+# permission policy for this service does not exist" for either spelling, and
+# its routes are CAOM-shaped rather than egernia's.
+EGERNIA_SERVICE = "egernia"
 EGERNIA_SERVICE_VERSION = "1"
 
 # Read in order; the first non-empty one wins. EGERNIA_TOKEN is the one to set
@@ -49,7 +52,7 @@ def test_credentials() -> tuple[str, str]:
 
 
 def mint_token(aapi_url: str, username: str, password: str) -> str:
-    """A `science-metadata-api`-audience token via the AAPI device flow.
+    """An `egernia`-audience token via the AAPI device flow.
 
     Two steps, both the auth client's: the device flow yields a token whose
     audience is the Authentication API itself, and the exchange turns it into
