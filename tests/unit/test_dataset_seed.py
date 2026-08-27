@@ -58,3 +58,32 @@ def test_the_software_catalogue_has_a_ceiling_the_seeder_knows_about():
     assert moduli == [4, 10, 7], "the version arithmetic moved; re-derive the ceiling"
 
     assert n_pub * n_tool * math.lcm(*moduli) == seed.SOFTWARE_URI_CEILING
+
+
+def test_every_path_that_skips_the_set_aside_drains_the_stash():
+    """A killed rebuild must not leave the spatial indexes dropped for ever.
+
+    `_spatial_indexes_set_aside` drops the GiST footprint indexes, stashes
+    their definitions in the database so a kill cannot lose them, and rebuilds
+    them on the way out. Only on the way out — so a run that decides not to set
+    them aside, because the target is already met or the load is small enough
+    to keep them live, has to drain the stash itself.
+
+    Getting this wrong is silent: spatial queries keep answering, by sequential
+    scan over every row, and nothing fails. Found by inspection while adding
+    those two paths, with a deployment sitting in exactly that state — four
+    definitions stashed, no GiST index present.
+    """
+    import inspect
+
+    source = inspect.getsource(seed.main)
+    # The two branches that never enter the context manager.
+    early_return, live_indexes = (
+        source.split("elif target_products > SETASIDE_INDEXES_ABOVE:")[0],
+        source.split("else:")[-1],
+    )
+    for name, branch in (("already-seeded", early_return), ("indexes-live", live_indexes)):
+        assert "restore_stashed_indexes" in branch, (
+            f"the {name} path skips _spatial_indexes_set_aside without draining the stash"
+        )
+    assert callable(generate.restore_stashed_indexes)

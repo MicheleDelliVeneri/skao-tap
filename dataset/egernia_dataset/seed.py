@@ -65,6 +65,19 @@ PRODUCTS_PER_PROJECT = (
 # generate.SOFTWARE.
 SOFTWARE_URI_CEILING = 7700
 
+# Above this many data products to generate, drop the GiST footprint indexes
+# for the load and rebuild them at the end; below it, leave them live.
+#
+# The set-aside is a bulk-load optimisation and it inverts at small sizes.
+# Measured on the deployed cluster: generation runs at 354 products/s with the
+# indexes dropped and roughly a third of that with them live, so the trade is
+# 2.8ms/row of generation against a from-scratch build. That build does not
+# scale — 12,800 rows took 77s and 25,600 took 155s, but 500,096 rows spent
+# over fifteen minutes on one of the four indexes alone. So a seed of tens of
+# thousands is faster and far more predictable with the indexes left alone, and
+# it never leaves a window where a cone search has no index to use.
+SETASIDE_INDEXES_ABOVE = int(os.getenv("SETASIDE_INDEXES_ABOVE", "200000"))
+
 
 def wait_for_schema(dsn: str, timeout_s: float, interval_s: float = 5.0) -> None:
     """Block until the metadata plugins have created their tables.
@@ -196,14 +209,42 @@ def main() -> int:
     with psycopg.connect(dsn, autocommit=False) as conn:
         generate.apply_schema(conn)
         software_rows = write_software(conn, cfg, software_candidates)
-        # The GiST footprint indexes are dropped for the load and rebuilt
-        # after: building them once at the end costs far less than maintaining
-        # them per insert.
-        with generate._spatial_indexes_set_aside(conn):
+
+        existing = conn.execute("SELECT count(*) FROM srcnet.data_products").fetchone()[0]
+        if existing >= target_products:
+            # Nothing to generate, and nothing to rebuild either. Checked
+            # before touching the indexes rather than relying on grow_to's own
+            # early return: the index set-aside below drops and rebuilds four
+            # GiST indexes whether or not a row is written, which on a full
+            # dataset is a quarter of an hour spent reaching the state it
+            # started in. That cost is what made this job impossible to wait
+            # for on every deploy.
+            log.info("already at %d data products; nothing to generate", existing)
+            # Drain the stash: an earlier run killed mid-rebuild leaves the
+            # indexes dropped, and this path never enters the set-aside that
+            # would put them back.
+            generate.restore_stashed_indexes(conn)
+            projects = generate.highest_project(conn)
+        elif target_products > SETASIDE_INDEXES_ABOVE:
+            # Big enough that a from-scratch build beats maintaining the
+            # indexes per insert.
+            log.info("dropping the GiST footprint indexes for the load")
+            with generate._spatial_indexes_set_aside(conn):
+                projects = grow_products_to(conn, cfg, target_products, batch)
+            log.info("VACUUM ANALYZE")
+            with psycopg.connect(dsn, autocommit=True) as vac:
+                vac.execute("VACUUM ANALYZE")
+        else:
+            # Small enough that the drop-and-rebuild costs more than it saves,
+            # and this way a cone search is never left without an index.
+            log.info("keeping the GiST footprint indexes live for the load")
+            # Live means live: anything an earlier run set aside goes back
+            # before the load, not after it.
+            generate.restore_stashed_indexes(conn)
             projects = grow_products_to(conn, cfg, target_products, batch)
-        log.info("VACUUM ANALYZE")
-        with psycopg.connect(dsn, autocommit=True) as vac:
-            vac.execute("VACUUM ANALYZE")
+            log.info("VACUUM ANALYZE")
+            with psycopg.connect(dsn, autocommit=True) as vac:
+                vac.execute("VACUUM ANALYZE")
         stats = generate.collect_stats(conn, "seed", projects, time.monotonic() - started)
 
     for table in generate.TABLES:

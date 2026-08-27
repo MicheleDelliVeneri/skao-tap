@@ -60,16 +60,17 @@ EGERNIA_SERVICE_VERSION = "1"
 # suite is where timings are measured and published.
 QUERY_TIMEOUT_S = int(os.getenv("EGERNIA_QUERY_TIMEOUT_S", "180"))
 
-# The post-deploy seeder runs asynchronously — deliberately, so a load measured
-# in tens of minutes cannot fail the deploy — which means a test job started
-# right after a deploy meets a database being bulk-loaded with its spatial
-# indexes dropped. Every data-dependent test then fails on the API's own
-# shedding ("all database connections are busy") behind an nginx 503, which
-# says nothing about the code. So the suite waits for the dataset instead.
+# A safety net, not the mechanism. post-deploy-egernia waits for the seeding
+# Job, so a deployment that reported success has data and this returns on its
+# first poll. It exists for the case that ordering does not hold — a suite
+# pointed at a deployment mid-seed, or a seeding job restarted underneath one —
+# because the alternative is every data-dependent test failing on the service's
+# own shedding ("all database connections are busy") behind an nginx 503, which
+# says nothing about the code.
 #
 # Matches TARGET_PRODUCTS on the seeding Job. Lower it for a smaller seed.
-EXPECTED_PRODUCTS = int(os.getenv("EGERNIA_EXPECTED_PRODUCTS", "500000"))
-DATASET_WAIT_S = float(os.getenv("EGERNIA_DATASET_WAIT_S", "2400"))
+EXPECTED_PRODUCTS = int(os.getenv("EGERNIA_EXPECTED_PRODUCTS", "30000"))
+DATASET_WAIT_S = float(os.getenv("EGERNIA_DATASET_WAIT_S", "900"))
 DATASET_POLL_S = float(os.getenv("EGERNIA_DATASET_POLL_S", "15"))
 # Consecutive clean answers required after the rows arrive. The row target is
 # reached well before the seeder is done: generation writes its last batch, then

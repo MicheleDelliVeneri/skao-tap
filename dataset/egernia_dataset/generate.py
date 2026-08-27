@@ -543,6 +543,35 @@ def _spatial_indexes_set_aside(conn):
         log.info("rebuilt %d GiST index(es) in %.0fs", len(saved), time.monotonic() - started)
 
 
+def restore_stashed_indexes(conn) -> int:
+    """Rebuild any GiST indexes an earlier run left set aside. Returns how many.
+
+    The stash is only drained by `_spatial_indexes_set_aside` on its way out,
+    so a caller that decides not to set the indexes aside — because the target
+    is already met, or because the load is small enough to keep them live — has
+    to drain it itself. Without this a killed run leaves the indexes dropped
+    and every later run skips past them, which is the quiet failure the stash
+    exists to prevent: spatial queries keep answering, by sequential scan, for
+    ever.
+    """
+    present = conn.execute("SELECT to_regclass(%s) IS NOT NULL", (STASH,)).fetchone()[0]
+    if not present:
+        return 0
+    saved = conn.execute(f"SELECT name, ddl FROM {STASH} ORDER BY name").fetchall()
+    if not saved:
+        conn.execute(f"DROP TABLE IF EXISTS {STASH}")
+        conn.commit()
+        return 0
+    log.info("restoring %d GiST index(es) left set aside by an earlier run", len(saved))
+    started = time.monotonic()
+    for _, ddl in saved:
+        conn.execute(ddl)
+    conn.execute(f"DROP TABLE IF EXISTS {STASH}")
+    conn.commit()
+    log.info("restored %d GiST index(es) in %.0fs", len(saved), time.monotonic() - started)
+    return len(saved)
+
+
 def build(dsn: str, cfg: dict, targets: list[dict], out_dir: pathlib.Path) -> list[DatasetStats]:
     """Grow through every target, checkpointing stats at each."""
     out_dir.mkdir(parents=True, exist_ok=True)

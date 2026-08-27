@@ -21,18 +21,20 @@ import pytest
 
 from conftest import QUERY_TIMEOUT_S, sync_query
 
-# Enough rows to be worth querying. Floors rather than exact counts: the seeder
-# targets 500,000 data products and the full 7,700-row software catalogue, but
-# it is resumable and may still be running when a suite starts. A floor
-# separates "seeding in progress" from "nothing was ever written".
+# Floors rather than exact counts, at roughly two thirds of what a 30,000-product
+# seed produces (the fan-out is 1 project : 4 : 8 : 16 : 128 products : 256
+# artifacts, so they scale together). A floor separates "seeding still running or
+# sized down" from "nothing was ever written", which is the failure worth
+# catching; the exact numbers belong to whatever TARGET_PRODUCTS the deployment
+# passes its seeding job.
 SEEDED_FLOORS = (
-    ("ivoa.obscore", 100_000),
-    ("srcnet.data_products", 100_000),
-    ("srcnet.artifacts", 100_000),
-    ("srcnet.projects", 500),
-    ("srcnet.observations", 2_000),
-    ("srcnet.scheduling_blocks", 4_000),
-    ("srcnet.execution_blocks", 8_000),
+    ("ivoa.obscore", 20_000),
+    ("srcnet.data_products", 20_000),
+    ("srcnet.artifacts", 40_000),
+    ("srcnet.projects", 150),
+    ("srcnet.observations", 600),
+    ("srcnet.scheduling_blocks", 1_200),
+    ("srcnet.execution_blocks", 2_400),
     ("srcnet.software", 1_000),
     ("srcnet.software_artifacts", 2_000),
 )
