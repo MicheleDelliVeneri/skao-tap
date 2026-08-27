@@ -85,10 +85,19 @@ DATASET_POLL_S = float(os.getenv("EGERNIA_DATASET_POLL_S", "15"))
 # rows land some fifteen minutes before the database is calm again.
 DATASET_SETTLE_POLLS = int(os.getenv("EGERNIA_DATASET_SETTLE_POLLS", "3"))
 
+# Where measurements accumulate so the run can report on itself. A file rather
+# than a module global: pytest-xdist runs each test in a worker process, and
+# pytest_terminal_summary runs in the controller, so nothing in memory crosses
+# from one to the other. Appended under a lock, one JSON object per line.
+TIMINGS_PATH = pathlib.Path(os.getenv("EGERNIA_TIMINGS_FILE", "/tmp/egernia-timings.jsonl"))
+
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "integration: exercises a deployed service, not a TestClient"
+    )
+    config.addinivalue_line(
+        "markers", "performance: a timing guard; run with -m performance -n 0 for a report"
     )
     # Only when this suite is the one running. `force=True` removes the root
     # handlers pytest's caplog installs, so configuring it at import time broke
@@ -385,11 +394,72 @@ def timing(request: pytest.FixtureRequest):
             "seconds": round(seconds, 3),
             "budget": budget,
             "headroom": round(budget - seconds, 3),
+            "within_budget": seconds < budget,
         }
         logger.info("TIMING %s", json.dumps(entry, sort_keys=True))
         request.node.user_properties.append((f"timing.{label}", seconds))
+        line = json.dumps(entry, sort_keys=True) + "\n"
+        # Append under a lock so concurrent workers cannot interleave a line.
+        TIMINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(TIMINGS_PATH, "a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            handle.write(line)
+            handle.flush()
 
     return record
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Start each run with an empty measurement file, not the last run's."""
+    if _enabled() and not hasattr(session.config, "workerinput"):
+        # Controller only: a worker truncating this would discard whatever the
+        # others had already written.
+        with contextlib.suppress(OSError):
+            TIMINGS_PATH.unlink(missing_ok=True)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    """Print the performance report: what was measured, against what budget.
+
+    Runs in the controller once the workers are done, which is the only place
+    that sees the whole run. Written to the terminal rather than a file because
+    the deployment stack streams the pod's log and keeps nothing else.
+    """
+    del exitstatus, config
+    if not _enabled() or not TIMINGS_PATH.exists():
+        return
+    rows = []
+    with contextlib.suppress(OSError, ValueError):
+        for line in TIMINGS_PATH.read_text().splitlines():
+            if line.strip():
+                rows.append(json.loads(line))
+    if not rows:
+        return
+
+    rows.sort(key=lambda r: r["label"])
+    write = terminalreporter.write_line
+    width = max(len(r["label"]) for r in rows)
+    terminalreporter.section("egernia performance report", sep="=")
+    write(f"{'measurement'.ljust(width)}   {'seconds':>9}  {'budget':>7}  {'headroom':>9}   ")
+    write("-" * (width + 34))
+    for r in rows:
+        mark = "ok" if r.get("within_budget", True) else "OVER"
+        write(
+            f"{r['label'].ljust(width)}   {r['seconds']:>9.2f}  {r['budget']:>7.0f}"
+            f"  {r['headroom']:>9.2f}   {mark}"
+        )
+    slowest = max(rows, key=lambda r: r["seconds"])
+    tightest = min(rows, key=lambda r: r["headroom"])
+    write("")
+    write(f"slowest:        {slowest['label']} at {slowest['seconds']:.2f}s")
+    write(
+        f"least headroom: {tightest['label']}, {tightest['headroom']:.2f}s "
+        f"under a {tightest['budget']:.0f}s budget"
+    )
+    write(
+        "budgets are an order of magnitude above expectation: they catch a lost "
+        "index, not a slow afternoon."
+    )
 
 
 @pytest.fixture(scope="session")

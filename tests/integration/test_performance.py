@@ -31,6 +31,12 @@ import pytest
 
 from conftest import QUERY_TIMEOUT_S, sync_query
 
+# Every test here is a timing guard. The marker exists so they can be run on
+# their own and serially — `-m performance -n 0` — where the numbers mean
+# something, rather than only as part of a four-way parallel functional run
+# where workers contend for the same connection pool.
+pytestmark = pytest.mark.performance
+
 
 def _budget(name: str, default: int) -> int:
     return int(os.getenv(f"EGERNIA_BUDGET_{name}", str(default)))
