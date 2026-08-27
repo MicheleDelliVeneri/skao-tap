@@ -2,6 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "egernia.fullname" . }}-config
+  namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "egernia.labels" . | nindent 4 }}
 data:

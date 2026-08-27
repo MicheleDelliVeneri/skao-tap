@@ -103,6 +103,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: {{ include "egernia.fullname" . }}-tap-api
+  namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "egernia.labels" . | nindent 4 }}
     app.kubernetes.io/component: tap-api
@@ -149,6 +150,7 @@ apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
   name: {{ include "egernia.fullname" . }}-tap-executor
+  namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "egernia.labels" . | nindent 4 }}
     app.kubernetes.io/component: tap-executor
@@ -204,6 +206,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: {{ include "egernia.fullname" . }}-tap-executor
+  namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "egernia.labels" . | nindent 4 }}
     app.kubernetes.io/component: tap-executor

@@ -3,6 +3,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: {{ include "egernia.fullname" . }}-postgres
+  namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "egernia.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgres

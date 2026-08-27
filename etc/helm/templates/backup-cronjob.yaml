@@ -12,6 +12,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: {{ include "egernia.fullname" . }}-db-backup
+  namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "egernia.labels" . | nindent 4 }}
     app.kubernetes.io/component: db-backup
@@ -76,6 +77,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "egernia.fullname" . }}-db-backups
+  namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "egernia.labels" . | nindent 4 }}
     app.kubernetes.io/component: db-backup
