@@ -47,7 +47,7 @@ TEST_USER_PASSWORD = os.getenv("TEST_USER_PASSWORD", "test")
 # user holds oper, so without this one the suite can only prove the policy
 # permits — never that it denies, which is the half worth proving.
 TEST_READER_USER = os.getenv("TEST_READER_USER", "")
-TEST_READER_PASSWORD = os.getenv("TEST_READER_PASSWORD", "testreader")
+TEST_READER_PASSWORD = os.getenv("TEST_READER_PASSWORD", "test")
 
 AAPI_SERVICE_URL = f"{AAPI_URL}/{AAPI_SERVICE_VERSION}"
 TAP_URL = f"{EGERNIA_URL}/tap"
