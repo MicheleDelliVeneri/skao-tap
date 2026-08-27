@@ -91,7 +91,7 @@ exclude = ["libs/egernia-core/egernia_core/query/_adql/translator.py"]
 # marimo notebooks are Python files whose cells end in a bare expression —
 # that expression IS the cell's rendered output, not a statement with no
 # effect. Everything else stays enforced.
-"deploy/demo/*.py" = ["B018"]
+"demo/*.py" = ["B018"]
 # vendored from queryparser: keeps upstream's style so diffs against
 # upstream stay readable
 "libs/egernia-core/egernia_core/query/_adql/translator.py" = [

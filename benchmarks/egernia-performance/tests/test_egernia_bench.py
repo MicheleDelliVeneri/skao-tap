@@ -538,7 +538,7 @@ def test_every_generated_level_targets_the_odp_schema():
 
 
 def test_a_demo_only_tier_is_not_swept_by_default():
-    """D5 exists for deploy/demo. Sweeping it by default would add 55 GiB of
+    """D5 exists to be shown, not swept. Doing so by default would add 55 GiB of
     generation to every db-scaling and full run, for a curve D1-D4 already
     gives the shape of — but naming it explicitly must still work."""
     from egernia_bench.__main__ import sweep_datasets

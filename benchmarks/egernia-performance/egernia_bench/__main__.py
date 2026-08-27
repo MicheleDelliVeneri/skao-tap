@@ -199,7 +199,7 @@ PLAN_EXPLANATIONS = {
 def sweep_datasets(cfg: dict) -> list[str]:
     """The tiers the size-sweeping families measure when none is named.
 
-    Tiers marked ``demo_only`` are left out: they exist for deploy/demo, and
+    Tiers marked ``demo_only`` are left out: they exist to be shown, and
     sweeping one would add its whole generation cost — 55 GiB for D5 — to
     every db-scaling and full run, for a curve D1-D4 already gives the shape
     of. Naming it explicitly (``--datasets D5``) still works.

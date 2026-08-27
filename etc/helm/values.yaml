@@ -429,10 +429,17 @@ voRegistry:
   # a changed record carrying an unchanged `updated` can be ignored.
   updated: ""
 
-# -- Metrics scraping. The endpoints exist either way; these annotations are
-# how an existing Prometheus finds them.
+# -- Metrics scraping. The endpoints exist either way; these are how an
+# existing Prometheus finds them.
 metrics:
   scrapeAnnotations: true
+  # -- A headless Service publishing the executor's metrics port. The
+  # executor serves no API and so has no Service of its own, which leaves a
+  # Prometheus that discovers by Service or by static target unable to reach
+  # it — the Prometheus Operator among them, since it reads no annotation of
+  # ours. On for that reason; the annotations above still carry the pods to a
+  # Prometheus that does discover them itself.
+  executorService: true
 
 # -- Tracing. Empty means no collector and no instrumentation, which is what a
 # deployment without one should pay.
@@ -528,6 +535,20 @@ postgresql:
 # -- Used when postgresql.enabled=false; full DSN including credentials.
 externalDatabase:
   url: ""
+
+# -- Where the database credentials come from. By default the chart renders a
+# Secret named `<release>-db` from the values above. Set `existing: true` when
+# something else creates that Secret — External Secrets pulling it out of
+# Vault, which is how the SRCNet deployment stack does it — and the chart
+# renders none, while every consumer keeps reading the same name.
+#
+# Whatever creates it must supply `TAP_DATABASE_URL`, because that is what the
+# API and executor read. With `postgresql.enabled=true` it must also supply
+# `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`: the in-chart server
+# initialises itself from those, and the DSN has to be the same credentials
+# written twice or the service cannot log in to its own database.
+databaseSecret:
+  existing: false
 
 # -- Pod/container hardening applied to tap-api and tap-executor (uid 10001
 # matches the image user). Postgres gets its own contexts below.

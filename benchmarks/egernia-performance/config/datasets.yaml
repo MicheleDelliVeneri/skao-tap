@@ -20,10 +20,10 @@ datasets:
   - name: D4
     target_bytes: 48318382080       # 45 GiB
     warmup_seconds: 600
-  # The demo tier (deploy/demo). Not part of any benchmark family: the size
-  # sweep's story is told by D1-D4, and a fifth point costs another 55 GiB of
-  # generation for a curve that already has its shape. This exists so the
-  # multi-machine demo can say "a hundred gigabytes" and mean it.
+  # A demonstration tier. Not part of any benchmark family: the size sweep's
+  # story is told by D1-D4, and a fifth point costs another 55 GiB of
+  # generation for a curve that already has its shape. This exists so a
+  # walkthrough can say "a hundred gigabytes" and mean it.
   - name: D5
     target_bytes: 107374182400      # 100 GiB
     warmup_seconds: 900

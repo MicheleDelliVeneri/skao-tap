@@ -4,8 +4,10 @@ A marimo notebook. Reactive by design, so the sliders re-run only what depends
 on them — turn concurrency up and the latency plot redraws while the Prometheus
 panel keeps streaming.
 
-    make demo-tunnel HOST=cluster-host    # forwards the ingress to localhost
-    make demo-notebook                    # against http://egernia.test:8080
+    make notebook BASE_URL=https://egernia.test PROMETHEUS_URL=...
+
+Points at whatever deployment BASE_URL names. In the SRCNet deployment stack
+that is the ingress host from the dev overlay; locally it is docker-compose.
 
 It runs in four parts: what a client can discover about the service, the four
 ways to ask it a question, both metadata models under one query language, and
@@ -31,18 +33,20 @@ def _():
     import marimo as mo
     import pandas as pd
 
-    BASE = os.environ.get("EGERNIA_BASE_URL", "http://egernia.test:8080").rstrip("/")
+    BASE = os.environ.get("EGERNIA_BASE_URL", "http://localhost:8080").rstrip("/")
     TAP = f"{BASE}/tap"
     API = f"{BASE}/api/v1"
-    # Same host by default: one ingress routes /tap, /api/v1 and /prometheus,
-    # so one tunnelled port carries all three. Overridable for a deployment
-    # that exposes Prometheus somewhere else.
-    PROM = os.environ.get("EGERNIA_PROMETHEUS_URL", f"{BASE}/prometheus").rstrip("/")
+    # No default: the chart deploys no Prometheus, so the one holding these
+    # series belongs to the deployment. In the dev stack that is
+    # http://prometheus.test (or prometheus-operated.monitoring:9090 from
+    # inside the cluster). Unset, the metrics panel says so and the rest of
+    # the notebook still works.
+    PROM = os.environ.get("EGERNIA_PROMETHEUS_URL", "").rstrip("/")
 
-    # `make demo-tls` issues a self-signed certificate, which httpx would
-    # refuse. Skipping verification is defensible here and nowhere else: the
-    # only route to this service is an SSH tunnel, which is already an
-    # encrypted and authenticated channel. See deploy/demo/tls.sh.
+    # A dev cluster serves a certificate from its own CA, which httpx would
+    # refuse. Set EGERNIA_INSECURE_TLS=1 only when the route to the service is
+    # already an encrypted and authenticated channel, such as an SSH tunnel;
+    # the honest fix is to trust the cluster's CA locally.
     VERIFY = os.environ.get("EGERNIA_INSECURE_TLS", "0") not in ("1", "true", "yes")
     http = httpx.Client(verify=VERIFY)
     return API, BASE, PROM, TAP, VERIFY, alt, http, mo, os, pd, time
@@ -69,8 +73,8 @@ def _(BASE, TAP, http, mo):
         {
             ""
             if _reachable
-            else "This machine cannot see the service. Check that the host resolves "
-            "to the ingress address — `make demo-status` prints both."
+            else "This machine cannot see the service. Check that the host in "
+            "EGERNIA_BASE_URL resolves to the ingress address."
         }
 
         1. what a client can **discover**
@@ -997,8 +1001,8 @@ def _(PROM, alt, http, mo, pd, refresh, window):
             .properties(title=title, height=170)
         )
 
-    try:
-        _panel = mo.vstack(
+    def _panels():
+        return mo.vstack(
             [
                 _chart(_range('sum(up{job=~".*tap-api.*"})', window.value), "API pods up", "pods"),
                 _chart(
@@ -1016,12 +1020,28 @@ def _(PROM, alt, http, mo, pd, refresh, window):
                 ),
             ]
         )
-    except Exception as exc:
+
+    if not PROM:
+        # No default to fall back on: the chart deploys no Prometheus, so the
+        # one holding these series belongs to the deployment and only it knows
+        # the URL.
         _panel = mo.md(
-            f"_Prometheus is not reachable at `{PROM}` ({type(exc).__name__})._\n\n"
-            "It is routed only when `ingress.exposePrometheus` is on — the demo "
-            "values file sets it, the chart default does not."
+            "_No Prometheus configured._\n\n"
+            "The chart deploys none: the metrics endpoints are scraped by "
+            "whichever Prometheus the deployment runs. Set "
+            "`EGERNIA_PROMETHEUS_URL` (`make notebook PROMETHEUS_URL=...`) to "
+            "the one holding these series."
         )
+    else:
+        try:
+            _panel = _panels()
+        except Exception as exc:
+            _panel = mo.md(
+                f"_Prometheus is not reachable at `{PROM}` ({type(exc).__name__})._\n\n"
+                "The series are exported by the pods and collected by the "
+                "deployment's own Prometheus; check that it scrapes them and "
+                "that this URL is the one to query."
+            )
     _panel
     return
 
