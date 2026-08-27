@@ -43,6 +43,7 @@ from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from . import auth
 from .endpoints import vosi
+from .endpoints.json_api import metadata_routers
 from .endpoints.json_api import router as json_router
 from .endpoints.uws_api import router as uws_router
 from .queries.params import gather_params
@@ -252,8 +253,12 @@ if settings.otlp_endpoint:
     setup_otel_fastapi(app, service_name="tap-api", otlp_endpoint=settings.otlp_endpoint)
     log.info("OpenTelemetry traces exported to %s", settings.otlp_endpoint)
 
-app.include_router(uws_router, prefix="/tap/async")
+app.include_router(uws_router)
 app.include_router(json_router)
+# Each metadata domain on the app rather than nested inside json_router, so its
+# routes report their full path to the authorisation layer.
+for _metadata_router in metadata_routers:
+    app.include_router(_metadata_router)
 
 VOTABLE_MIME = "application/x-votable+xml"
 
