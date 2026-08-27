@@ -109,6 +109,7 @@ extraPaths = ["libs/egernia-core", "services/egernia-api", "services/egernia-exe
 testpaths = ["tests"]
 markers = [
     "component: end-to-end tests requiring PostgreSQL and the running services",
+    "integration: exercises a deployed service in the SRC integration environment",
 ]
 addopts = "-ra"
 timeout = 120

@@ -29,11 +29,12 @@ def _():
     import time
 
     import altair as alt
+    import auth as egernia_auth
     import httpx
     import marimo as mo
     import pandas as pd
 
-    BASE = os.environ.get("EGERNIA_BASE_URL", "http://localhost:8080").rstrip("/")
+    BASE = egernia_auth.base_url()
     TAP = f"{BASE}/tap"
     API = f"{BASE}/api/v1"
     # No default: the chart deploys no Prometheus, so the one holding these
@@ -48,12 +49,18 @@ def _():
     # already an encrypted and authenticated channel, such as an SSH tunnel;
     # the honest fix is to trust the cluster's CA locally.
     VERIFY = os.environ.get("EGERNIA_INSECURE_TLS", "0") not in ("1", "true", "yes")
-    http = httpx.Client(verify=VERIFY)
-    return API, BASE, PROM, TAP, VERIFY, alt, http, mo, os, pd, time
+
+    # Every request carries the token: with auth on, TAP reads need one too
+    # unless the deployment sets anonymousQueries, and the dev stack does not.
+    # Failing here rather than per-cell is deliberate — one legible error about
+    # credentials beats a page of 401s.
+    AUTH, TOKEN_FROM = egernia_auth.auth_header()
+    http = httpx.Client(verify=VERIFY, headers=AUTH)
+    return API, AUTH, BASE, PROM, TAP, TOKEN_FROM, VERIFY, alt, http, mo, os, pd, time
 
 
 @app.cell
-def _(BASE, TAP, http, mo):
+def _(BASE, TAP, TOKEN_FROM, http, mo):
     # One reachability check, stated plainly: everything below is meaningless
     # if this fails, and "connection refused" three cells later reads as a
     # broken service rather than a DNS entry nobody made.
@@ -69,6 +76,8 @@ def _(BASE, TAP, http, mo):
         # egernia — the whole service, from another machine
 
         Service: `{BASE}` — {"**reachable**" if _reachable else f"**NOT reachable**, {_detail}"}
+
+        Credential: {TOKEN_FROM}.
 
         {
             ""
@@ -1006,9 +1015,9 @@ def _(PROM, alt, http, mo, pd, refresh, window):
             [
                 _chart(_range('sum(up{job=~".*tap-api.*"})', window.value), "API pods up", "pods"),
                 _chart(
-                    _range("sum(rate(tap_requests_total[1m]))", window.value),
-                    "requests/second",
-                    "rps",
+                    _range("sum(rate(tap_query_duration_seconds_count[1m]))", window.value),
+                    "queries/second",
+                    "qps",
                 ),
                 _chart(
                     _range(
