@@ -104,7 +104,8 @@ CLASSES: dict[str, QueryClass] = {
     "Q02": QueryClass(
         "Q02",
         "indexed identifier lookup",
-        f"SELECT {OBSCORE_COLUMNS} FROM ivoa.obscore WHERE obs_id = '{{obs_id}}'",
+        f"SELECT {OBSCORE_COLUMNS} FROM ivoa.obscore "
+        f"WHERE obs_publisher_did LIKE '%{{project_id}}/%'",
     ),
     "Q03": QueryClass(
         "Q03",
@@ -142,20 +143,27 @@ CLASSES: dict[str, QueryClass] = {
     ),
     "Q08": QueryClass(
         "Q08",
-        "Observation-to-Plane join",
+        "observation-to-product join",
         "SELECT TOP 200 o.obs_id, o.collection, o.instrument_name, "
-        "p.plane_id, p.calib_level, p.data_product_type "
-        "FROM caom.observation AS o JOIN caom.plane AS p ON o.obs_id = p.obs_id "
+        "p.product_id, p.calib_level, p.dataproduct_type "
+        "FROM srcnet.observations AS o "
+        "JOIN srcnet.data_products AS p "
+        "  ON o.project_id = p.project_id AND o.obs_id = p.obs_id "
         "WHERE o.collection = '{collection}' AND p.calib_level = {calib}",
     ),
     "Q09": QueryClass(
         "Q09",
-        "four-level CAOM join",
-        "SELECT TOP 500 o.obs_id, p.plane_id, a.artifact_id, pt.part_id "
-        "FROM caom.observation AS o "
-        "JOIN caom.plane AS p ON o.obs_id = p.obs_id "
-        "JOIN caom.artifact AS a ON p.plane_id = a.plane_id "
-        "JOIN caom.part AS pt ON a.artifact_id = pt.artifact_id "
+        "four-level ODP join",
+        "SELECT TOP 500 o.obs_id, sb.sbd_id, eb.eb_id, p.product_id "
+        "FROM srcnet.observations AS o "
+        "JOIN srcnet.scheduling_blocks AS sb "
+        "  ON sb.project_id = o.project_id AND sb.obs_id = o.obs_id "
+        "JOIN srcnet.execution_blocks AS eb "
+        "  ON eb.project_id = sb.project_id AND eb.obs_id = sb.obs_id "
+        " AND eb.sbd_id = sb.sbd_id "
+        "JOIN srcnet.data_products AS p "
+        "  ON p.project_id = eb.project_id AND p.obs_id = eb.obs_id "
+        " AND p.sbd_id = eb.sbd_id AND p.eb_id = eb.eb_id "
         "WHERE o.instrument_name = '{instrument}' AND p.calib_level = {calib}",
         stress=True,
     ),
@@ -191,14 +199,22 @@ CLASSES: dict[str, QueryClass] = {
     "Q14": QueryClass(
         "Q14",
         "deliberately expensive",
-        "SELECT TOP 2000 o.obs_id, o.target_name, p.plane_id, c.chunk_id "
-        "FROM caom.observation AS o "
-        "JOIN caom.plane AS p ON o.obs_id = p.obs_id "
-        "JOIN caom.artifact AS a ON p.plane_id = a.plane_id "
-        "JOIN caom.part AS pt ON a.artifact_id = pt.artifact_id "
-        "JOIN caom.chunk AS c ON pt.part_id = c.part_id "
-        "WHERE o.target_name LIKE '{target_prefix}%' "
-        "ORDER BY o.obs_id, p.plane_id, c.chunk_id",
+        "SELECT TOP 2000 o.obs_id, p.target_name, p.product_id, a.artifact_id "
+        "FROM srcnet.observations AS o "
+        "JOIN srcnet.scheduling_blocks AS sb "
+        "  ON sb.project_id = o.project_id AND sb.obs_id = o.obs_id "
+        "JOIN srcnet.execution_blocks AS eb "
+        "  ON eb.project_id = sb.project_id AND eb.obs_id = sb.obs_id "
+        " AND eb.sbd_id = sb.sbd_id "
+        "JOIN srcnet.data_products AS p "
+        "  ON p.project_id = eb.project_id AND p.obs_id = eb.obs_id "
+        " AND p.sbd_id = eb.sbd_id AND p.eb_id = eb.eb_id "
+        "JOIN srcnet.artifacts AS a "
+        "  ON a.project_id = p.project_id AND a.obs_id = p.obs_id "
+        " AND a.sbd_id = p.sbd_id AND a.eb_id = p.eb_id "
+        " AND a.product_id = p.product_id "
+        "WHERE p.target_name LIKE '{target_prefix}%' "
+        "ORDER BY o.obs_id, p.product_id, a.artifact_id",
         stress=True,
     ),
 }
@@ -220,7 +236,10 @@ def _parameters(rng: Deterministic, cls: str, seed: str, observations: int, cfg:
     if cls == "Q01":
         return {}
     if cls == "Q02":
-        return {"obs_id": f"ska:obs:{rng.randint(1, max(observations, 1)):012d}"}
+        # The ODP publisher DID carries the whole key chain, so a project
+        # is addressable without reconstructing an obs_id whose instrument
+        # segment this side would have to re-derive.
+        return {"project_id": f"SKAO-P{rng.randint(1, max(observations, 1)):09d}"}
     if cls in ("Q03", "Q11"):
         return {
             "collection": rng.choice(gen["collections"]),
@@ -270,7 +289,10 @@ def _parameters(rng: Deterministic, cls: str, seed: str, observations: int, cfg:
     if cls == "Q13":
         return {"calib": rng.randint(0, 3)}
     if cls == "Q14":
-        return {"target_prefix": f"FIELD-{rng.randint(1, 40)}"}
+        # A real target name from the generator's list, truncated: the ODP
+        # model carries catalogue names, so "FIELD-3%" would match nothing
+        # and this class would measure an empty scan instead of a big join.
+        return {"target_prefix": rng.choice(gen["targets"])[:4]}
     raise KeyError(cls)
 
 

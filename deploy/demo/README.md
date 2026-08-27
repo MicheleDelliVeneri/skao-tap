@@ -96,31 +96,34 @@ make demo-notebook BASE_URL=http://localhost:8080 \
 ## The dataset
 
 ```bash
-make demo-dataset      # ~20 minutes
-make demo-snapshot     # so it is never 20 minutes again
+make demo-dataset TIER=D1   # 2 GiB, minutes
+make demo-dataset           # D5, 100 GiB, hours
+make demo-snapshot          # so it only has to happen once
 ```
 
-`deploy/demo/odp_dataset.py` fills the two models the service implements: the
-ODP hierarchy — projects → observations → scheduling blocks → execution blocks
-→ data products → artifacts — and the software discovery model. `ivoa.obscore`
-stays the ODP plugin's *view* over those tables, so what the demo queries as
-ObsCore is the mapping the service actually ships.
+The benchmark suite's generator fills the two models the service implements:
+the ODP hierarchy — projects → observations → scheduling blocks → execution
+blocks → data products → artifacts — and the software discovery model.
+`ivoa.obscore` stays the ODP plugin's *view* over those tables, so what the
+demo queries as ObsCore is the mapping the service actually ships, and the
+demo and the benchmark numbers describe the same schema.
 
-Deliberately **not** the benchmark suite's generator. That one builds a CAOM
-hierarchy and replaces `ivoa.obscore` with a table of its own, which is right
-for measuring throughput against a fixed corpus and wrong for showing what
-this service does: it puts a data model egernia does not implement in front of
-the audience and leaves every `srcnet` table empty.
+Rows are generated server-side, by the database, from `(seed, index)`. Nothing
+crosses the port-forward except the statement, which is what makes the larger
+tiers possible at all: shipping tens of millions of rows from a client is
+hours where `INSERT ... SELECT` is minutes.
 
-Defaults give 4,700 projects — 601,600 data products, 1.2M artifacts, 400
-software packages. Size it with `PROJECTS=` and `SOFTWARE=`. Every row crosses
-a port-forward, so run it from a machine with a fast path to the cluster — not
-from the laptop that will present over hotel wifi.
+`TIER=` picks the size (`D1` 2 GiB … `D5` 100 GiB, default `D5`); every tier
+below the target is built on the way, because the database grows through them
+in order. Generation is resumable — it continues from the highest project
+already present — so a run that dies part-way restarts near where it stopped.
 
-The load drops the GiST indexes and rebuilds them at the end, which is most of
-the difference between twenty minutes and two hours; the dropped definitions
-are stashed in the database, so a run that is killed rather than raised can be
-recovered by simply running it again.
+The load sets the GiST indexes aside and rebuilds them once at the end, which
+is most of the difference between minutes and hours. Their definitions are
+stashed in the database inside the same transaction as the DROP, so a run that
+is *killed* rather than raised can be recovered by simply running it again —
+otherwise the indexes stay dropped, the next run finds nothing to set aside,
+and every spatial query silently sequential-scans.
 
 `demo-snapshot` takes a `VolumeSnapshot`, which needs a CSI driver that
 supports them. Without one, keep the data between demos instead:

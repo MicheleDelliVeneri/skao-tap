@@ -42,3 +42,41 @@ RETURNS double precision
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT degrees(asin(2.0 * bench.rnd(seed, i, 'dec') - 1.0))
 $$;
+
+-- The ODP footprint, built server-side.
+--
+-- Mirrors egernia_core.metadata.regions.stcs_to_spoly for the CIRCLE case: the
+-- same 32-vertex inscribed polygon, the same great-circle offset, the same
+-- fixed-point formatting — pgsphere's parser reads no exponent notation, and a
+-- vertex near RA=0 would otherwise be handed "1.7e-21".
+--
+-- A duplicate of Python that already exists, which is a cost paid deliberately:
+-- s_region_geom has to be produced by the server, because shipping 45 GiB of
+-- rows from a client is hours where INSERT ... SELECT is minutes, and the
+-- footprint is what the ODP model actually carries. test_dataset_sql.py pins
+-- the two implementations against each other over a randomised sample, so the
+-- copy cannot drift silently.
+CREATE OR REPLACE FUNCTION bench.circle_spoly(
+    ra_deg double precision, dec_deg double precision, radius_deg double precision,
+    n int DEFAULT 32)
+RETURNS spoly LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT ('{' || string_agg(
+                format('(%sd,%sd)',
+                       to_char(deg_ra, 'FM990.999999999999'),
+                       to_char(deg_dec, 'FM990.999999999999')),
+                ',' ORDER BY k) || '}')::spoly
+      FROM (
+        SELECT k,
+               raw_ra - floor(raw_ra / 360.0) * 360.0 AS deg_ra,
+               degrees(e.d) AS deg_dec
+          FROM generate_series(0, n - 1) AS k,
+               LATERAL (SELECT radians(ra_deg) AS ra0, radians(dec_deg) AS dec0,
+                               radians(radius_deg) AS r,
+                               2.0 * pi() * k / n AS bearing) AS c,
+               LATERAL (SELECT asin(sin(c.dec0) * cos(c.r)
+                                    + cos(c.dec0) * sin(c.r) * cos(c.bearing)) AS d) AS e,
+               LATERAL (SELECT degrees(c.ra0 + atan2(sin(c.bearing) * sin(c.r) * cos(c.dec0),
+                                                     cos(c.r) - sin(c.dec0) * sin(e.d)))
+                          AS raw_ra) AS f
+      ) AS v
+$$;

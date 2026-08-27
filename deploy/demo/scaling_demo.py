@@ -701,6 +701,81 @@ def _(TAP, cone, http, mo, radius, time):
 
 @app.cell
 def _(mo):
+    big_rows = mo.ui.dropdown(
+        options={"50,000": 50_000, "100,000": 100_000, "250,000": 250_000, "500,000": 500_000},
+        value="250,000",
+        label="rows to pull back",
+    )
+    big_rows
+    return (big_rows,)
+
+
+@app.cell
+def _(TAP, big_rows, http, mo, time):
+    # The previous cell is a needle: a selective predicate the index answers,
+    # where the result is small and the work is the lookup. This one is the
+    # opposite and is the honest test of a different thing entirely — pulling
+    # a quarter of a million rows back is no longer about finding them, it is
+    # about serialising and streaming them, and that cost is per row and
+    # cannot be indexed away.
+    #
+    # Streamed, not buffered: the service writes rows out as it reads them, so
+    # its memory does not scale with the result. Time to *first* byte is what
+    # a client sees as responsiveness; time to last is bounded by the link.
+    _n = big_rows.value
+    _adql = (
+        f"SELECT TOP {_n} obs_publisher_did, obs_collection, dataproduct_type, "
+        "calib_level, s_ra, s_dec, t_min, t_max, em_min, em_max, access_estsize\n"
+        "FROM ivoa.obscore"
+    )
+    _t0 = time.perf_counter()
+    with http.stream(
+        "POST",
+        f"{TAP}/sync",
+        data={"LANG": "ADQL", "QUERY": _adql, "RESPONSEFORMAT": "csv"},
+        timeout=600,
+    ) as _resp:
+        _first = None
+        _bytes = 0
+        _rows = 0
+        for _chunk in _resp.iter_bytes():
+            if _first is None:
+                _first = time.perf_counter() - _t0
+            _bytes += len(_chunk)
+            _rows += _chunk.count(b"\n")
+    _elapsed = time.perf_counter() - _t0
+    _rows = max(_rows - 1, 0)  # the header line
+
+    mo.vstack(
+        [
+            mo.md(f"```sql\n{_adql}\n```"),
+            mo.hstack(
+                [
+                    mo.stat(f"{1000 * (_first or 0):.0f} ms", label="first byte", bordered=True),
+                    mo.stat(f"{_elapsed:.1f} s", label="last byte", bordered=True),
+                    mo.stat(f"{_rows:,}", label="rows", bordered=True),
+                    mo.stat(f"{_bytes / 2**20:.0f} MiB", label="streamed", bordered=True),
+                    mo.stat(
+                        f"{_rows / max(_elapsed, 1e-9):,.0f}/s", label="row rate", bordered=True
+                    ),
+                ]
+            ),
+            mo.md(
+                f"First byte at {1000 * (_first or 0):.0f} ms against "
+                f"{_elapsed:.1f} s to the last: the service starts answering long "
+                "before it has finished, because the result is streamed rather than "
+                "assembled in memory. Raising the row count moves the last-byte "
+                "figure and leaves the first-byte one roughly where it is — which is "
+                "the shape you want, and the reason a large result does not become a "
+                "large heap."
+            ),
+        ]
+    )
+    return
+
+
+@app.cell
+def _(mo):
     run_aggregate = mo.ui.run_button(label="run the full-table aggregate")
     mo.vstack(
         [

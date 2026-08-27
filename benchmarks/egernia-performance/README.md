@@ -98,7 +98,9 @@ rather than 82, and every tier is a genuine prefix of the next. Recorded per
 tier: database size, per-table and per-index bytes, row counts, ObsCore rows,
 index/table ratio. `VACUUM ANALYZE` runs at each checkpoint.
 
-The schema is five CAOM levels plus ObsCore at plane level, with the wide text
+The schema is the service's own ODP hierarchy — projects, observations,
+scheduling blocks, execution blocks, data products, artifacts — with
+`ivoa.obscore` as the plugin's view over it, and the wide text
 columns (`s_region`, `access_url`, `obs_publisher_did`) that decide how many
 rows fit in a page — row width is half of what an I/O benchmark measures, so it
 is neither padded nor trimmed.
@@ -144,8 +146,8 @@ generated data:
 | Q05 | small cone | pg_sphere GiST on the translated expression |
 | Q06 | medium cone | the same index where the heap fetch dominates |
 | Q07 | spatial + time + metadata | three predicates, three indexes |
-| Q08 | Observation→Plane join | the CAOM join clients actually make |
-| Q09 | four-level CAOM join | join depth with fan-out (stress) |
+| Q08 | observation→product join | the join clients actually make |
+| Q09 | four-level ODP join | join depth with fan-out (stress) |
 | Q10 | ~1,000 rows | serialisation and streaming |
 | Q11 | ~10,000 rows | where the response body dominates (stress, and the class the result-format family runs) |
 | Q12 | empty spatial result | the cost of finding nothing |
