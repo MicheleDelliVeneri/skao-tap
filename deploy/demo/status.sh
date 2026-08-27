@@ -56,7 +56,6 @@ ingress_host=${host:-$(kubectl get ingress -n "$namespace" -o jsonpath='{.items[
 if [ -n "$ingress_host" ]; then
   echo "  TAP:         http://$ingress_host/tap"
   echo "  JSON API:    http://$ingress_host/api/v1"
-  echo "  Prometheus:  http://$ingress_host/prometheus"
   if [ -n "$address" ]; then
     echo "  ingress address: $address"
     echo "  the notebook machine must resolve '$ingress_host' to it (DNS, or /etc/hosts)"

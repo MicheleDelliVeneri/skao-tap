@@ -106,7 +106,6 @@ benchmark-teardown:
 #   make demo-deploy                      deploy the chart via the current context
 #   make demo-tunnel HOST=cluster-host    the ssh + /etc/hosts lines, and open it
 #   make demo-tls                         a self-signed cert for egernia.test
-#   make demo-headlamp                    Headlamp, for the cluster view on screen
 #   make demo-dataset                     generate the ~100 GiB D5 dataset in-cluster
 #   make demo-snapshot                    capture D5 so the next run is minutes
 #   make demo-restore                     restore a captured D5
@@ -128,7 +127,7 @@ DEMO_MARIMO := $(DEMO_DIR)/scaling_demo.py
 # RFC 6761, so it can never collide with a real domain.
 DEMO_HOST ?= egernia.test
 
-.PHONY: demo-help demo-preflight demo-deploy demo-tunnel demo-tls demo-headlamp \
+.PHONY: demo-help demo-preflight demo-deploy demo-tunnel demo-tls \
         demo-dataset demo-snapshot demo-restore demo-notebook demo-status demo-teardown
 
 demo-help:
@@ -157,10 +156,6 @@ demo-tunnel:
 
 demo-tls:
 	@$(DEMO_DIR)/tls.sh $(DEMO_NS) $(DEMO_HOST)
-
-demo-headlamp:
-	@test -n "$(DEMO_CONTEXT)" || { echo "no current kubectl context" >&2; exit 2; }
-	$(DEMO_DIR)/headlamp.sh install $(DEMO_NS)
 
 demo-dataset:
 	$(DEMO_DIR)/dataset.sh generate $(DEMO_NS) $(DEMO_RELEASE)

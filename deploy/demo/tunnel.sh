@@ -54,8 +54,7 @@ ${svc:+}${svc:-Install one (ingress-nginx is the usual choice), or fall back to 
   helm upgrade ... --set ingress.enabled=false \\
       --set tapApi.service.type=NodePort --set tapApi.service.nodePort=30080
   ssh -N -L $local_port:localhost:30080 you@cluster-host
-and set EGERNIA_BASE_URL=http://localhost:$local_port (no Host routing, so
-/prometheus will not be reachable — expose it on its own NodePort too).}
+and set EGERNIA_BASE_URL=http://localhost:$local_port (no Host routing).}
 MSG
   exit 1
 fi
@@ -71,7 +70,6 @@ echo
 echo "3. everything is then at:"
 echo "     http://$ingress_host:$local_port/tap          IVOA TAP"
 echo "     http://$ingress_host:$local_port/api/v1       JSON API"
-echo "     http://$ingress_host:$local_port/prometheus   metrics"
 echo
 echo "4. point the notebook at it:"
 echo "     make demo-notebook BASE_URL=http://$ingress_host:$local_port"

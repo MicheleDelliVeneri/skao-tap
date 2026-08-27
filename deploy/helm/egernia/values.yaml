@@ -209,9 +209,9 @@ horizontalAutoscaling:
     # minReplicas is 0 (KEDA only, and only the 0-to-1 transition — with a
     # minimum of 1 it would do nothing, so it is rendered only when it can).
     activationQueuedJobs: 0
-    # -- Prometheus holding the executor metrics. Defaults to the chart's own
-    # when prometheus.enabled=true, which is for trying this out, not for
-    # production — point it at the Prometheus you already run.
+    # -- Prometheus holding the executor metrics. Required when the executor
+    # autoscaler is on: the chart deploys no Prometheus of its own, so point
+    # this at the one the site already runs.
     prometheusAddress: ""
     # -- PromQL for the queue depth. Aggregated with max() on purpose: every
     # replica reports the same figures for one shared queue, so sum() would
@@ -434,30 +434,6 @@ voRegistry:
 metrics:
   scrapeAnnotations: true
 
-# -- An optional in-cluster Prometheus, for looking at the metrics somewhere
-# that has none. Off by default: production scrapes the endpoints above with
-# the Prometheus it already runs, and two scrapers is one too many.
-prometheus:
-  enabled: false
-  image: prom/prometheus:v3.6.0
-  scrapeInterval: 15s
-  retention: 24h
-  service:
-    type: ClusterIP
-    # -- Only used with NodePort; see tapApi.service.nodePort.
-    nodePort: null
-  rbac:
-    # Needed for the pod discovery that finds executors, which have no
-    # Service. Turn off if the cluster provisions RBAC separately.
-    create: true
-  resources:
-    requests:
-      cpu: 50m
-      memory: 128Mi
-    limits:
-      cpu: 500m
-      memory: 512Mi
-
 # -- Tracing. Empty means no collector and no instrumentation, which is what a
 # deployment without one should pay.
 tracing:
@@ -602,8 +578,3 @@ ingress:
   catchAll: false
   annotations: {}
   tls: []
-  # -- Also route `/prometheus` to the bundled Prometheus. Off by default:
-  # Prometheus has no authentication of its own, so publishing it is a
-  # decision to take rather than inherit. The multi-machine demo turns it on
-  # so a notebook elsewhere can read the same series the operator sees.
-  exposePrometheus: false
