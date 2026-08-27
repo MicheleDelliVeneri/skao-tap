@@ -8,16 +8,6 @@ tapApi:
   # -- Safe to scale out; pair >1 with a ReadWriteMany results volume.
   replicas: 1
   port: 8080
-  service:
-    # -- ClusterIP is right for a deployment behind an ingress. NodePort
-    # exposes the API on every node, which is what a demo reached over an SSH
-    # tunnel needs — one forwarded port and no ingress controller, no DNS and
-    # no certificate.
-    type: ClusterIP
-    # -- Only used with NodePort. Fixed rather than assigned so the tunnel
-    # command can be written down; must be inside the cluster's node-port
-    # range (30000-32767 by default).
-    nodePort: null
   # -- Uvicorn worker processes per pod. ADQL translation is pure-Python
   # ANTLR and holds the GIL, so one process cannot use more than one core
   # whatever the pod's CPU limit says.
@@ -66,12 +56,9 @@ tapApi:
   # links. Leave empty to default to the in-cluster service URL.
   baseUrl: ""
   # -- Hosts whose requests may decide the URLs the service prints back into
-  # job documents and capabilities, comma-separated. A deployment is reachable
-  # by more names than the one above — a tunnel, a port-forward, a second
-  # ingress — and a client that arrived by one of those needs URLs it can
-  # resolve, not the canonical host it may have no DNS for. Empty derives the
-  # ingress host plus loopback; anything unlisted is answered with `baseUrl`,
-  # so an unvetted Host header cannot choose the links this service hands out.
+  # job documents and capabilities, comma-separated. Empty derives the ingress
+  # host; anything unlisted is answered with `baseUrl`, so an unvetted Host
+  # header cannot choose the links this service hands out.
   trustedHosts: ""
   # -- Override the chart's default spreading (see `scheduling`) wholesale.
   affinity: {}
@@ -584,18 +571,5 @@ ingress:
   enabled: false
   className: ""
   host: tap.example.org
-  # -- Further DNS names the ingress should serve the same routes under. A
-  # deployment is reached by more names than its canonical one — an SSH
-  # tunnel and a `kubectl port-forward` both arrive as `localhost` — and a
-  # rule matching only `host` sends those to the default backend, a 404 that
-  # reads as the service being down. These also become trusted for the URLs
-  # the service prints back (see `tapApi.trustedHosts`). Names only: the
-  # Ingress API rejects IP literals, which is what `catchAll` is for.
-  extraHosts: []
-  # -- Also answer on any hostname not listed above, via a rule with no host.
-  # The only way to serve an IP literal such as `127.0.0.1`, so it is what
-  # makes "reach it however you connected" true. Off by default: on a shared
-  # ingress controller this claims every hostname nothing else routes.
-  catchAll: false
   annotations: {}
   tls: []

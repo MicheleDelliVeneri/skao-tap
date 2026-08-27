@@ -33,36 +33,16 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 {{- end -}}
 
 {{- /*
-Every name this deployment is served under: the canonical ingress host, plus
-any extras. One list, because the ingress rules and the trusted-host list are
-two answers to the same question — a name the ingress routes but the app does
-not trust gets a 200 carrying URLs pointing somewhere else, and a name the app
-trusts but the ingress does not route never arrives at all.
-*/}}
-{{- define "egernia.serviceHosts" -}}
-{{- $hosts := .Values.ingress.extraHosts | default list -}}
-{{- if .Values.ingress.host -}}
-{{- $hosts = prepend $hosts .Values.ingress.host -}}
-{{- end -}}
-{{- join "," (uniq $hosts) -}}
-{{- end -}}
-
-{{- /*
 Hosts allowed to decide the URLs the service prints into its own job
-documents. The names above because they are the deployment's own, and loopback
-because a tunnel or a `kubectl port-forward` is how an operator and a demo
-audience reach it — a client arriving by any of them must be handed URLs it
-can resolve, not the canonical host it may have no DNS for.
+documents: the ingress host, because that is the deployment's own name.
+Anything else is answered with baseUrl, so an unvetted Host header cannot
+choose the links this service hands out.
 */}}
 {{- define "egernia.trustedHosts" -}}
 {{- if .Values.tapApi.trustedHosts -}}
 {{- .Values.tapApi.trustedHosts -}}
-{{- else -}}
-{{- $hosts := list -}}
-{{- if .Values.ingress.enabled -}}
-{{- $hosts = include "egernia.serviceHosts" . | splitList "," -}}
-{{- end -}}
-{{- join "," (uniq (concat $hosts (list "localhost" "127.0.0.1"))) -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.host -}}
+{{- .Values.ingress.host -}}
 {{- end -}}
 {{- end -}}
 
