@@ -21,7 +21,13 @@ from ..queries.params import gather_params
 from ..queries.query import prepare_query
 from ..queries.uploads import gather_upload_sources, parse_uploads
 
-router = APIRouter()
+# The prefix belongs on the router, not on the include. FastAPI keeps included
+# routers nested (fastapi.routing._IncludedRouter) rather than flattening them,
+# and Starlette then reports the innermost matched route — so a prefix passed to
+# include_router is absent from `request.scope["route"].path`, which is what the
+# authorisation layer sends the Permissions API as the route being asked about.
+# Declared here it is present, and the value agrees with the OpenAPI document.
+router = APIRouter(prefix="/tap/async")
 
 XML = "application/xml"
 

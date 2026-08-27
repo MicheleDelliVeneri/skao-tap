@@ -40,7 +40,8 @@ from .uws_api import (
     wait_for_phase,
 )
 
-router = APIRouter(prefix="/api/v1", tags=["json-api"])
+API_PREFIX = "/api/v1"
+router = APIRouter(prefix=API_PREFIX, tags=["json-api"])
 log = logging.getLogger("egernia_api")
 
 
@@ -283,7 +284,11 @@ class AmendRequest(BaseModel):
 
 def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
     """The JSON endpoint set for one metadata domain."""
-    domain = APIRouter(prefix=f"/{plugin.mount}", tags=[f"metadata:{plugin.name}"])
+    # The full prefix, and included on the app rather than on `router` below.
+    # A router nested inside a prefixed one loses the outer prefix from
+    # `request.scope["route"].path` — see the note in uws_api.py — and that
+    # value is what the authorisation layer asks the Permissions API about.
+    domain = APIRouter(prefix=f"{API_PREFIX}/{plugin.mount}", tags=[f"metadata:{plugin.name}"])
     root = plugin.tables[0]
     id_column = root.id_column
     # "projects" -> "project", for readable 404 messages
@@ -362,5 +367,7 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
     return domain
 
 
-for _plugin in active_plugins():
-    router.include_router(build_metadata_router(_plugin))
+# Included on the app by main.py, not on `router`: nesting them inside a
+# prefixed router is what hid `/api/v1` from the route the authorisation layer
+# reports. The URLs are identical either way.
+metadata_routers = [build_metadata_router(_plugin) for _plugin in active_plugins()]
