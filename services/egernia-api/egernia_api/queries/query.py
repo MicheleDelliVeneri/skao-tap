@@ -1,6 +1,5 @@
 """Shared query preparation and synchronous (streaming) execution."""
 
-import contextlib
 import functools
 import itertools
 import threading
@@ -8,13 +7,13 @@ import time
 from collections.abc import Iterator
 
 from egernia_core.config import settings
-from egernia_core.db import StreamedRows
 from egernia_core.db import connection as db_connection
 from egernia_core.errors import UsageError
 from egernia_core.metadata.schema_gen import REGION_SUFFIX
 from egernia_core.observability import QUERY_DURATION, tag_sql
 from egernia_core.query.adql import apply_maxrec, check_language, translate
-from egernia_core.query.results import RowLimiter, columns_from_cursor, stream, tap_schema_metadata
+from egernia_core.query.copy_dsv import result_stream
+from egernia_core.query.results import tap_schema_metadata
 from egernia_core.query.upload import (
     UploadedTable,
     create_upload_tables,
@@ -268,12 +267,17 @@ def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[byt
         # forbids — on a full-table aggregate that is most of the query's
         # cost. statement_timeout consequently bounds the whole statement,
         # streaming included, which is what a sync timeout should mean.
-        with conn.cursor() as cur:
-            rows = StreamedRows(cur, sql, chunk_rows=STREAM_CHUNK_ROWS)
-            with contextlib.closing(rows):
-                columns = columns_from_cursor(cur.description, tap_meta)
-                limiter = RowLimiter(rows, prepared["maxrec"])
-                yield from stream(columns, limiter, prepared["fmt_key"])
+        # DSV is written by PostgreSQL when it can be (see copy_dsv) and by
+        # the Python writer otherwise; every other format is the writer's.
+        # Either way what comes back is chunks plus the row accounting, so
+        # this does not care which path it got.
+        with (
+            conn.cursor() as cur,
+            result_stream(
+                cur, sql, tap_meta, prepared["fmt_key"], prepared["maxrec"], STREAM_CHUNK_ROWS
+            ) as (chunks, _rows),
+        ):
+            yield from chunks
 
 
 def run_sync(

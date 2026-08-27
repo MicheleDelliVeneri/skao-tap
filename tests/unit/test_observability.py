@@ -306,13 +306,13 @@ def _run_a_job_that_is_finalized_mid_stream(fake_db, monkeypatch):
         query_sql=QUERY,
     )
     claimed = worker.claim_job()
-    real_stream = worker.stream
+    real_stream = worker.result_stream
 
     def abort_then_stream(*args, **kwargs):
         fake_db.jobs[job["job_id"]]["phase"] = "ABORTED"
         return real_stream(*args, **kwargs)
 
-    monkeypatch.setattr(worker, "stream", abort_then_stream)
+    monkeypatch.setattr(worker, "result_stream", abort_then_stream)
     worker.execute_job(claimed)
 
 
@@ -365,13 +365,13 @@ def test_a_deleted_job_is_not_counted_as_an_outcome(fake_db, results_dir, monkey
         query_sql=QUERY,
     )
     claimed = worker.claim_job()
-    real_stream = worker.stream
+    real_stream = worker.result_stream
 
     def delete_then_stream(*args, **kwargs):
         del fake_db.jobs[job["job_id"]]
         return real_stream(*args, **kwargs)
 
-    monkeypatch.setattr(worker, "stream", delete_then_stream)
+    monkeypatch.setattr(worker, "result_stream", delete_then_stream)
 
     before = generate_latest(obs.REGISTRY).decode()
     worker.execute_job(claimed)

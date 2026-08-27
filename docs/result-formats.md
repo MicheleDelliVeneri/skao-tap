@@ -69,6 +69,52 @@ times the cheapest, and that is the cost of rendering numbers as decimal
 digits — unavoidable in a text format, and the reason a bulk transfer should
 not be one.
 
+That table prices the **Python writers**, which is still what serves VOTable,
+JSON, Parquet and Arrow. It is no longer what serves csv and tsv: see below.
+
+### csv and tsv are written by PostgreSQL
+
+DSV responses are produced by `COPY (<query>) TO STDOUT WITH (FORMAT csv)` and
+handed to the socket as the server wrote them, so for those two formats neither
+the Python writer nor the row tuples it consumed exist. What the API pays drops
+from 28.40 µs/row to 0.134 µs/row — the cost of counting the delivered rows for
+the DALI overflow status and batching them into 64 KiB chunks.
+
+The work does not vanish, it moves: PostgreSQL renders the bytes, and it renders
+them through a projection that reproduces CPython's output exactly, because a
+faster response in different bytes is a broken response. On one host with both
+sides charged, csv goes from 28.40 to 14.17 µs/row — 2.00×, and 3.02× on data
+where floats are round numbers. In a deployment the two sides are different
+pods, which is the point: the API's CPU is the constrained one.
+
+Two consequences worth knowing:
+
+- **The table above is the fallback.** A result the projection cannot promise to
+  reproduce byte for byte — a column type with no rendering, `bytea` and
+  pg_sphere's `spoly` among them, a repeated column name, a single-column result
+  — is served by the Python writer instead, at the 9.19 µs/row above.
+  `tap_copy_dsv_fallbacks_total` counts those with the reason, and
+  `tap_copy_dsv_results_total` counts the ones served by the server.
+- **`TAP_COPY_DSV=false`** puts every DSV response back on the Python writer.
+  Nothing else changes: the bytes are the same either way, which is the property
+  `tests/component/test_copy_dsv_differential.py` exists to hold.
+
+None of this changes the advice above. csv and tsv are cheaper to *serve* than
+they were; they are still the widest bytes on the wire, and a bulk transfer
+should still be Parquet or Arrow.
+
+**Which mix this was chosen against**, since that decides what it is worth: the
+profile that identified the writers as 37.7% of a request was a CSV profile,
+because the load generator that produced it sent CSV. That generator has since
+been removed, and no measurement of real traffic exists in this repository — so
+the honest statement is that the *deployed* format mix is unknown, and VOTable
+is the TAP default that most VO clients receive. This change is scoped so that
+does not matter: it touches csv and tsv only, and a VOTable-heavy deployment
+simply never reaches it. If VOTable turns out to dominate, the same cost is
+still there and still worth taking, but by a different route — a `COPY` of the
+row tuples wrapped in TABLEDATA, or an Arrow-backed writer — and that is a
+separate argument, not an extension of this one.
+
 Reproduce it, or measure your own hardware:
 
 ```bash

@@ -21,7 +21,14 @@ pytest.importorskip("pytest_benchmark", reason="benchmarks need pytest-benchmark
 
 from egernia_core import db as db_mod
 from egernia_core.query.adql import adql_to_postgresql, touched_tables, translate
-from egernia_core.query.results import ColumnMeta, RowLimiter, stream
+from egernia_core.query.copy_dsv import CopiedRows, header
+from egernia_core.query.results import (
+    ColumnMeta,
+    RowLimiter,
+    columns_from_cursor,
+    stream,
+    stream_dsv,
+)
 from queryparser.adql import ADQLQueryTranslator
 
 CONE_SEARCH = (
@@ -101,6 +108,36 @@ def test_benchmark_votable_serialization(benchmark):
 def test_benchmark_json_serialization(benchmark):
     body = benchmark(_serialize, "json")
     assert b'"status":"OK"' in body.replace(b" ", b"")
+
+
+def test_benchmark_dsv_serialization_by_the_writer(benchmark):
+    """#106's "before": psycopg's rows through `csv.writer`.
+
+    Kept as the reference the benchmark below is measured against, the way
+    `test_benchmark_adql_translation_and_table_inspection` is kept.
+    """
+    body = benchmark(_serialize, "csv")
+    assert body.count(b"\n") == len(ROWS) + 1
+
+
+def _collect_copied() -> bytes:
+    """The app-side half of the COPY path: blocks in, chunks out."""
+    rows = CopiedRows(len(ROWS))
+    return header(COLUMNS, ",") + b"".join(rows.chunks(iter(_SERIALIZE_BLOCKS)))
+
+
+def test_benchmark_dsv_serialization_by_the_server(benchmark):
+    """#106's "after", as far as this process can see it.
+
+    The server's rendering is not here — it is not in this process's budget
+    either, which is the point of the change — so this is the cost of receiving
+    a COPY-served body: counting blocks for the DALI overflow accounting and
+    coalescing them into 64 KiB chunks. Against the writer above, the
+    difference is what leaves the API's CPU. What the server takes on in
+    exchange is priced in tests/component/test_copy_dsv_cost.py.
+    """
+    body = benchmark(_collect_copied)
+    assert body.count(b"\n") == len(ROWS) + 1
 
 
 # ---------------------------------------------------------------------------
@@ -302,9 +339,35 @@ _ROWS = {
     cls: tuple(builder(index) for index in range(rows))
     for cls, (_sql, _fields, builder, rows) in CLASSES.items()
 }
+
+
+def _copy_blocks(columns, rows) -> tuple[bytes, ...]:
+    """`rows` as COPY would deliver them: one block per row, writer's bytes.
+
+    Rendered through `stream_dsv` itself rather than through a second
+    hand-written CSV writer, because the projection's whole purpose is to make
+    PostgreSQL emit exactly what `stream_dsv` emits — a stand-in that agreed
+    with anything else would be standing in for a broken server.
+    """
+    blocks = []
+    for row in rows:
+        body = b"".join(stream_dsv(columns, RowLimiter(iter([row]), 1), ","))
+        blocks.append(body.split(b"\n", 1)[1])  # drop the header row
+    return tuple(blocks)
+
+
+# The microbenchmark corpus as COPY would deliver it, rendered once at import
+# so that the benchmark times receiving the bytes rather than producing them.
+_SERIALIZE_BLOCKS = _copy_blocks(COLUMNS, ROWS)
+
+
 _DESCRIPTIONS = {
     cls: tuple(types.SimpleNamespace(name=name, type_code=oid) for name, oid in CLASSES[cls][1])
     for cls in CLASSES
+}
+
+_COPY_BLOCKS = {
+    cls: _copy_blocks(columns_from_cursor(_DESCRIPTIONS[cls], {}), _ROWS[cls]) for cls in CLASSES
 }
 
 # What tap_schema.columns would return for the touched tables, and what
@@ -356,11 +419,45 @@ class _Cursor:
         return False
 
     def execute(self, sql, params=None):
+        # The COPY path asks for the columns with a LIMIT 0 probe before the
+        # query runs, which is the only `execute` this cursor sees.
+        self.description = _DESCRIPTIONS[self._state["class"]]
         return _Result([])
 
     def stream(self, sql, size=1):
         self.description = _DESCRIPTIONS[self._state["class"]]
         yield from _ROWS[self._state["class"]]
+
+    def copy(self, statement):
+        """The server's half of the DSV path, as bytes already written.
+
+        A benchmark with no PostgreSQL cannot render them the way PostgreSQL
+        would, and should not try to: what #106 moved is *whose* CPU does the
+        rendering, and the server's is not in this process's budget. So the
+        blocks are rendered once at import, outside anything timed, and handed
+        over the way libpq hands them over — one per row.
+
+        What this measures is therefore the app-side cost of a COPY-served
+        response, which is the term the 3.90 ms/request came from. The
+        server-side cost of the projection is measured in
+        tests/component/test_copy_dsv_cost.py, where there is a real server to
+        charge for it.
+        """
+        return _FakeCopy(_COPY_BLOCKS[self._state["class"]])
+
+
+class _FakeCopy:
+    def __init__(self, blocks):
+        self._blocks = blocks
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def __iter__(self):
+        return iter(self._blocks)
 
 
 class _Connection:

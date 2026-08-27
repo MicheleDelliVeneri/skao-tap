@@ -71,6 +71,12 @@ class Settings:
     default_maxrec: int = _int("TAP_DEFAULT_MAXREC", "10000")
     hard_maxrec: int = _int("TAP_HARD_MAXREC", "1000000")
     sync_timeout_s: int = _int("TAP_SYNC_TIMEOUT", "30")
+    # The kill switch for the server-side DSV path (see query/copy_dsv.py).
+    # Off, every DSV result is written by the Python writer again -- which is
+    # both the way back out if the bytes are ever found to differ in the
+    # field, and the way to measure the change on one host without moving
+    # between two builds.
+    copy_dsv: bool = _bool("TAP_COPY_DSV", True)
     default_exec_duration_s: int = _int("TAP_ASYNC_EXEC_DURATION", "600")
     job_retention_s: int = _int("TAP_JOB_RETENTION", str(7 * 24 * 3600))
     upload_max_rows: int = _int("TAP_UPLOAD_MAX_ROWS", "100000")
