@@ -69,8 +69,15 @@ QUERY_TIMEOUT_S = int(os.getenv("EGERNIA_QUERY_TIMEOUT_S", "180"))
 #
 # Matches TARGET_PRODUCTS on the seeding Job. Lower it for a smaller seed.
 EXPECTED_PRODUCTS = int(os.getenv("EGERNIA_EXPECTED_PRODUCTS", "500000"))
-DATASET_WAIT_S = float(os.getenv("EGERNIA_DATASET_WAIT_S", "1500"))
+DATASET_WAIT_S = float(os.getenv("EGERNIA_DATASET_WAIT_S", "2400"))
 DATASET_POLL_S = float(os.getenv("EGERNIA_DATASET_POLL_S", "15"))
+# Consecutive clean answers required after the rows arrive. The row target is
+# reached well before the seeder is done: generation writes its last batch, then
+# the four GiST footprint indexes are rebuilt and a VACUUM ANALYZE runs, and the
+# service sheds throughout. Counting rows alone would release the suite into
+# exactly the window it exists to wait out — measured at 339 products/s, the
+# rows land some fifteen minutes before the database is calm again.
+DATASET_SETTLE_POLLS = int(os.getenv("EGERNIA_DATASET_SETTLE_POLLS", "3"))
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -256,6 +263,7 @@ def dataset_ready(session: requests.Session) -> int:
 
         deadline = time.monotonic() + DATASET_WAIT_S
         rows = -1
+        settled = 0
         while True:
             response = sync_query(session, "SELECT COUNT(*) AS n FROM srcnet.data_products")
             if response.status_code == 200:
@@ -264,12 +272,27 @@ def dataset_ready(session: requests.Session) -> int:
                 except (StopIteration, KeyError, ValueError):
                     rows = -1
                 if rows >= EXPECTED_PRODUCTS:
-                    cache.write_text(json.dumps({"rows": rows}))
-                    logger.info("dataset ready: %d data products", rows)
-                    return rows
-                logger.info("waiting for the seeder: %d/%d data products", rows, EXPECTED_PRODUCTS)
+                    settled += 1
+                    if settled >= DATASET_SETTLE_POLLS:
+                        cache.write_text(json.dumps({"rows": rows}))
+                        logger.info("dataset ready: %d data products", rows)
+                        return rows
+                    logger.info(
+                        "rows are in (%d); waiting for the load to settle (%d/%d)",
+                        rows,
+                        settled,
+                        DATASET_SETTLE_POLLS,
+                    )
+                else:
+                    settled = 0
+                    logger.info(
+                        "waiting for the seeder: %d/%d data products", rows, EXPECTED_PRODUCTS
+                    )
             else:
-                # 503 here is the API shedding while the seeder loads.
+                # 503 here is the API shedding while the seeder loads. The index
+                # rebuild does that after every row has landed, so a shed resets
+                # the streak rather than counting towards it.
+                settled = 0
                 logger.info("waiting for the seeder: HTTP %d", response.status_code)
             if time.monotonic() >= deadline:
                 pytest.fail(
