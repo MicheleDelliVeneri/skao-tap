@@ -130,18 +130,15 @@ floor. Usage: include "egernia.minReplicas" (dict "ctx" $ "component" "tap-api")
 {{- end -}}
 
 {{- /*
-The Prometheus the executor's queue depth is read from. Defaults to the
-chart's own only when it is deployed — that one is for trying this out, and a
-production autoscaler should read the Prometheus the site already runs.
+The Prometheus the executor's queue depth is read from. The chart deploys
+none, so this is always the one the site already runs.
 */}}
 {{- define "egernia.queueDepthPrometheus" -}}
 {{- $spec := .Values.horizontalAutoscaling.tapExecutor -}}
 {{- if $spec.prometheusAddress -}}
 {{- $spec.prometheusAddress -}}
-{{- else if .Values.prometheus.enabled -}}
-{{- printf "http://%s-prometheus:9090" (include "egernia.fullname" .) -}}
 {{- else -}}
-{{- fail "horizontalAutoscaling.tapExecutor.prometheusAddress is required: the queue depth is a Prometheus gauge, so an autoscaler needs to know which Prometheus has it (or set prometheus.enabled=true to try it with the chart's own). See docs/autoscaling.md." -}}
+{{- fail "horizontalAutoscaling.tapExecutor.prometheusAddress is required: the queue depth is a Prometheus gauge, so an autoscaler needs to know which Prometheus has it. See docs/autoscaling.md." -}}
 {{- end -}}
 {{- end -}}
 
@@ -193,14 +190,4 @@ queue.
       name: {{ include "egernia.fullname" . }}-tap-api
       port:
         name: http
-{{- if and .Values.prometheus.enabled .Values.ingress.exposePrometheus }}
-# unauthenticated: see ingress.exposePrometheus in values.yaml
-- path: /prometheus
-  pathType: Prefix
-  backend:
-    service:
-      name: {{ include "egernia.fullname" . }}-prometheus
-      port:
-        name: http
-{{- end }}
 {{- end -}}

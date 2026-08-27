@@ -20,7 +20,7 @@ notebook                            ingress controller
   |                                       |
   http://egernia.test:8080  ──ssh -L──>  :80 ──> /tap
                                               ──> /api/v1
-  /etc/hosts: 127.0.0.1 egernia.test          ──> /prometheus
+  /etc/hosts: 127.0.0.1 egernia.test
 ```
 
 One forwarded port carries everything, because the ingress routes by path.
@@ -88,16 +88,13 @@ another reason the default is plain HTTP.
 
 ### No ingress controller?
 
-Fall back to NodePorts and two forwards. There is no Host routing that way,
-so Prometheus needs its own port:
+Fall back to a NodePort and one forward. There is no Host routing that way:
 
 ```bash
 helm upgrade ... --set ingress.enabled=false \
-    --set tapApi.service.type=NodePort --set tapApi.service.nodePort=30080 \
-    --set prometheus.service.type=NodePort --set prometheus.service.nodePort=30090
-ssh -N -L 8080:localhost:30080 -L 9090:localhost:30090 user@cluster-host
-make demo-notebook BASE_URL=http://localhost:8080 \
-                   EGERNIA_PROMETHEUS_URL=http://localhost:9090
+    --set tapApi.service.type=NodePort --set tapApi.service.nodePort=30080
+ssh -N -L 8080:localhost:30080 user@cluster-host
+make demo-notebook BASE_URL=http://localhost:8080
 ```
 
 ## The dataset
@@ -185,19 +182,16 @@ milliseconds because the footprint is GiST-indexed; a full-table aggregate
 taking **seconds**, on purpose, because a demo that only shows the fast case
 teaches the wrong lesson; thousands of requests at a chosen concurrency with
 the latency distribution; and what the cluster did about it — pods up, request
-rate, per-pod CPU — from the Prometheus the chart deploys.
-
-## Headlamp
+rate, per-pod CPU — read from whichever Prometheus scrapes the pods. The
+chart deploys none; it only annotates the pods (`metrics.scrapeAnnotations`)
+so an existing Prometheus discovers them. Point the notebook at it:
 
 ```bash
-make demo-headlamp
-kubectl port-forward -n egernia-demo service/headlamp 8081:80
+make demo-notebook EGERNIA_PROMETHEUS_URL=http://prometheus.monitoring:9090
 ```
 
-Bound to the built-in read-only `view` ClusterRole: an audience watching pods
-appear should see the cluster, not be able to change it. It is reached by
-port-forward rather than an ingress because Headlamp authenticates by bearer
-token, and publishing that is a decision the script will not take for you.
+Left unset, the metrics panel reports Prometheus as unreachable and the rest
+of the notebook still works.
 
 ## Teardown
 

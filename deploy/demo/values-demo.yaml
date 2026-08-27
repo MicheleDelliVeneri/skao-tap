@@ -19,8 +19,8 @@
 #   make demo-tunnel HOST=cluster-host
 #   open http://egernia.test:8080/tap/capabilities
 #
-# One forwarded port carries /tap, /api/v1 and /prometheus, because the
-# ingress routes by path. It routes by *Host* as well, which is the reason
+# One forwarded port carries both /tap and /api/v1, because the ingress
+# routes by path. It routes by *Host* as well, which is the reason
 # for the /etc/hosts line: the name has to be in the request, not just in
 # the URL bar. `make demo-tunnel` prints both lines.
 
@@ -52,10 +52,6 @@ ingress:
   # self-signed certificate for the host above, for anyone who wants the
   # padlock in the screenshot.
   tls: []
-  # Prometheus has no authentication of its own. Acceptable here because the
-  # only way in is an SSH tunnel to a cluster you can already reach; not
-  # acceptable on a public ingress, which is why the chart defaults it off.
-  exposePrometheus: true
 
 tapApi:
   # ClusterIP: the ingress is the way in. NodePort stays available in the
@@ -108,14 +104,6 @@ horizontalAutoscaling:
         stabilizationWindowSeconds: 60
   tapExecutor:
     enabled: false
-
-prometheus:
-  enabled: true
-  # 2s rather than the 15s default: a scale-out that completes in twenty
-  # seconds is four points at 15s, which is not a curve anyone can read from
-  # the back of a room.
-  scrapeInterval: 2s
-  retention: 6h
 
 postgresql:
   enabled: true
