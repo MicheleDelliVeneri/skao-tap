@@ -195,11 +195,11 @@ jobs:
           # annotations on by default, so an existing Prometheus finds the pods
           helm template egernia deploy/helm/egernia \
             | grep -q 'prometheus.io/scrape: "true"'
-          # and the bundled Prometheus stays out unless asked for
+          # the chart scrapes nothing itself: the deployment stack runs the
+          # Prometheus, and two scrapers on one set of endpoints is one too many
           helm template egernia deploy/helm/egernia \
-            | grep -q 'kind: Role' && { echo "::error::bundled Prometheus rendered by default"; exit 1; }
-          helm template egernia deploy/helm/egernia --set prometheus.enabled=true \
-            | grep -q 'name: egernia-prometheus'
+            | grep -q 'app.kubernetes.io/component: prometheus' \
+            && { echo "::error::the chart rendered a Prometheus of its own"; exit 1; }
           helm template egernia deploy/helm/egernia \
             --set tracing.otlpEndpoint=http://collector:4317 \
             | grep -q 'OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4317"'
@@ -226,11 +226,11 @@ jobs:
           # count and then feed on its own output
           helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
-            --set prometheus.enabled=true \
+            --set horizontalAutoscaling.tapExecutor.prometheusAddress=http://prometheus.monitoring:9090 \
             | grep -q 'query: "max(tap_jobs{phase=\\"QUEUED\\",namespace=\\"default\\"})"'
           helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
-            --set prometheus.enabled=true | grep -q "kind: ScaledObject"
+            --set horizontalAutoscaling.tapExecutor.prometheusAddress=http://prometheus.monitoring:9090 | grep -q "kind: ScaledObject"
           # and a plain HPA for a cluster that already serves external metrics
           helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
@@ -271,12 +271,12 @@ jobs:
           helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
             --set horizontalAutoscaling.tapExecutor.minReplicas=0 \
-            --set prometheus.enabled=true \
+            --set horizontalAutoscaling.tapExecutor.prometheusAddress=http://prometheus.monitoring:9090 \
             --set 'horizontalAutoscaling.tapExecutor.query=max(from_the_database)' \
             --show-only templates/hpa.yaml | grep -q "activationThreshold"
           test "$(helm template egernia deploy/helm/egernia \
             --set horizontalAutoscaling.tapExecutor.enabled=true \
-            --set prometheus.enabled=true \
+            --set horizontalAutoscaling.tapExecutor.prometheusAddress=http://prometheus.monitoring:9090 \
             --show-only templates/hpa.yaml | grep -c activationThreshold)" = 0
           # a live VPA sizing memory beside a CPU HPA is supported: one
           # controller per resource, which is the pattern that is not
@@ -298,7 +298,7 @@ jobs:
           }
           api=(--set horizontalAutoscaling.tapApi.enabled=true)
           executor=(--set horizontalAutoscaling.tapExecutor.enabled=true
-                    --set prometheus.enabled=true)
+                    --set horizontalAutoscaling.tapExecutor.prometheusAddress=http://prometheus.monitoring:9090)
           # a CPU utilisation target is a percentage of the request
           refuses "${api[@]}" --set tapApi.resources=null
           # the VPA resizes the pod the HPA is measuring a percentage of
