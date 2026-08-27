@@ -8,13 +8,16 @@ Run as the post-deploy step of a deployment:
 
     TAP_DATABASE_URL=postgresql://... python -m egernia_bench.dataset.seed
 
-Two things make it safe to run on every deploy rather than once:
+Row-driven, where the suite's own generation is size-driven. A benchmark cares
+what 10 GiB of database does to a query plan; a seeded environment cares that
+there are enough rows to ask interesting questions about, and a row count is
+what someone asking for one can state. `grow_to` stops on
+``pg_database_size()``; this stops on ``count(*)``.
 
-  - ``grow_to`` stops on ``pg_database_size()``, so a database already at the
-    target is left alone — the second run costs a size query and a VACUUM.
-  - every statement is idempotent on its primary key and generation resumes
-    from the highest project index already present, so a run killed halfway
-    continues rather than duplicating.
+Two things make it safe to run on every deploy rather than once: generation
+stops once the target row count is present, and every statement is idempotent
+on its primary key with generation resuming from the first incomplete project,
+so a run killed halfway continues rather than duplicating.
 
 It deliberately does not create the schema. ``srcnet.data_products`` and the
 ``ivoa.obscore`` view are made by the metadata plugins when the API boots, and
@@ -25,6 +28,7 @@ It waits for the API to have done it instead.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import pathlib
 import sys
@@ -43,6 +47,24 @@ SUITE = pathlib.Path(__file__).resolve().parents[2]
 # What the ODP plugin creates at API bootstrap. Both, because the view is what
 # TAP publishes and the table is what the generator writes.
 REQUIRED = ("srcnet.data_products", "ivoa.obscore")
+
+# The model's fan-out is fixed, so a data-product count is a project count.
+# One project yields 4 observations, 8 scheduling blocks, 16 execution blocks,
+# 128 data products and 256 artifacts. Asking for equal row counts across the
+# ODP tables is not possible: the ratios are the hierarchy.
+PRODUCTS_PER_PROJECT = (
+    generate.OBS_PER_PROJECT * generate.SBD_PER_OBS * generate.EB_PER_SBD * generate.PRODUCTS_PER_EB
+)
+
+# The software catalogue's uri is {publisher}:{tool}:{major}.{minor}.{patch},
+# built from 5 publishers, 11 tools and a version triple derived from the row
+# index modulo 4, 10 and 7 — so at most 5 * 11 * lcm(4,10,7) = 7,700 distinct
+# uris exist, and ON CONFLICT (uri) DO NOTHING discards the rest. Measured
+# against a real database, not just derived. Deliberate on the generator's
+# part: a catalogue of tools is hundreds of rows in reality however large the
+# data holdings become. Widening it means widening the vocabulary in
+# generate.SOFTWARE.
+SOFTWARE_URI_CEILING = 7700
 
 
 def wait_for_schema(dsn: str, timeout_s: float, interval_s: float = 5.0) -> None:
@@ -79,20 +101,60 @@ def wait_for_schema(dsn: str, timeout_s: float, interval_s: float = 5.0) -> None
         time.sleep(interval_s)
 
 
-def targets_for(cfg: dict, target_bytes: int) -> list[dict]:
-    """One target at the requested size.
+def projects_for(products: int) -> int:
+    """Projects needed to reach a data-product count, rounded up."""
+    return math.ceil(products / PRODUCTS_PER_PROJECT)
 
-    The suite's own tiers are checkpoints for a size sweep, and passing the
-    ones below this size would only write their stats files on the way past.
-    Seeding wants a size, so it asks for exactly that: `grow_to` reaches it in
-    the same batches either way.
+
+def grow_products_to(conn, cfg: dict, target_products: int, batch_projects: int) -> int:
+    """Generate whole projects until the data-product target is reached.
+
+    The row-driven counterpart of generate.grow_to. Kept here rather than in
+    generate, because the suite's published sizes come from its size-driven
+    path and there is no reason for seeding to touch it.
+
+    Returns the highest project index written.
     """
-    named = next((d for d in cfg["datasets"] if d["target_bytes"] == target_bytes), None)
-    if named:
-        # Reuse the suite's name when the size happens to be a known tier, so
-        # the stats file is comparable with a benchmark run's.
-        return [named]
-    return [{"name": f"seed-{target_bytes / 2**30:.0f}GiB", "target_bytes": target_bytes}]
+    wanted_projects = projects_for(target_products)
+    index = generate.highest_project(conn)
+    if index:
+        log.info("resuming generation from project %d", index)
+    while index < wanted_projects:
+        lo = index + 1
+        hi = min(index + batch_projects, wanted_projects)
+        for _level, statement in generate.LEVELS:
+            with conn.cursor() as cur:
+                cur.execute(statement, generate._params(cfg, lo, hi))
+            conn.commit()
+        index = hi
+        log.info(
+            "%d/%d projects (%d/%d data products)",
+            index,
+            wanted_projects,
+            index * PRODUCTS_PER_PROJECT,
+            target_products,
+        )
+    return index
+
+
+def write_software(conn, cfg: dict, candidates: int) -> int:
+    """Write the software catalogue. Returns the row count actually present.
+
+    `candidates` is how many rows the statement generates, not how many land:
+    publisher and tool are drawn pseudo-randomly per index, so covering the
+    vocabulary is a coupon-collector problem rather than an enumeration.
+    Measured against a real database: 7,700 candidates reach 4,910 distinct
+    uris, 20,000 reach 7,120, and 100,000 saturate the ceiling at 7,700. The
+    surplus is discarded by ON CONFLICT and costs seconds, so the default
+    generates far more candidates than rows on purpose.
+    """
+    cfg = {**cfg, "generation": {**cfg["generation"], "software_packages": candidates}}
+    params = generate._params(cfg, 0, 0)
+    for statement in (generate.SOFTWARE, generate.SOFTWARE_ARTIFACTS):
+        with conn.cursor() as cur:
+            cur.execute(statement, params)
+    conn.commit()
+    return conn.execute("SELECT count(*) FROM srcnet.software").fetchone()[0]
 
 
 def main() -> int:
@@ -106,37 +168,54 @@ def main() -> int:
         log.error("TAP_DATABASE_URL is not set: it names the database to populate")
         return 2
 
-    target_gib = float(os.environ.get("TARGET_GIB", "20"))
-    target_bytes = int(target_gib * 2**30)
+    # Data products, because that table is 1:1 with ivoa.obscore and so is the
+    # row count a TAP query actually meets. The other ODP levels follow from
+    # the model's fan-out.
+    target_products = int(os.environ.get("TARGET_PRODUCTS", "500000"))
+    # Candidate rows for the software catalogue, not resulting rows: 100,000
+    # candidates saturate the 7,700-uri ceiling, and the discarded surplus
+    # costs seconds. Asking for 500,000 software rows is not available at all
+    # without widening the vocabulary in generate.SOFTWARE.
+    software_candidates = int(os.environ.get("SOFTWARE_CANDIDATES", "100000"))
     wait_s = float(os.environ.get("SCHEMA_WAIT_SECONDS", "900"))
-    # Markers make a re-entered run skip a target it already finished. An
-    # emptyDir is enough: losing them costs one size query, because the
-    # database itself is the real checkpoint.
-    markers = pathlib.Path(os.environ.get("MARKER_DIR", "/tmp/egernia-dataset"))
 
-    # datasets.yaml parsed as-is: `generation` holds the knobs generate.build
-    # reads, `datasets` the suite's size tiers. This is what the benchmark
-    # runner passes too (its load_config()["datasets"]), so the seeder and a
-    # benchmark run drive the generator through the same shape.
     cfg = yaml.safe_load((SUITE / "config" / "datasets.yaml").read_text())
+    batch = int(os.environ.get("BATCH_PROJECTS", str(cfg["generation"]["batch_projects"])))
 
     wait_for_schema(dsn, wait_s)
 
-    log.info("populating to %.1f GiB (ODP hierarchy and software catalogue)", target_gib)
+    wanted_projects = projects_for(target_products)
+    log.info(
+        "populating: %d data products (%d projects), software catalogue from %d candidates"
+        " (ceiling %d distinct uris)",
+        wanted_projects * PRODUCTS_PER_PROJECT,
+        wanted_projects,
+        software_candidates,
+        SOFTWARE_URI_CEILING,
+    )
     started = time.monotonic()
-    stats = generate.build(dsn, cfg, targets_for(cfg, target_bytes), markers)
-    elapsed = time.monotonic() - started
+    with psycopg.connect(dsn, autocommit=False) as conn:
+        generate.apply_schema(conn)
+        software_rows = write_software(conn, cfg, software_candidates)
+        # The GiST footprint indexes are dropped for the load and rebuilt
+        # after: building them once at the end costs far less than maintaining
+        # them per insert.
+        with generate._spatial_indexes_set_aside(conn):
+            projects = grow_products_to(conn, cfg, target_products, batch)
+        log.info("VACUUM ANALYZE")
+        with psycopg.connect(dsn, autocommit=True) as vac:
+            vac.execute("VACUUM ANALYZE")
+        stats = generate.collect_stats(conn, "seed", projects, time.monotonic() - started)
 
-    for stat in stats:
-        log.info(
-            "%s: %.2f GiB, %d ObsCore rows, %d software, %d software artifacts",
-            stat.name,
-            stat.database_bytes / 2**30,
-            stat.obscore_rows,
-            stat.row_counts.get("srcnet.software", 0),
-            stat.row_counts.get("srcnet.software_artifacts", 0),
-        )
-    log.info("done in %.0fs", elapsed)
+    for table in generate.TABLES:
+        log.info("%-28s %10d rows", table, stats.row_counts.get(table, 0))
+    log.info(
+        "%.2f GiB total, %d software rows of a possible %d, done in %.0fs",
+        stats.database_bytes / 2**30,
+        software_rows,
+        SOFTWARE_URI_CEILING,
+        time.monotonic() - started,
+    )
     return 0
 
 
