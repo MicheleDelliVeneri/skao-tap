@@ -13,10 +13,10 @@ from `db/init/*.sql`), `tap-api` and `tap-executor` (both installed with
 
 ## Helm (Kubernetes)
 
-A chart is provided under `deploy/helm/egernia`:
+A chart is provided under `etc/helm`:
 
 ```bash
-helm upgrade --install egernia deploy/helm/egernia \
+helm upgrade --install egernia etc/helm \
   --namespace egernia --create-namespace \
   --set tapApi.baseUrl=https://tap.example.org/tap
 helm test egernia -n egernia
@@ -31,7 +31,7 @@ helm test egernia -n egernia
 
     ```bash
     helm uninstall skao-tap -n skao-tap     # keeps PVCs unless they are deleted
-    helm upgrade --install egernia deploy/helm/egernia -n egernia --create-namespace
+    helm upgrade --install egernia etc/helm -n egernia --create-namespace
     ```
 
     The database and results PersistentVolumeClaims are named after the
@@ -204,7 +204,7 @@ cooperate instead of colliding. Give each service more than one replica and
 switch the results volume to `ReadWriteMany`:
 
 ```bash
-helm upgrade egernia deploy/helm/egernia \
+helm upgrade egernia etc/helm \
   --set tapApi.replicas=3 \
   --set tapExecutor.replicas=2 \
   --set "results.accessModes={ReadWriteMany}" \
@@ -271,7 +271,7 @@ postgres-operator), load `db/init/*.sql` into it once, and point the chart
 at it:
 
 ```bash
-helm upgrade egernia deploy/helm/egernia \
+helm upgrade egernia etc/helm \
   --set postgresql.enabled=false \
   --set externalDatabase.url=postgresql://tap:…@tap-db-rw:5432/tap
 ```
@@ -292,7 +292,7 @@ archives of the whole database to a dedicated PVC and prunes them after
 `backup.retentionDays`:
 
 ```bash
-helm upgrade egernia deploy/helm/egernia \
+helm upgrade egernia etc/helm \
   --set backup.enabled=true \
   --set backup.schedule="0 2 * * *" \
   --set backup.retentionDays=7 \

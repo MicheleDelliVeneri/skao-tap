@@ -141,7 +141,7 @@ demo-preflight:
 demo-deploy:
 	@test -n "$(DEMO_CONTEXT)" || { echo "no current kubectl context" >&2; exit 2; }
 	@echo "deploying to context '$(DEMO_CONTEXT)', namespace '$(DEMO_NS)', host '$(DEMO_HOST)'"
-	helm upgrade --install $(DEMO_RELEASE) $(CURDIR)/deploy/helm/egernia \
+	helm upgrade --install $(DEMO_RELEASE) $(CURDIR)/etc/helm \
 	  --namespace $(DEMO_NS) --create-namespace \
 	  --values $(DEMO_VALUES) \
 	  --set ingress.host=$(DEMO_HOST) \
