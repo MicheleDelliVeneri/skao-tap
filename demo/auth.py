@@ -44,16 +44,22 @@ def aapi_v1_url() -> str:
     return os.environ.get("AAPI_URL", "https://aapi.test/api").rstrip("/") + "/v1"
 
 
-def test_credentials() -> tuple[str, str]:
+def test_username() -> str:
     """The seeded IAM user the integration environment provides.
 
-    Offered to whoever is approving the device login, not submitted by this
-    module: without a browser there is no login form to fill in.
+    The username only, and deliberately not the password. Nothing here submits
+    one any more -- without a browser there is no login form to fill in -- so
+    the module has no reason to read `TEST_USER_PASSWORD`, and every reason not
+    to: this prompt is printed into notebook output that gets saved, committed
+    and shared. CodeQL flagged the earlier version for exactly that
+    (code-scanning alert 502), and it was right rather than pedantic, because
+    the value is an environment variable and a deployment that is not a dev
+    cluster can put a real credential in it.
+
+    Whoever approves the device login types their own password into IAM's own
+    form, which is the only place it belongs.
     """
-    return (
-        os.environ.get("TEST_USER", "test1"),
-        os.environ.get("TEST_USER_PASSWORD", "test"),
-    )
+    return os.environ.get("TEST_USER", "test1")
 
 
 def _verify() -> bool:
@@ -136,14 +142,14 @@ def mint_token(aapi_url: str) -> str:
     """
     import httpx
 
-    username, password = test_credentials()
     with httpx.Client(verify=_verify(), timeout=30, follow_redirects=True) as client:
         device = request_device_code(client, aapi_url)
         print(
             "\nEgernia needs a token. Open this and approve the request:\n\n"
             f"    {device['verification_uri_complete']}\n\n"
-            f"    (code {device['user_code']}; on a dev cluster the seeded user is"
-            f" {username} / {password})\n\n"
+            f"    (code {device['user_code']}; on a dev cluster, log in as"
+            f" {test_username()} -- IAM's own seed sets the password, see the"
+            " indigo-iam dev overlay)\n\n"
             f"Waiting up to {_login_timeout():.0f}s ...",
             flush=True,
         )
@@ -175,7 +181,7 @@ def resolve_token() -> tuple[str, str]:
             f"No token in {'/'.join(TOKEN_ENV_KEYS)} and the AAPI device login at "
             f"{url} failed ({type(exc).__name__}: {exc}). Set EGERNIA_TOKEN to skip "
             "the flow entirely. If AAPI itself is the problem: the seeded IAM user "
-            f"is {test_credentials()[0]}, and if IAM was redeployed, restart aapi so "
+            f"is {test_username()}, and if IAM was redeployed, restart aapi so "
             "it reloads iam-client-credentials."
         ) from exc
 
