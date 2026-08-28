@@ -63,6 +63,7 @@ of its own, so its metrics get a listener instead.
 | `tap_jobs{phase}` | gauge | The job store by phase. `phase="QUEUED"` is the queue's depth and what executors autoscale on — see [Autoscaling](autoscaling.md) |
 | `tap_oldest_queued_job_seconds` | gauge | How long the head of the queue has waited — a latency figure for dashboards and alerts, **not** a scaling signal: it saturates near one job's service time once the queue is draining at all (measured: 1,713 queued, oldest 54 s) |
 | `tap_jobs_completed_total{phase}` | counter | Job outcomes: `COMPLETED`, `ERROR` and `ABORTED`, labelled with the phase the job actually reached |
+| `tap_adql_translation_cache_hits_total` / `..._misses_total` | counter | ADQL translation is memoised per worker, and `hits / (hits + misses)` is the hit rate. It is here because nobody knew what it would be: no endpoint in reach carried real client traffic, so the cache shipped on the argument that a wrong guess costs ~2.6 µs against the 2.4 ms a hit saves, and the deployment reports the number instead of a benchmark predicting it. Misses is also the denominator `tap_adql_slow_parses_total` needs — a hit does not parse, so slow parses are per miss, not per request |
 
 Queue metrics are reported by the executor, because the queue is its subject.
 Every replica reports the same figures, so aggregate them with `max()` — they

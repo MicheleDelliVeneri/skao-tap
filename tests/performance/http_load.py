@@ -54,12 +54,46 @@ def _percentiles(values: list[float]) -> dict[str, float]:
     }
 
 
+def _parameter_pool(scale_rows: int, size: int) -> tuple[tuple[int, float, float], ...]:
+    """A fixed set of query parameters, so the query *texts* repeat.
+
+    ADQL has no bind parameters: the text is the whole input, so a workload
+    that randomises a cone centre per request is 0% repetitive by design --
+    which is what this harness has always been, deliberately, so a run measured
+    the service rather than a warm cache.
+
+    That is now one of two things worth measuring rather than the only one.
+    `translate()` memoises (#107), and the cache's value is linear in the hit
+    rate, which nobody can observe on traffic we generate. So the harness gets
+    a knob instead of an opinion: size 0 keeps the original behaviour and
+    measures the service at a hit rate of ~0 -- the case that has to show *no
+    regression*, because it is where the cache is pure overhead -- and a small
+    size drives the hit rate to ~1 and measures the ceiling. The real answer is
+    between them, at whatever hit rate `tap_adql_translation_cache_hits_total`
+    reports in the field.
+
+    Seeded independently of the workers so every worker draws from the same
+    pool: the cache is per process, so texts have to repeat *across* clients to
+    be repetitive at the service.
+    """
+    rng = random.Random(20260828)
+    return tuple(
+        (
+            rng.randint(1, scale_rows),
+            rng.uniform(0.0, 360.0),
+            rng.uniform(-80.0, 80.0),
+        )
+        for _ in range(size)
+    )
+
+
 def _worker(
     worker_id: int,
     base_url: str,
     deadline: float,
     scale_rows: int,
     timeout: float,
+    pool: tuple[tuple[int, float, float], ...] = (),
 ) -> dict:
     rng = random.Random(worker_id)
     # Aggregated in the worker rather than one dict per request: the
@@ -73,12 +107,20 @@ def _worker(
     bytes_read = 0
     with httpx.Client(timeout=timeout) as client:
         while time.monotonic() < deadline:
+            # The template is always drawn from the weighted mix, so the
+            # workload's shape is identical either way; only the diversity of
+            # the parameters -- and so of the query texts -- changes.
             name, template = rng.choices(WORKLOAD, weights=WEIGHTS, k=1)[0]
-            query = template.format(
-                source_id=rng.randint(1, scale_rows),
-                ra=rng.uniform(0.0, 360.0),
-                dec=rng.uniform(-80.0, 80.0),
+            source_id, ra, dec = (
+                rng.choice(pool)
+                if pool
+                else (
+                    rng.randint(1, scale_rows),
+                    rng.uniform(0.0, 360.0),
+                    rng.uniform(-80.0, 80.0),
+                )
             )
+            query = template.format(source_id=source_id, ra=ra, dec=dec)
             started = time.perf_counter()
             try:
                 response = client.post(
@@ -115,9 +157,20 @@ def main() -> int:
     parser.add_argument("--scale-rows", type=int, required=True)
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--distinct-params",
+        type=int,
+        default=0,
+        help="draw parameters from a fixed pool of this size so query texts"
+        " repeat; 0 (default) randomises every request, which is a translation"
+        " cache hit rate of ~0",
+    )
     args = parser.parse_args()
     if args.clients < 1 or args.duration < 1 or args.scale_rows < 1:
         parser.error("clients, duration, and scale-rows must be positive")
+    if args.distinct_params < 0:
+        parser.error("distinct-params must not be negative")
+    pool = _parameter_pool(args.scale_rows, args.distinct_params)
 
     started = time.monotonic()
     deadline = started + args.duration
@@ -133,6 +186,7 @@ def main() -> int:
                 deadline,
                 args.scale_rows,
                 args.timeout,
+                pool,
             )
             for worker_id in range(args.clients)
         ]
@@ -174,6 +228,10 @@ def main() -> int:
         "duration_seconds": args.duration,
         "elapsed_seconds": round(elapsed, 6),
         "scale_rows": args.scale_rows,
+        # 0 means every request had its own query text. Recorded because the
+        # translation cache's hit rate follows from it, so a report without it
+        # cannot be compared with another.
+        "distinct_params": args.distinct_params,
         "requests": requests,
         "successful": successful,
         "errors": requests - successful,

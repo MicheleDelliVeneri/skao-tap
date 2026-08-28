@@ -72,8 +72,33 @@ def _translate_and_inspect() -> set[str]:
 
 
 def _translate_single_pass() -> set[str]:
-    """What the service does now: both from one parse."""
+    """What the service does now: both from one parse.
+
+    The clear is what keeps this a translation benchmark. `translate()`
+    memoises (#107), so without it every round after the first is a dict
+    lookup and this reports ~0.1 us — a broken benchmark that reads as a
+    22,000x speedup. `cache_clear()` on a one-entry cache is sub-microsecond
+    against a ~2.5 ms parse.
+    """
+    translate.cache_clear()
     return set(translate(JOIN_QUERY).tables)
+
+
+def _translate_geometry_cold() -> str:
+    """The cone search, parsed every round. Same reason as above:
+    `adql_to_postgresql` is a one-line wrapper around `translate`."""
+    translate.cache_clear()
+    return adql_to_postgresql(CONE_SEARCH)
+
+
+def _translate_geometry_warm() -> str:
+    """The same cone search on a warm memo: what a cache hit costs.
+
+    Against `test_benchmark_adql_geometry_translation` this is the ratio the
+    cache is worth per avoided translation, measured rather than inferred. If
+    the two ever converge, the cache has fallen out of the path.
+    """
+    return adql_to_postgresql(CONE_SEARCH)
 
 
 def _serialize(fmt: str) -> bytes:
@@ -82,9 +107,16 @@ def _serialize(fmt: str) -> bytes:
 
 
 def test_benchmark_adql_geometry_translation(benchmark):
-    sql = benchmark(adql_to_postgresql, CONE_SEARCH).lower()
+    sql = benchmark(_translate_geometry_cold).lower()
     assert "spoint" in sql
     assert "scircle" in sql
+
+
+def test_benchmark_adql_geometry_translation_cache_hit(benchmark):
+    """The cold benchmark above with the memo left warm — #107's win."""
+    adql_to_postgresql(CONE_SEARCH)  # populate, outside the timed rounds
+    sql = benchmark(_translate_geometry_warm).lower()
+    assert "spoint" in sql
 
 
 def test_benchmark_adql_translation_and_table_inspection(benchmark):
@@ -562,7 +594,19 @@ def sync_request(monkeypatch):
         size = sum(len(m.get("body", b"")) for m in sent if m["type"] == "http.response.body")
         return status, size
 
-    def run(cls: str) -> tuple[int, int]:
+    def run(cls: str, cold: bool = True) -> tuple[int, int]:
+        """One request. Cold by default: the memo is cleared first.
+
+        `translate()` memoises since #107, and this fixture sends the
+        same nine texts every round — so left alone every benchmark below
+        would silently become a warm-cache measurement and stop being
+        comparable to the saturation profile the numbers exist to sit beside.
+        Clearing keeps them what they were. `cold=False` is the deliberate
+        opposite, and the difference between the two is what the cache is
+        worth end to end.
+        """
+        if cold:
+            translate.cache_clear()
         return loop.run_until_complete(one(cls))
 
     try:
@@ -594,6 +638,29 @@ def test_benchmark_sync_request_normal_mix(benchmark, sync_request):
 
     def one_request():
         return sync_request(next(cycle))
+
+    status, size = benchmark(one_request)
+    assert status == 200
+    assert size > 0
+
+
+def test_benchmark_sync_request_normal_mix_warm_cache(benchmark, sync_request):
+    """The same mix with the translation memo left warm — #107's ceiling.
+
+    The mix has nine distinct query texts, so after the first pass every
+    request is a hit: this is the mix at a hit rate of 1.0, which is the most
+    the cache can ever be worth and not a prediction of any deployment. The
+    honest reading is the *difference* from the benchmark above — that is the
+    translation cost removed per hit, end to end through the application
+    rather than around a single function — scaled by whatever hit rate
+    `tap_adql_translation_cache_hits_total` reports in the field.
+    """
+    cycle = itertools.cycle(MIX_CYCLE)
+    for cls in set(MIX_CYCLE):  # populate outside the timed rounds
+        sync_request(cls, cold=False)
+
+    def one_request():
+        return sync_request(next(cycle), cold=False)
 
     status, size = benchmark(one_request)
     assert status == 200

@@ -109,6 +109,23 @@ JOBS_COMPLETED = Counter(
     registry=REGISTRY,
 )
 
+ADQL_TRANSLATION_HITS = Counter(
+    "tap_adql_translation_cache_hits_total",
+    "ADQL translations served from the in-process memo instead of parsing.",
+    registry=REGISTRY,
+)
+
+ADQL_TRANSLATION_MISSES = Counter(
+    "tap_adql_translation_cache_misses_total",
+    "ADQL translations that had to parse. With the hits above this is the"
+    " cache's hit rate, which is the number nobody had when the cache was"
+    " built — no environment in reach carried real client traffic, so the"
+    " deployment reports it rather than a benchmark predicting it. It is also"
+    " the denominator tap_adql_slow_parses_total needs: a hit does not parse,"
+    " so slow parses are per miss, not per request.",
+    registry=REGISTRY,
+)
+
 ADQL_SLOW_PARSES = Counter(
     "tap_adql_slow_parses_total",
     "ADQL translations that parsed successfully only after falling back to"

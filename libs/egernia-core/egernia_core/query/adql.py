@@ -10,15 +10,22 @@ expressions, so the PostgreSQL backend needs the pg_sphere extension.
 """
 
 import logging
+import threading
 from dataclasses import dataclass
+from functools import lru_cache
 
 import antlr4
 from antlr4 import BailErrorStrategy, PredictionMode
 from queryparser.exceptions import QueryError, QuerySyntaxError
 from queryparser.postgresql import PostgreSQLQueryProcessor
 
+from ..config import settings
 from ..errors import QueryParseError
-from ..observability import ADQL_SLOW_PARSES
+from ..observability import (
+    ADQL_SLOW_PARSES,
+    ADQL_TRANSLATION_HITS,
+    ADQL_TRANSLATION_MISSES,
+)
 from ._adql import (
     ADQLLexer,
     ADQLParser,
@@ -136,18 +143,44 @@ class _TableCollector(ADQLParserListener):
         self.tables.add(ctx.getText())
 
 
-def translate(query: str) -> Translation:
-    """Translate ADQL to PostgreSQL and list the tables, parsing once.
+def _normalise(query: str) -> str:
+    """The cache key: the query with what cannot change its translation cut.
 
-    The table list is what the publication check needs, and it used to come
-    from a second ANTLR pass over the *translated* SQL — which cost more than
-    the translation itself (locally, 39 ms against 14 ms for a point lookup).
-    The translator keeps its parse tree, so the names come from a walk of the
-    tree that already exists.
+    Only leading whitespace and a trailing semicolon (with the whitespace
+    around it) — verified to translate identically, and neither can occur at
+    the end of a string literal, so neither can be part of one.
 
-    ADQL-side names are also the better source: TAP_SCHEMA publishes what a
-    client is allowed to write in a query, which is what this returns.
+    Deliberately *not* case-folded and *not* whitespace-collapsed, though
+    #107 asked for both. Translation is not case-insensitive where it
+    matters: ``name = 'AbC'`` and ``name = 'abc'`` translate to different SQL,
+    so folding the key would serve one query the other's results. Collapsing
+    runs of whitespace has the same flaw inside a literal. Turning more
+    near-misses into hits means a parameterising translator, which is a much
+    larger change than this one.
     """
+    return query.lstrip().rstrip("; \t\n\r\f\v")
+
+
+#: Set by :func:`translate` before the call and cleared by the body below, so
+#: the caller learns whether it got a hit without reading a shared counter.
+#: `lru_cache` runs the wrapped body on the *calling* thread, so a thread-local
+#: is exact where a before/after read of `cache_info().misses` is not: the
+#: request path is `run_in_threadpool(prepare_query, ...)` at five call sites,
+#: and a miss holds its window open for ~2.5 ms, during which every concurrent
+#: hit reads the miss as its own. Measured: ~1 hit in 8,000 misreported at a
+#: 0.7% miss rate, always as a miss, so the bias understated exactly the number
+#: these counters exist to report. This version cannot misreport, and is
+#: cheaper -- one attribute write against two `cache_info()` calls.
+_outcome = threading.local()
+
+
+@lru_cache(maxsize=settings.translation_cache_size)
+def _translated(query: str) -> Translation:
+    """The memoised translation. Call :func:`translate`, not this.
+
+    The body runs only on a miss, which is what makes the flag exact.
+    """
+    _outcome.hit = False
     try:
         translator = _Translator(query)
         sql = translator.to_postgresql()
@@ -161,6 +194,43 @@ def translate(query: str) -> Translation:
         tables=_tables_from_tree(translator),
         geometry_columns=translator.geometry_columns,
     )
+
+
+def translate(query: str) -> Translation:
+    """Translate ADQL to PostgreSQL and list the tables, parsing once.
+
+    The table list is what the publication check needs, and it used to come
+    from a second ANTLR pass over the *translated* SQL — which cost more than
+    the translation itself (locally, 39 ms against 14 ms for a point lookup).
+    The translator keeps its parse tree, so the names come from a walk of the
+    tree that already exists.
+
+    ADQL-side names are also the better source: TAP_SCHEMA publishes what a
+    client is allowed to write in a query, which is what this returns.
+
+    **The result is memoised, and that rests on translation being pure.** This
+    is a function of the query text alone: it consults no TAP_SCHEMA, no
+    connection and no principal, and returns a frozen ``Translation``, so a
+    hit is indistinguishable from a miss. Anything that makes it depend on
+    something else — a column lookup, per-user behaviour, a mutable field on
+    ``Translation`` — breaks the cache silently, serving one caller another's
+    answer. Add it in the caller, not here. ``tests/unit/test_adql.py`` pins
+    the property.
+
+    Failures are never cached: ``lru_cache`` stores nothing when the call
+    raises, so a ``QueryParseError`` re-parses every time and a client cannot
+    fill the cache with its own mistakes.
+    """
+    _outcome.hit = True
+    result = _translated(_normalise(query))
+    (ADQL_TRANSLATION_HITS if _outcome.hit else ADQL_TRANSLATION_MISSES).inc()
+    return result
+
+
+# So callers, tests and the microbenchmarks reach the cache through the public
+# name rather than the private one.
+translate.cache_clear = _translated.cache_clear
+translate.cache_info = _translated.cache_info
 
 
 def _tables_from_tree(translator: ADQLQueryTranslator) -> frozenset[str]:

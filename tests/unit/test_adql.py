@@ -184,6 +184,9 @@ def test_a_query_the_fast_path_cannot_handle_falls_back(monkeypatch):
     def unusable(self):
         raise RuntimeError("pretend SLL could not decide")
 
+    # `expected` above just cached this text, so without the clear the call
+    # below is a hit and never reaches the fast path at all.
+    adql_module.translate.cache_clear()
     monkeypatch.setattr(adql_module._Translator, "_parse_sll", unusable)
     before = ADQL_SLOW_PARSES._value.get()
     assert adql_module.translate(query).sql == expected
@@ -525,3 +528,147 @@ def test_intersects_between_two_areas_is_unchanged():
     ).sql
     assert " && " in positive and " @ " not in positive
     assert " !&& " in negative
+
+
+# ---------------------------------------------------------------------------
+# The translation memo (#107)
+# ---------------------------------------------------------------------------
+#
+# The cache was shipped without a measured hit rate, because no environment in
+# reach carried real client traffic to measure one on. What carries it instead
+# is that a hit cannot differ from a miss — translation is pure and
+# `Translation` is frozen. These tests are what keeps that true, so they are
+# about the property, not about the speed.
+
+
+CACHED_QUERY = "SELECT TOP 7 ra, dec FROM ska.continuum_sources WHERE flux > 1"
+
+
+def test_a_repeated_translation_returns_the_very_same_object():
+    """A hit is the same frozen object, not an equal copy.
+
+    This is the whole safety argument in one assertion: if it holds, no caller
+    can tell a hit from a miss, so the cache cannot change an answer.
+    """
+    first = translate(CACHED_QUERY)
+    second = translate(CACHED_QUERY)
+    assert first is second
+
+
+def test_the_translation_is_frozen():
+    """Because a mutable one would let a caller edit every later hit."""
+    import dataclasses
+
+    translation = translate(CACHED_QUERY)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        translation.sql = "SELECT 1"
+
+
+def test_a_failed_translation_is_not_cached():
+    """A 4xx must not be storable, or a client can fill the cache with typos.
+
+    `lru_cache` stores nothing when the call raises, so this is free — the test
+    exists so a later refactor that returns a sentinel instead of raising
+    cannot break it quietly.
+    """
+    translate.cache_clear()
+    for _ in range(2):
+        with pytest.raises(QueryParseError):
+            translate("SELECT FROM WHERE")
+    info = translate.cache_info()
+    assert info.currsize == 0
+    assert info.misses == 2
+
+
+def test_the_cache_is_bounded():
+    """A per-worker in-process cache with a stated ceiling, not a leak."""
+    from egernia_core.config import settings
+
+    assert translate.cache_info().maxsize == settings.translation_cache_size
+    assert 0 <= settings.translation_cache_size < 100_000
+
+
+def test_a_trailing_semicolon_and_stray_whitespace_hit_the_same_entry():
+    """The only normalisation there is, and it is verified rather than assumed."""
+    translate.cache_clear()
+    base = translate(CACHED_QUERY)
+    for variant in (
+        CACHED_QUERY + ";",
+        CACHED_QUERY + " ;  ",
+        "  " + CACHED_QUERY,
+        "\n" + CACHED_QUERY,
+    ):
+        assert translate(variant) is base, variant
+    assert translate.cache_info().currsize == 1
+
+
+def test_queries_differing_only_in_literal_case_are_not_merged():
+    """Why the key is not case-folded, contrary to what the package asked for.
+
+    `name = 'AbC'` and `name = 'abc'` translate to *different* SQL, so a
+    case-folded key would hand one query the other's translation — a wrong
+    result, not a near-miss converted into a hit.
+    """
+    upper = translate("SELECT a FROM t WHERE name = 'AbC'")
+    lower = translate("SELECT a FROM t WHERE name = 'abc'")
+    assert upper.sql != lower.sql
+    assert "'AbC'" in upper.sql and "'abc'" in lower.sql
+
+
+def test_hits_and_misses_are_counted():
+    """The counters are the deliverable: a deployment reports its own hit rate."""
+    from egernia_core.observability import ADQL_TRANSLATION_HITS, ADQL_TRANSLATION_MISSES
+
+    translate.cache_clear()
+    hits, misses = ADQL_TRANSLATION_HITS._value.get(), ADQL_TRANSLATION_MISSES._value.get()
+    translate(CACHED_QUERY)
+    translate(CACHED_QUERY)
+    assert ADQL_TRANSLATION_MISSES._value.get() == misses + 1
+    assert ADQL_TRANSLATION_HITS._value.get() == hits + 1
+
+
+def test_the_hit_and_miss_split_is_exact_under_threads():
+    """The counters are the deliverable, so they must survive the real path.
+
+    `prepare_query` is called as `run_in_threadpool(prepare_query, ...)` at
+    five call sites, so `translate()` runs concurrently. The first version of
+    this read `cache_info().misses` before and after the call and inferred a
+    hit from "misses did not move" — which a *concurrent* miss falsifies, and a
+    miss holds its window open for ~2.5 ms. Measured before the fix: ~1 hit in
+    8,000 counted as a miss at a 0.7% miss rate, always in that direction, so
+    the bias understated exactly the number the counters exist to report.
+
+    Threads hitting a primed key while others miss on fresh keys is the shape
+    that produced it, so it is the shape pinned here.
+    """
+    import itertools
+    import threading
+
+    from egernia_core.observability import ADQL_TRANSLATION_HITS, ADQL_TRANSLATION_MISSES
+
+    hot = "SELECT TOP 5 ra FROM ska.continuum_sources WHERE flux > 1"
+    translate.cache_clear()
+    translate(hot)
+    hits, misses = ADQL_TRANSLATION_HITS._value.get(), ADQL_TRANSLATION_MISSES._value.get()
+
+    cold_texts = itertools.count()
+    barrier = threading.Barrier(6)
+
+    def hitter():
+        barrier.wait()
+        for _ in range(500):
+            translate(hot)
+
+    def misser():
+        barrier.wait()
+        for _ in range(10):
+            translate(f"SELECT TOP {next(cold_texts) + 2} dec FROM ska.continuum_sources")
+
+    threads = [threading.Thread(target=f) for f in [hitter] * 4 + [misser] * 2]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert ADQL_TRANSLATION_HITS._value.get() - hits == 4 * 500
+    assert ADQL_TRANSLATION_MISSES._value.get() - misses == 2 * 10

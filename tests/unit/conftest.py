@@ -477,6 +477,21 @@ class FakeDB:
         return FakeResult()
 
 
+@pytest.fixture(autouse=True)
+def _cold_translation_cache():
+    """Every test gets an empty ADQL translation memo.
+
+    `translate()` memoises (#107), so without this a test that asserts
+    on what a *parse* did — that SLL ran once, that a fallback was counted —
+    passes or fails on whether an earlier test happened to translate the same
+    text. Two did. Clearing per test makes the parse-time assertions mean what
+    they say; a test that wants a hit populates the cache itself.
+    """
+    from egernia_core.query.adql import translate
+
+    translate.cache_clear()
+
+
 @pytest.fixture
 def fake_db(monkeypatch):
     db = FakeDB()
