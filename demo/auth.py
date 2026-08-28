@@ -63,8 +63,22 @@ def test_username() -> str:
 
 
 def _verify() -> bool:
-    """TLS verification, spelled the way `scaling_demo.py` spells it."""
-    return os.environ.get("EGERNIA_INSECURE_TLS", "0") not in ("1", "true", "yes")
+    """TLS verification for the *auth* calls, which is not the same question.
+
+    Deliberately **not** `EGERNIA_INSECURE_TLS`, the switch `scaling_demo.py`
+    uses for its own requests. That one exists because egernia's ingress on a
+    dev cluster has no `tls:` section at all, so nginx answers 443 with its
+    default self-signed certificate and httpx refuses it. AAPI and IAM are a
+    different matter: they are behind the cluster's own CA, which the notebook
+    trusts (`REQUESTS_CA_BUNDLE` is set), so they verify fine.
+
+    Reading the egernia switch here would mean a bad certificate on the *data*
+    endpoint silently turning off verification on the leg that carries the
+    token exchange -- the one request in this module where a MITM gets
+    something worth having. So this defaults to verifying, and has its own
+    escape hatch for the case where AAPI itself is untrusted.
+    """
+    return os.environ.get("EGERNIA_AAPI_INSECURE_TLS", "0") not in ("1", "true", "yes")
 
 
 def _login_timeout() -> float:

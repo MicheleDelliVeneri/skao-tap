@@ -485,6 +485,7 @@ demo = [
     { name = "httpx" },
     { name = "marimo" },
     { name = "pandas" },
+    { name = "pyarrow" },
     { name = "pyvo" },
 ]
 dev = [
@@ -520,6 +521,7 @@ demo = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "marimo", specifier = ">=0.9" },
     { name = "pandas", specifier = ">=2.2" },
+    { name = "pyarrow", specifier = ">=17.0" },
     { name = "pyvo", specifier = ">=1.5" },
 ]
 dev = [
