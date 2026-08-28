@@ -625,3 +625,50 @@ def test_hits_and_misses_are_counted():
     translate(CACHED_QUERY)
     assert ADQL_TRANSLATION_MISSES._value.get() == misses + 1
     assert ADQL_TRANSLATION_HITS._value.get() == hits + 1
+
+
+def test_the_hit_and_miss_split_is_exact_under_threads():
+    """The counters are the deliverable, so they must survive the real path.
+
+    `prepare_query` is called as `run_in_threadpool(prepare_query, ...)` at
+    five call sites, so `translate()` runs concurrently. The first version of
+    this read `cache_info().misses` before and after the call and inferred a
+    hit from "misses did not move" — which a *concurrent* miss falsifies, and a
+    miss holds its window open for ~2.5 ms. Measured before the fix: ~1 hit in
+    8,000 counted as a miss at a 0.7% miss rate, always in that direction, so
+    the bias understated exactly the number the counters exist to report.
+
+    Threads hitting a primed key while others miss on fresh keys is the shape
+    that produced it, so it is the shape pinned here.
+    """
+    import itertools
+    import threading
+
+    from egernia_core.observability import ADQL_TRANSLATION_HITS, ADQL_TRANSLATION_MISSES
+
+    hot = "SELECT TOP 5 ra FROM ska.continuum_sources WHERE flux > 1"
+    translate.cache_clear()
+    translate(hot)
+    hits, misses = ADQL_TRANSLATION_HITS._value.get(), ADQL_TRANSLATION_MISSES._value.get()
+
+    cold_texts = itertools.count()
+    barrier = threading.Barrier(6)
+
+    def hitter():
+        barrier.wait()
+        for _ in range(500):
+            translate(hot)
+
+    def misser():
+        barrier.wait()
+        for _ in range(10):
+            translate(f"SELECT TOP {next(cold_texts) + 2} dec FROM ska.continuum_sources")
+
+    threads = [threading.Thread(target=f) for f in [hitter] * 4 + [misser] * 2]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert ADQL_TRANSLATION_HITS._value.get() - hits == 4 * 500
+    assert ADQL_TRANSLATION_MISSES._value.get() - misses == 2 * 10

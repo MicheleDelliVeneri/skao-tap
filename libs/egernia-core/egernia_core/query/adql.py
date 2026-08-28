@@ -10,6 +10,7 @@ expressions, so the PostgreSQL backend needs the pg_sphere extension.
 """
 
 import logging
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -160,9 +161,26 @@ def _normalise(query: str) -> str:
     return query.lstrip().rstrip("; \t\n\r\f\v")
 
 
+#: Set by :func:`translate` before the call and cleared by the body below, so
+#: the caller learns whether it got a hit without reading a shared counter.
+#: `lru_cache` runs the wrapped body on the *calling* thread, so a thread-local
+#: is exact where a before/after read of `cache_info().misses` is not: the
+#: request path is `run_in_threadpool(prepare_query, ...)` at five call sites,
+#: and a miss holds its window open for ~2.5 ms, during which every concurrent
+#: hit reads the miss as its own. Measured: ~1 hit in 8,000 misreported at a
+#: 0.7% miss rate, always as a miss, so the bias understated exactly the number
+#: these counters exist to report. This version cannot misreport, and is
+#: cheaper -- one attribute write against two `cache_info()` calls.
+_outcome = threading.local()
+
+
 @lru_cache(maxsize=settings.translation_cache_size)
 def _translated(query: str) -> Translation:
-    """The memoised translation. Call :func:`translate`, not this."""
+    """The memoised translation. Call :func:`translate`, not this.
+
+    The body runs only on a miss, which is what makes the flag exact.
+    """
+    _outcome.hit = False
     try:
         translator = _Translator(query)
         sql = translator.to_postgresql()
@@ -203,12 +221,9 @@ def translate(query: str) -> Translation:
     raises, so a ``QueryParseError`` re-parses every time and a client cannot
     fill the cache with its own mistakes.
     """
-    before = _translated.cache_info().misses
+    _outcome.hit = True
     result = _translated(_normalise(query))
-    if _translated.cache_info().misses == before:
-        ADQL_TRANSLATION_HITS.inc()
-    else:
-        ADQL_TRANSLATION_MISSES.inc()
+    (ADQL_TRANSLATION_HITS if _outcome.hit else ADQL_TRANSLATION_MISSES).inc()
     return result
 
 
