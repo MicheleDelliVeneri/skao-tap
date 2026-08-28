@@ -42,6 +42,20 @@ demo = [
     "httpx>=0.27",
     "pyvo>=1.5",
     "altair>=5.4",
+    # pyarrow, explicitly: marimo's altair transformer converts a dataframe
+    # through arrow, and without it every chart logs "Failed to convert data to
+    # arrow format, falling back to CSV" and takes the slow path. Nothing
+    # noticed because pyarrow is already a dependency of egernia-core (parquet
+    # results), so a `uv sync` of this repository always had it -- but the
+    # deployment stack's `sync-notebooks` copies this demo *out* of the
+    # repository into the SRCNet notebook image, where it arrives with only
+    # this group's own dependencies.
+    #
+    # marimo's missing-package message asks for `altair[all]`, which also works
+    # and pulls vegafusion, a vl-convert Rust binary and the Jupyter widget
+    # stack -- 333 lines of lockfile for a transitive dependency this
+    # repository already pins. pyarrow is the package actually missing.
+    "pyarrow>=17.0",
     "pandas>=2.2",
 ]
 # The dataset generator in `dataset/`, whose seeding image installs the same two
