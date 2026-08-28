@@ -51,16 +51,19 @@ from prometheus_client import Counter
 
 from ..config import settings
 from ..db import StreamedRows
+from ..observability import REGISTRY
 from .results import RowLimiter, columns_from_cursor, stream
 
 COPY_DSV_FALLBACKS = Counter(
     "tap_copy_dsv_fallbacks_total",
     "DSV results served by the Python writer because the COPY path declined them",
     ["reason"],
+    registry=REGISTRY,
 )
 COPY_DSV_RESULTS = Counter(
     "tap_copy_dsv_results_total",
     "DSV results served by the server-side COPY path",
+    registry=REGISTRY,
 )
 
 

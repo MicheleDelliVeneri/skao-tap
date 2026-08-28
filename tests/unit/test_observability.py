@@ -405,3 +405,56 @@ def test_pool_wait_buckets_bracket_the_timeout(auth_settings):
     auth_settings(db_pool_timeout_s=2.5)
     rederived = _pool_wait_buckets()
     assert 2.5 in rederived and 3.0 in rederived
+
+
+def test_no_metric_of_ours_lands_in_the_default_registry():
+    """Every metric must be registered on the registry `/metrics` serves.
+
+    `observability.REGISTRY` is a private `CollectorRegistry`, and
+    `/metrics` renders that one. `prometheus_client.Counter(...)` without
+    `registry=` goes to the library's *default* registry instead, where it is
+    collected by nothing and served to no one — the metric exists, increments
+    correctly, and is invisible.
+
+    That is not a hypothetical. #110 shipped `tap_copy_dsv_results_total` and
+    `tap_copy_dsv_fallbacks_total` without `registry=REGISTRY`, and three
+    layers of tests missed it: the unit test rendered `generate_latest()` with
+    no argument, which is the default registry; the component tests read the
+    counter objects through `.collect()`, which bypasses registries entirely;
+    and every other test passes either way. Only the deployed integration
+    assertion failed, a day later.
+
+    So this checks the property none of those did — that nothing of ours is on
+    the default registry — rather than checking any particular metric, because
+    the next metric added is the one at risk.
+    """
+    import egernia_api.main  # noqa: F401 - registers everything the API exposes
+    import prometheus_client
+    from egernia_core.observability import REGISTRY
+
+    def series(registry) -> set[str]:
+        return {
+            sample.name.removesuffix("_total").removesuffix("_created")
+            for metric in registry.collect()
+            for sample in metric.samples
+            if sample.name.startswith("tap_")
+        }
+
+    stranded = series(prometheus_client.REGISTRY)
+    assert not stranded, (
+        f"{sorted(stranded)} are on prometheus_client's default registry, which "
+        "/metrics does not serve. Pass registry=REGISTRY when defining them."
+    )
+    # and the served registry is not empty, or the check above proves nothing
+    assert len(series(REGISTRY)) > 5
+
+
+def test_the_copy_dsv_counters_reach_the_served_registry():
+    """The two from #110 by name, so a failure says which metric regressed."""
+    import egernia_api.main  # noqa: F401
+    from egernia_core.observability import REGISTRY
+    from prometheus_client import generate_latest
+
+    body = generate_latest(REGISTRY).decode()
+    for name in ("tap_copy_dsv_results_total", "tap_copy_dsv_fallbacks_total"):
+        assert name in body, f"{name} is absent from what /metrics renders"
