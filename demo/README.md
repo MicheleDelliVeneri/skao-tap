@@ -24,25 +24,38 @@ exploration; the last cell removes them, and every row they cascade to, once
 ## `scaling_demo.py` in the SRCNet notebook
 
 The deployment stack's `sync-notebooks` copies this directory into the
-JupyterHub image's shared volume, where it appears as
-`work/demo/egernia/`. That route does **not** install this repository, so the
-demo arrives with only whatever the notebook image happens to carry — which is
-why the `demo` dependency group has to name everything the notebook needs
-outright, including `pyarrow`, which otherwise only reaches a local checkout as
-a dependency of `egernia-core`.
+JupyterHub image's shared volume, where it appears as `work/demo/egernia/`.
+That route does **not** install this repository, so the demo arrives with only
+whatever the singleuser image happens to carry.
 
-Measured on the dev cluster's notebook, in case the next thing to break is the
-environment rather than the code:
+`requirements.txt` beside this file is the manifest for that case — the only
+one that travels with the copied folder. It is kept in lockstep with the `demo`
+dependency group in `pyproject.toml` by
+`tests/unit/test_demo_requirements.py`, because the two lists are the same list
+in two formats and drift between them surfaces as a missing module in someone
+else's notebook rather than as a failure here.
+
+Measured on the dev cluster's notebook image, in case the next thing to break
+is the environment rather than the code:
 
 | | |
 | --- | --- |
-| present | `marimo`, `httpx`, `numpy`, `pyvo` |
-| missing, install with `pip install --user` | `altair`, `pandas`, `pyarrow` |
-| absent entirely | `fire`, `selenium`, `fastapi`, and any browser |
+| in the image | `marimo`, `httpx`, `numpy`, `pyvo`, `matplotlib`, `astropy`, `fastapi`, `fire` |
+| **not** in the image | `altair`, `pandas`, `pyarrow` — hence `requirements.txt` |
+| absent entirely | `selenium`, and any browser |
 
-The last row is why the token comes from the device flow with a human approving
-it rather than from `ska_src_auth_api.client.integration`, which drives Chrome
-through the IAM form: there is no Chrome, and not even the base client imports.
+Do not reach for `pip install --user` to fix the middle row. It appears to work
+and does not survive: the singleuser PVC is recreated with the server (observed
+— claim created `15:06:58`, pod started `15:07:01`), which takes `~/.local`
+with it. The packages have to come from the image or from an install step that
+runs on every pod start.
+
+The last row is why `auth.py` runs the device flow itself instead of using
+`ska_src_auth_api.client.integration`, which drives Chrome through the IAM form
+with Selenium: there is no Chrome. The base `AuthenticationClient` does import
+and does expose the three calls needed, so that would also be possible; doing
+it directly avoids depending on the auth API's source tree being mounted on
+`PYTHONPATH`, and on client errors arriving as `fastapi.HTTPException`.
 
 Two environment settings that route needs:
 
