@@ -139,7 +139,7 @@ def test_dsv_is_served_by_the_server_not_the_python_writer(session, anonymous, b
 
 
 def test_the_translation_cache_reports_its_own_hit_rate(session, anonymous, base_url):
-    """The counters that answer the question package 23 could not measure.
+    """The counters that answer the question #107 could not measure.
 
     A cache nobody can see the hit rate of is a change justified by argument
     forever. No environment in reach carries real client traffic, so the

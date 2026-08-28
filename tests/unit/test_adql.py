@@ -531,7 +531,7 @@ def test_intersects_between_two_areas_is_unchanged():
 
 
 # ---------------------------------------------------------------------------
-# The translation memo (package 23)
+# The translation memo (#107)
 # ---------------------------------------------------------------------------
 #
 # The cache was shipped without a measured hit rate, because no environment in

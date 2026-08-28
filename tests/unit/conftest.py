@@ -481,7 +481,7 @@ class FakeDB:
 def _cold_translation_cache():
     """Every test gets an empty ADQL translation memo.
 
-    `translate()` memoises (package 23), so without this a test that asserts
+    `translate()` memoises (#107), so without this a test that asserts
     on what a *parse* did — that SLL ran once, that a fallback was counted —
     passes or fails on whether an earlier test happened to translate the same
     text. Two did. Clearing per test makes the parse-time assertions mean what

@@ -150,7 +150,7 @@ def _normalise(query: str) -> str:
     the end of a string literal, so neither can be part of one.
 
     Deliberately *not* case-folded and *not* whitespace-collapsed, though
-    package 23 asked for both. Translation is not case-insensitive where it
+    #107 asked for both. Translation is not case-insensitive where it
     matters: ``name = 'AbC'`` and ``name = 'abc'`` translate to different SQL,
     so folding the key would serve one query the other's results. Collapsing
     runs of whitespace has the same flaw inside a literal. Turning more

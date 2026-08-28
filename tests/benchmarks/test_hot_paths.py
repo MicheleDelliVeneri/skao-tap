@@ -75,7 +75,7 @@ def _translate_single_pass() -> set[str]:
     """What the service does now: both from one parse.
 
     The clear is what keeps this a translation benchmark. `translate()`
-    memoises (package 23), so without it every round after the first is a dict
+    memoises (#107), so without it every round after the first is a dict
     lookup and this reports ~0.1 us — a broken benchmark that reads as a
     22,000x speedup. `cache_clear()` on a one-entry cache is sub-microsecond
     against a ~2.5 ms parse.
@@ -113,7 +113,7 @@ def test_benchmark_adql_geometry_translation(benchmark):
 
 
 def test_benchmark_adql_geometry_translation_cache_hit(benchmark):
-    """The cold benchmark above with the memo left warm — package 23's win."""
+    """The cold benchmark above with the memo left warm — #107's win."""
     adql_to_postgresql(CONE_SEARCH)  # populate, outside the timed rounds
     sql = benchmark(_translate_geometry_warm).lower()
     assert "spoint" in sql
@@ -597,7 +597,7 @@ def sync_request(monkeypatch):
     def run(cls: str, cold: bool = True) -> tuple[int, int]:
         """One request. Cold by default: the memo is cleared first.
 
-        `translate()` memoises since package 23, and this fixture sends the
+        `translate()` memoises since #107, and this fixture sends the
         same nine texts every round — so left alone every benchmark below
         would silently become a warm-cache measurement and stop being
         comparable to the saturation profile the numbers exist to sit beside.
@@ -645,7 +645,7 @@ def test_benchmark_sync_request_normal_mix(benchmark, sync_request):
 
 
 def test_benchmark_sync_request_normal_mix_warm_cache(benchmark, sync_request):
-    """The same mix with the translation memo left warm — package 23's ceiling.
+    """The same mix with the translation memo left warm — #107's ceiling.
 
     The mix has nine distinct query texts, so after the first pass every
     request is a hit: this is the mix at a hit rate of 1.0, which is the most
