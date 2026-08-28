@@ -75,6 +75,8 @@ def test_service_endpoints_answer(anonymous, base_url, path):
         "tap_db_connections_in_use",
         "tap_db_pool_wait_seconds",
         "tap_oldest_queued_job_seconds",
+        "tap_adql_translation_cache_hits_total",
+        "tap_adql_translation_cache_misses_total",
     ],
 )
 def test_metrics_expose_the_tap_series(anonymous, base_url, series):
@@ -133,6 +135,43 @@ def test_dsv_is_served_by_the_server_not_the_python_writer(session, anonymous, b
         "is off, or the result was declined -- "
         f"tap_copy_dsv_fallbacks_total went from {declined} to "
         f"{_metric(after, 'tap_copy_dsv_fallbacks')}."
+    )
+
+
+def test_the_translation_cache_reports_its_own_hit_rate(session, anonymous, base_url):
+    """The counters that answer the question package 23 could not measure.
+
+    A cache nobody can see the hit rate of is a change justified by argument
+    forever. No environment in reach carries real client traffic, so the
+    deployment reports the number itself — and this is the check that the
+    counters are wired to the request path rather than only to a unit test,
+    which is the failure mode #110's DSV counters actually had.
+
+    The same query text twice: the first may be either (another test, or an
+    earlier run, may have translated it), the second has to be a hit.
+    """
+    query = (
+        "SELECT TOP 5 obs_id FROM ivoa.obscore "
+        "WHERE 1 = CONTAINS(POINT('ICRS', s_ra, s_dec), "
+        "CIRCLE('ICRS', 12.5, -30.25, 0.5))"
+    )
+    assert sync_query(session, query).status_code == 200
+
+    before = anonymous.get(f"{base_url}/metrics", timeout=30).text
+    hits = _metric(before, "tap_adql_translation_cache_hits")
+    misses = _metric(before, "tap_adql_translation_cache_misses")
+    assert hits + misses > 0, (
+        "neither translation cache counter has moved: this deployment predates "
+        "the cache, or the counters are on the wrong registry"
+    )
+
+    assert sync_query(session, query).status_code == 200
+    after = anonymous.get(f"{base_url}/metrics", timeout=30).text
+    assert _metric(after, "tap_adql_translation_cache_hits") > hits, (
+        "a repeated query text did not hit the translation memo -- either "
+        "TAP_TRANSLATION_CACHE_SIZE is 0, or a second replica answered. "
+        f"misses went from {misses} to "
+        f"{_metric(after, 'tap_adql_translation_cache_misses')}."
     )
 
 

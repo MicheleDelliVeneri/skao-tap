@@ -77,6 +77,12 @@ class Settings:
     # field, and the way to measure the change on one host without moving
     # between two builds.
     copy_dsv: bool = _bool("TAP_COPY_DSV", True)
+    # Entries in the ADQL translation memo (see query/adql.py). Read once, at
+    # import: lru_cache fixes its size at decoration. 0 disables the cache
+    # without a rebuild -- every call becomes a miss and nothing is stored,
+    # which is the way back out and the way to measure the cache on one host.
+    # 512 entries with their keys measured ~473 KiB per worker.
+    translation_cache_size: int = _int("TAP_TRANSLATION_CACHE_SIZE", "512")
     default_exec_duration_s: int = _int("TAP_ASYNC_EXEC_DURATION", "600")
     job_retention_s: int = _int("TAP_JOB_RETENTION", str(7 * 24 * 3600))
     upload_max_rows: int = _int("TAP_UPLOAD_MAX_ROWS", "100000")
