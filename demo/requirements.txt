@@ -1,0 +1,24 @@
+# What the demos here need, for an environment that receives this folder and
+# nothing else.
+#
+# That is the normal case rather than an edge one: the deployment stack's
+# `sync-notebooks` copies `demo/` into the JupyterHub volume, where this
+# repository is not installed and the singleuser image carries whatever it
+# happens to carry. Three separate failures came from assuming otherwise --
+# a Selenium auth client that cannot exist there, then `altair`/`pandas`, then
+# `pyarrow` arriving only as a transitive dependency of egernia-core.
+#
+# Kept in lockstep with the `demo` dependency group in pyproject.toml by
+# tests/unit/test_demo_requirements.py, so editing one and not the other is a
+# test failure rather than a traceback in someone's notebook.
+
+marimo>=0.9
+httpx>=0.27
+pyvo>=1.5
+altair>=5.4
+# marimo's altair transformer converts dataframes through arrow; without this
+# every chart logs "Failed to convert data to arrow format" and takes the slow
+# path. Locally it arrives as a dependency of egernia-core, for parquet
+# results -- which is exactly why its absence here went unnoticed.
+pyarrow>=17.0
+pandas>=2.2
