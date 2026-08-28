@@ -15,6 +15,7 @@ ones `BrokerIntegrationClient` performs.
 from __future__ import annotations
 
 import os
+import time
 
 # The policy egernia is authorised against in the Permissions API — the `name`
 # inside etc/permissions/<env>/egernia/v1/, which is what PAPI resolves by, and
@@ -44,33 +45,113 @@ def aapi_v1_url() -> str:
 
 
 def test_credentials() -> tuple[str, str]:
-    """The seeded IAM user the integration environment provides."""
+    """The seeded IAM user the integration environment provides.
+
+    Offered to whoever is approving the device login, not submitted by this
+    module: without a browser there is no login form to fill in.
+    """
     return (
         os.environ.get("TEST_USER", "test1"),
         os.environ.get("TEST_USER_PASSWORD", "test"),
     )
 
 
-def mint_token(aapi_url: str, username: str, password: str) -> str:
-    """An `egernia`-audience token via the AAPI device flow.
+def _verify() -> bool:
+    """TLS verification, spelled the way `scaling_demo.py` spells it."""
+    return os.environ.get("EGERNIA_INSECURE_TLS", "0") not in ("1", "true", "yes")
 
-    Two steps, both the auth client's: the device flow yields a token whose
-    audience is the Authentication API itself, and the exchange turns it into
-    one this service's Permissions API policy will accept. Skipping the
-    exchange gets a valid token that egernia refuses, which reads like a
-    broken deployment rather than a wrong audience.
+
+def _login_timeout() -> float:
+    """How long to wait for someone to approve the device code."""
+    return float(os.environ.get("EGERNIA_DEVICE_LOGIN_TIMEOUT", "300"))
+
+
+def request_device_code(client, aapi_url: str) -> dict:
+    """Device flow step 1: ask AAPI for a code and the URL that approves it."""
+    response = client.get(f"{aapi_url}/login/device")
+    response.raise_for_status()
+    return response.json()
+
+
+def poll_for_token(client, aapi_url: str, device_code: str, deadline: float) -> str:
+    """Device flow step 2: poll until the approval lands, or the code expires.
+
+    A code nobody has approved yet answers 400, and one just approved can
+    answer 500 while IAM finishes processing it, so both are "not yet" and the
+    deadline is what ends the wait. Anything else is a real failure and is
+    raised with its body, because "device login failed" without the status is
+    the error this module used to give.
     """
-    from ska_src_auth_api.client.integration import AuthenticationIntegrationClient
+    while True:
+        response = client.get(f"{aapi_url}/token", params={"device_code": device_code})
+        if response.status_code == 200:
+            return response.json()["token"]["access_token"]
+        if response.status_code not in (400, 500):
+            raise RuntimeError(
+                f"AAPI answered {response.status_code} polling for the device token: "
+                f"{response.text[:200]}"
+            )
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                "the device code was never approved. Open the URL above and "
+                "approve it, or set EGERNIA_DEVICE_LOGIN_TIMEOUT higher than "
+                f"{_login_timeout():.0f}s."
+            )
+        time.sleep(2)
 
-    with AuthenticationIntegrationClient(aapi_url, username, password) as flow:
-        flow.authorize()
-        access_token = flow.fetch_token()["token"]["access_token"]
-        exchanged = flow.exchange_token(
-            service=EGERNIA_SERVICE,
-            version=EGERNIA_SERVICE_VERSION,
-            access_token=access_token,
+
+def exchange_token(client, aapi_url: str, access_token: str) -> str:
+    """The audience exchange, which is not optional.
+
+    The device flow yields a token whose audience is the Authentication API
+    itself. egernia's Permissions API policy refuses it, which reads like a
+    broken deployment rather than a wrong audience -- so this step is the
+    difference between a demo that works and a confusing 403.
+    """
+    response = client.get(
+        f"{aapi_url}/token/exchange/{EGERNIA_SERVICE}",
+        params={"version": EGERNIA_SERVICE_VERSION, "access_token": access_token},
+    )
+    response.raise_for_status()
+    return response.json()["access_token"]
+
+
+def mint_token(aapi_url: str) -> str:
+    """An `egernia`-audience token via the AAPI device flow, approved by a human.
+
+    This used to go through `ska_src_auth_api.client.integration`, which drives
+    a real Chrome through the IAM login form with Selenium so the flow needs
+    nobody present. That is right for the integration suite -- which has its
+    own copy of it in `tests/integration/conftest.py` -- and it cannot work
+    here: the notebook image has no `fire`, no `selenium`, no `fastapi` (so not
+    even the *base* client imports) and no browser of any kind, and this
+    repository's own venv has neither `selenium` nor `fire` either. The import
+    was unreachable in every environment the demo actually runs in.
+
+    The device grant does not need a browser *on the client*, which is the
+    whole point of it: the client shows a URL, a person opens it anywhere and
+    approves, and the client polls. A demo has a person in front of it, so the
+    step Selenium was automating is one the audience can watch happen -- and
+    the only dependency is `httpx`, which the notebook has.
+    """
+    import httpx
+
+    username, password = test_credentials()
+    with httpx.Client(verify=_verify(), timeout=30, follow_redirects=True) as client:
+        device = request_device_code(client, aapi_url)
+        print(
+            "\nEgernia needs a token. Open this and approve the request:\n\n"
+            f"    {device['verification_uri_complete']}\n\n"
+            f"    (code {device['user_code']}; on a dev cluster the seeded user is"
+            f" {username} / {password})\n\n"
+            f"Waiting up to {_login_timeout():.0f}s ...",
+            flush=True,
         )
-    return exchanged.json()["access_token"]
+        expires_in = float(device.get("expires_in") or _login_timeout())
+        deadline = time.monotonic() + min(_login_timeout(), expires_in)
+        access_token = poll_for_token(client, aapi_url, device["device_code"], deadline)
+        print("Approved.", flush=True)
+        return exchange_token(client, aapi_url, access_token)
 
 
 def resolve_token() -> tuple[str, str]:
@@ -86,29 +167,16 @@ def resolve_token() -> tuple[str, str]:
         if token:
             return token, f"using `{key}` from the environment"
 
-    username, password = test_credentials()
     url = aapi_v1_url()
     try:
-        return (
-            mint_token(url, username, password),
-            f"minted via the AAPI device flow at `{url}` as `{username}`",
-        )
-    except ImportError as exc:
-        raise RuntimeError(
-            f"No token in {'/'.join(TOKEN_ENV_KEYS)} and ska-src-auth-api's "
-            "integration client is not installed. Either set EGERNIA_TOKEN, or "
-            "install it from the SKAO index (it is not on PyPI): "
-            "`uv pip install --index "
-            "https://artefact.skao.int/repository/pypi-internal/simple "
-            "'ska-src-auth-api[integration]'`. In the deployment stack's test "
-            "image it is already present, installed from the submodule."
-        ) from exc
+        return mint_token(url), f"minted via the AAPI device flow at `{url}`"
     except Exception as exc:
         raise RuntimeError(
-            f"No token in {'/'.join(TOKEN_ENV_KEYS)} and the AAPI device login "
-            f"at {url} failed ({type(exc).__name__}: {exc}). The seeded IAM user "
-            f"is {username}; if IAM was redeployed, restart aapi so it reloads "
-            "iam-client-credentials."
+            f"No token in {'/'.join(TOKEN_ENV_KEYS)} and the AAPI device login at "
+            f"{url} failed ({type(exc).__name__}: {exc}). Set EGERNIA_TOKEN to skip "
+            "the flow entirely. If AAPI itself is the problem: the seeded IAM user "
+            f"is {test_credentials()[0]}, and if IAM was redeployed, restart aapi so "
+            "it reloads iam-client-credentials."
         ) from exc
 
 
