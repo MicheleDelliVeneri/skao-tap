@@ -85,7 +85,7 @@ def _(BASE, TAP, TOKEN_FROM, http, mo):
             f"problem, not a network one, so checking DNS will not help. The cluster "
             f"serves one certificate for all of its `.test` hosts, and this one is not "
             f"among its names.\n\n"
-            f"To carry on now: `EGERNIA_BASE_URL={BASE.replace("https://", "http://", 1)}`, "
+            f"To carry on now: `EGERNIA_BASE_URL={BASE.replace('https://', 'http://', 1)}`, "
             f"or keep https with `EGERNIA_INSECURE_TLS=1`. Neither touches "
             f"`EGERNIA_AAPI_INSECURE_TLS`, which governs the leg that carries the "
             f"token and should stay on.\n\n"
