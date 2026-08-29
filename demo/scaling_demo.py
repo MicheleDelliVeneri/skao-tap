@@ -690,6 +690,52 @@ def _(TAP, http, mo):
 
 
 @app.cell
+def _(TAP, http, mo, pd):
+    # Where to point the cone search, asked of the data instead of written
+    # into the notebook.
+    #
+    # It used to be a fixed (150, -30), which returned *zero rows* on this
+    # deployment — the seeded sky is clustered rather than uniform, so a
+    # position picked by hand lands in a hole and the panel below reports 0
+    # rows, 0 KiB, under prose explaining how the result grows with radius.
+    # A different seed puts the holes somewhere else, so no fixed position is
+    # safe; the only centre guaranteed to have data near it is one the data
+    # supplied. Any row will do, and clustering is what makes that true:
+    # measured across 20 sampled row positions on this deployment, the
+    # *least* populated had 55 neighbours within 0.05 degrees.
+    from io import StringIO as _SIO
+
+    _probe = http.post(
+        f"{TAP}/sync",
+        data={
+            "LANG": "ADQL",
+            "QUERY": "SELECT TOP 1 s_ra, s_dec FROM ivoa.obscore",
+            "RESPONSEFORMAT": "csv",
+        },
+        timeout=60,
+    )
+    try:
+        _first = pd.read_csv(_SIO(_probe.text)).iloc[0]
+        CENTRE = (round(float(_first["s_ra"]), 3), round(float(_first["s_dec"]), 3))
+        _centre_note = (
+            f"Centred on `({CENTRE[0]}, {CENTRE[1]})`, taken from the first row the "
+            "service returns — so the searches below have something to find whatever "
+            "sky this deployment was seeded with."
+        )
+    except Exception:
+        # An empty or unreadable answer is not a reason to stop: the cells
+        # below still demonstrate the query path, they just find nothing.
+        CENTRE = (150.0, -30.0)
+        _centre_note = (
+            "Could not read a position from `ivoa.obscore`, so the cone searches "
+            f"below use a fixed `({CENTRE[0]}, {CENTRE[1]})` and may well return "
+            "nothing. Check that the dataset finished seeding."
+        )
+    mo.md("### Where to look\n\n" + _centre_note)
+    return (CENTRE,)
+
+
+@app.cell
 def _(mo):
     radius = mo.ui.slider(
         0.05, 5.0, value=0.5, step=0.05, label="cone radius (degrees)", show_value=True
@@ -699,11 +745,11 @@ def _(mo):
 
 
 @app.cell
-def _(TAP, cone, http, mo, radius, time):
+def _(CENTRE, TAP, cone, http, mo, radius, time):
     _adql = (
         "SELECT TOP 1000 obs_publisher_did, s_ra, s_dec, em_min, em_max, access_url\n"
         "FROM ivoa.obscore\n"
-        f"WHERE {cone(150.0, -30.0, radius.value)}"
+        f"WHERE {cone(CENTRE[0], CENTRE[1], radius.value)}"
     )
     _t0 = time.perf_counter()
     _r = http.post(
