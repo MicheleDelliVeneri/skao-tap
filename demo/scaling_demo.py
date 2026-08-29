@@ -935,7 +935,7 @@ def _(mo):
 
 
 @app.cell
-async def _(TAP, VERIFY, alt, concurrency, cone, mo, pd, run_load, time, total):
+async def _(AUTH, TAP, VERIFY, alt, concurrency, cone, mo, pd, run_load, time, total):
     if not run_load.value:
         _panel = mo.md("_Idle._")
     else:
@@ -956,6 +956,10 @@ async def _(TAP, VERIFY, alt, concurrency, cone, mo, pd, run_load, time, total):
             async with _httpx.AsyncClient(
                 timeout=60,
                 verify=VERIFY,
+                # Same token as `http`: anonymousQueries is false in the dev
+                # stack, so an unauthenticated client scores 2000/2000 errors
+                # at a p50 that only measures how fast 401 comes back.
+                headers=AUTH,
                 limits=_httpx.Limits(max_connections=concurrency.value + 8),
             ) as client:
 
@@ -1016,6 +1020,205 @@ async def _(TAP, VERIFY, alt, concurrency, cone, mo, pd, run_load, time, total):
                     "A rising p95 with a flat request rate is queueing, not "
                     "slowness: the fleet is at its ceiling and the autoscaler has "
                     "not caught up. That gap is the thing worth watching."
+                ),
+            ]
+        )
+    _panel
+    return
+
+
+@app.cell
+def _(mo):
+    async_total = mo.ui.slider(
+        20, 2000, value=400, step=20, label="async jobs to queue", show_value=True
+    )
+    async_submitters = mo.ui.slider(
+        1, 64, value=16, step=1, label="concurrent submitters", show_value=True
+    )
+    run_async_load = mo.ui.run_button(label="queue them")
+    mo.vstack(
+        [
+            mo.md(
+                "### The other axis: a queue, not a request rate\n\n"
+                "The cell above scales the API, because `/sync` is answered "
+                "inside the request and ADQL translation is CPU-bound. An "
+                "async job is not answered in the request at all: the API "
+                "writes it to `uws.jobs` and hands back a URL, and an executor "
+                "claims it later. So the signal is the queue's *depth*, not "
+                "CPU, and what moves is the number of executors.\n\n"
+                "Submitting is cheap and running is not, which is the point — "
+                "these jobs go in far faster than they come out."
+            ),
+            async_total,
+            async_submitters,
+            run_async_load,
+        ]
+    )
+    return async_submitters, async_total, run_async_load
+
+
+@app.cell
+async def _(
+    AUTH,
+    PROM,
+    TAP,
+    VERIFY,
+    alt,
+    async_submitters,
+    async_total,
+    cone,
+    http,
+    mo,
+    pd,
+    run_async_load,
+    time,
+):
+    if not run_async_load.value:
+        _panel = mo.md("_Idle._")
+    elif not PROM:
+        _panel = mo.md(
+            "_This cell reads the queue depth and the executor count out of "
+            "Prometheus — the same two series the autoscaler reads. Set "
+            "`EGERNIA_PROMETHEUS_URL` and run it again._"
+        )
+    else:
+        import asyncio as _asyncio
+        import random as _random
+
+        import httpx as _httpx
+
+        # Heavier than the sync cell's TOP 50, deliberately: a job that finishes
+        # in milliseconds never forms a queue, and the queue is the whole
+        # subject here.
+        _jobs = [
+            "SELECT TOP 5000 obs_publisher_did, s_ra, s_dec, em_min, em_max "
+            f"FROM ivoa.obscore WHERE {cone(round(ra, 1), round(dec, 1), 5.0)}"
+            for ra, dec in [(_random.uniform(0, 360), _random.uniform(-80, 20)) for _ in range(64)]
+        ]
+
+        # The autoscaler's own signal, and the count of executors answering it.
+        # `up` rather than kube-state-metrics: this notebook already knows the
+        # executors are scraped -- that is where tap_jobs comes from -- so it
+        # needs nothing else installed to draw the second line. The job label
+        # is the Service's name because the executors are discovered by a
+        # ServiceMonitor; tap-api's PodMonitor labels its job differently.
+        _QUEUED = 'max(tap_jobs{phase="QUEUED",namespace="egernia"})'
+        _EXECUTORS = 'count(up{job="egernia-tap-executor-metrics"} == 1)'
+
+        def _instant(query):
+            _r = http.get(f"{PROM}/api/v1/query", params={"query": query}, timeout=15)
+            _result = _r.json()["data"]["result"]
+            return float(_result[0]["value"][1]) if _result else 0.0
+
+        async def _submit():
+            _limit = _asyncio.Semaphore(async_submitters.value)
+            _failed = 0
+            async with _httpx.AsyncClient(
+                timeout=60,
+                verify=VERIFY,
+                headers=AUTH,
+                limits=_httpx.Limits(max_connections=async_submitters.value + 8),
+            ) as client:
+
+                async def one(i):
+                    nonlocal _failed
+                    async with _limit:
+                        try:
+                            # PHASE=RUN queues the job in the request that
+                            # creates it (uws_api.create_job), so this is one
+                            # POST per job rather than create-then-phase.
+                            r = await client.post(
+                                f"{TAP}/async",
+                                data={
+                                    "LANG": "ADQL",
+                                    "QUERY": _jobs[i % len(_jobs)],
+                                    "PHASE": "RUN",
+                                },
+                                follow_redirects=False,
+                            )
+                            if r.status_code != 303:
+                                _failed += 1
+                        except Exception:
+                            _failed += 1
+
+                _started = time.perf_counter()
+                await _asyncio.gather(*(one(i) for i in range(async_total.value)))
+                return _failed, time.perf_counter() - _started
+
+        _failed, _submit_wall = await _submit()
+
+        # Then watch it drain. The deadline is a guard, not a target: a queue
+        # still deep when it expires is an answer about the ceiling, not a
+        # failure of the cell.
+        _samples, _t0, _empty_for = [], time.perf_counter(), 0
+        while time.perf_counter() - _t0 < 420:
+            _q = _instant(_QUEUED)
+            _samples.append(
+                {
+                    "t": time.perf_counter() - _t0,
+                    "queued": _q,
+                    "executors": _instant(_EXECUTORS),
+                }
+            )
+            # Three empty samples, not one: the gauge is scraped every 10s, so
+            # a single zero can be a stale sample taken before the last burst
+            # of jobs reached the table.
+            _empty_for = _empty_for + 1 if _q == 0 else 0
+            if _empty_for >= 3:
+                break
+            await _asyncio.sleep(2)
+
+        _df = pd.DataFrame(_samples)
+        _drained = _df["t"].iloc[-1] if _empty_for >= 3 else None
+        _chart = (
+            alt.layer(
+                alt.Chart(_df)
+                .mark_area(opacity=0.3, color="#4c78a8")
+                .encode(
+                    x=alt.X("t:Q", title="time since submit (s)"),
+                    y=alt.Y("queued:Q", title="jobs QUEUED"),
+                ),
+                alt.Chart(_df)
+                .mark_line(color="#f58518", strokeWidth=2)
+                .encode(x="t:Q", y=alt.Y("executors:Q", title="executors")),
+            )
+            .resolve_scale(y="independent")
+            .properties(height=240)
+        )
+
+        _panel = mo.vstack(
+            [
+                mo.hstack(
+                    [
+                        mo.stat(f"{async_total.value:,}", label="jobs queued", bordered=True),
+                        mo.stat(
+                            f"{async_total.value / _submit_wall:,.0f}/s",
+                            label="submitted at",
+                            bordered=True,
+                        ),
+                        mo.stat(
+                            f"{_drained:.0f} s" if _drained is not None else "still queued",
+                            label="drained in",
+                            bordered=True,
+                        ),
+                        mo.stat(
+                            f"{int(_df['executors'].max())}", label="peak executors", bordered=True
+                        ),
+                        mo.stat(f"{_failed}", label="submit failures", bordered=True),
+                    ]
+                ),
+                mo.ui.altair_chart(_chart, chart_selection=False),
+                mo.md(
+                    "The blue area is the backlog, the orange line the executors "
+                    "KEDA ran to clear it. The lag between them is honest and "
+                    "worth reading: the queue gauge is scraped on an interval, "
+                    "the HPA KEDA created for it syncs on another, and a new "
+                    "executor still has to be scheduled and started. Scaling out "
+                    "is a response to a backlog, never a way to avoid having "
+                    "one.\n\n"
+                    "The fall-off at the end is slower than the climb by design — "
+                    "KEDA holds a replica through a lull rather than removing it "
+                    "and paying to start it again."
                 ),
             ]
         )
