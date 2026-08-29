@@ -71,6 +71,36 @@ def _(BASE, TAP, TOKEN_FROM, http, mo):
     except Exception as exc:
         _reachable, _detail = False, f"{type(exc).__name__}: {exc}"
 
+    # A failed probe used to give one piece of advice -- check DNS -- which is
+    # wrong for the failure this deployment actually produces. The cluster
+    # serves a single certificate covering every `.test` host it knows about,
+    # so a host missing from that list resolves, connects, and is refused at
+    # the TLS handshake. "Check that the host resolves" sends the reader to
+    # look at something that was never broken.
+    if _reachable:
+        _advice = ""
+    elif "CERTIFICATE_VERIFY_FAILED" in _detail or "SSL" in _detail:
+        _advice = (
+            f"The host resolves and the ingress answered — this is a **certificate** "
+            f"problem, not a network one, so checking DNS will not help. The cluster "
+            f"serves one certificate for all of its `.test` hosts, and this one is not "
+            f"among its names.\n\n"
+            f"To carry on now: `EGERNIA_BASE_URL={BASE.replace("https://", "http://", 1)}`, "
+            f"or keep https with `EGERNIA_INSECURE_TLS=1`. Neither touches "
+            f"`EGERNIA_AAPI_INSECURE_TLS`, which governs the leg that carries the "
+            f"token and should stay on.\n\n"
+            f"The lasting fix is to add the host to the cluster certificate's "
+            f"`dnsNames` and let cert-manager reissue — note that a name present in "
+            f"the manifest but absent from the issued secret still reports "
+            f"`Ready=True`, because cert-manager is comparing against the live "
+            f"resource rather than the file."
+        )
+    else:
+        _advice = (
+            "This machine cannot see the service. Check that the host in "
+            "EGERNIA_BASE_URL resolves to the ingress address."
+        )
+
     mo.md(
         f"""
         # egernia — the whole service, from another machine
@@ -79,12 +109,7 @@ def _(BASE, TAP, TOKEN_FROM, http, mo):
 
         Credential: {TOKEN_FROM}.
 
-        {
-            ""
-            if _reachable
-            else "This machine cannot see the service. Check that the host in "
-            "EGERNIA_BASE_URL resolves to the ingress address."
-        }
+        {_advice}
 
         1. what a client can **discover**
         2. the four ways to **ask** it something
@@ -864,7 +889,7 @@ def _(mo):
 
 
 @app.cell
-def _(TAP, VERIFY, alt, concurrency, cone, mo, pd, run_load, time, total):
+async def _(TAP, VERIFY, alt, concurrency, cone, mo, pd, run_load, time, total):
     if not run_load.value:
         _panel = mo.md("_Idle._")
     else:
@@ -911,7 +936,12 @@ def _(TAP, VERIFY, alt, concurrency, cone, mo, pd, run_load, time, total):
                 await asyncio.gather(*(one(i) for i in range(total.value)))
                 return latencies, errors, time.perf_counter() - started
 
-        _lat, _errors, _wall = asyncio.run(_drive())
+        # `await`, not `asyncio.run`: marimo runs cells inside its own event
+        # loop, and asyncio.run refuses to nest ("cannot be called from a
+        # running event loop"). marimo supports top-level await in a cell
+        # declared `async def`, which is the whole fix -- verified against the
+        # marimo in this deployment's singleuser image rather than assumed.
+        _lat, _errors, _wall = await _drive()
         _df = pd.DataFrame(_lat, columns=["t", "latency_s"])
         _p = _df["latency_s"].quantile([0.5, 0.95, 0.99])
 
