@@ -71,6 +71,36 @@ def _(BASE, TAP, TOKEN_FROM, http, mo):
     except Exception as exc:
         _reachable, _detail = False, f"{type(exc).__name__}: {exc}"
 
+    # A failed probe used to give one piece of advice -- check DNS -- which is
+    # wrong for the failure this deployment actually produces. The cluster
+    # serves a single certificate covering every `.test` host it knows about,
+    # so a host missing from that list resolves, connects, and is refused at
+    # the TLS handshake. "Check that the host resolves" sends the reader to
+    # look at something that was never broken.
+    if _reachable:
+        _advice = ""
+    elif "CERTIFICATE_VERIFY_FAILED" in _detail or "SSL" in _detail:
+        _advice = (
+            f"The host resolves and the ingress answered — this is a **certificate** "
+            f"problem, not a network one, so checking DNS will not help. The cluster "
+            f"serves one certificate for all of its `.test` hosts, and this one is not "
+            f"among its names.\n\n"
+            f"To carry on now: `EGERNIA_BASE_URL={BASE.replace('https://', 'http://', 1)}`, "
+            f"or keep https with `EGERNIA_INSECURE_TLS=1`. Neither touches "
+            f"`EGERNIA_AAPI_INSECURE_TLS`, which governs the leg that carries the "
+            f"token and should stay on.\n\n"
+            f"The lasting fix is to add the host to the cluster certificate's "
+            f"`dnsNames` and let cert-manager reissue — note that a name present in "
+            f"the manifest but absent from the issued secret still reports "
+            f"`Ready=True`, because cert-manager is comparing against the live "
+            f"resource rather than the file."
+        )
+    else:
+        _advice = (
+            "This machine cannot see the service. Check that the host in "
+            "EGERNIA_BASE_URL resolves to the ingress address."
+        )
+
     mo.md(
         f"""
         # egernia — the whole service, from another machine
@@ -79,12 +109,7 @@ def _(BASE, TAP, TOKEN_FROM, http, mo):
 
         Credential: {TOKEN_FROM}.
 
-        {
-            ""
-            if _reachable
-            else "This machine cannot see the service. Check that the host in "
-            "EGERNIA_BASE_URL resolves to the ingress address."
-        }
+        {_advice}
 
         1. what a client can **discover**
         2. the four ways to **ask** it something
@@ -665,6 +690,52 @@ def _(TAP, http, mo):
 
 
 @app.cell
+def _(TAP, http, mo, pd):
+    # Where to point the cone search, asked of the data instead of written
+    # into the notebook.
+    #
+    # It used to be a fixed (150, -30), which returned *zero rows* on this
+    # deployment — the seeded sky is clustered rather than uniform, so a
+    # position picked by hand lands in a hole and the panel below reports 0
+    # rows, 0 KiB, under prose explaining how the result grows with radius.
+    # A different seed puts the holes somewhere else, so no fixed position is
+    # safe; the only centre guaranteed to have data near it is one the data
+    # supplied. Any row will do, and clustering is what makes that true:
+    # measured across 20 sampled row positions on this deployment, the
+    # *least* populated had 55 neighbours within 0.05 degrees.
+    from io import StringIO as _SIO
+
+    _probe = http.post(
+        f"{TAP}/sync",
+        data={
+            "LANG": "ADQL",
+            "QUERY": "SELECT TOP 1 s_ra, s_dec FROM ivoa.obscore",
+            "RESPONSEFORMAT": "csv",
+        },
+        timeout=60,
+    )
+    try:
+        _first = pd.read_csv(_SIO(_probe.text)).iloc[0]
+        CENTRE = (round(float(_first["s_ra"]), 3), round(float(_first["s_dec"]), 3))
+        _centre_note = (
+            f"Centred on `({CENTRE[0]}, {CENTRE[1]})`, taken from the first row the "
+            "service returns — so the searches below have something to find whatever "
+            "sky this deployment was seeded with."
+        )
+    except Exception:
+        # An empty or unreadable answer is not a reason to stop: the cells
+        # below still demonstrate the query path, they just find nothing.
+        CENTRE = (150.0, -30.0)
+        _centre_note = (
+            "Could not read a position from `ivoa.obscore`, so the cone searches "
+            f"below use a fixed `({CENTRE[0]}, {CENTRE[1]})` and may well return "
+            "nothing. Check that the dataset finished seeding."
+        )
+    mo.md("### Where to look\n\n" + _centre_note)
+    return (CENTRE,)
+
+
+@app.cell
 def _(mo):
     radius = mo.ui.slider(
         0.05, 5.0, value=0.5, step=0.05, label="cone radius (degrees)", show_value=True
@@ -674,11 +745,11 @@ def _(mo):
 
 
 @app.cell
-def _(TAP, cone, http, mo, radius, time):
+def _(CENTRE, TAP, cone, http, mo, radius, time):
     _adql = (
         "SELECT TOP 1000 obs_publisher_did, s_ra, s_dec, em_min, em_max, access_url\n"
         "FROM ivoa.obscore\n"
-        f"WHERE {cone(150.0, -30.0, radius.value)}"
+        f"WHERE {cone(CENTRE[0], CENTRE[1], radius.value)}"
     )
     _t0 = time.perf_counter()
     _r = http.post(
@@ -864,7 +935,7 @@ def _(mo):
 
 
 @app.cell
-def _(TAP, VERIFY, alt, concurrency, cone, mo, pd, run_load, time, total):
+async def _(TAP, VERIFY, alt, concurrency, cone, mo, pd, run_load, time, total):
     if not run_load.value:
         _panel = mo.md("_Idle._")
     else:
@@ -911,7 +982,12 @@ def _(TAP, VERIFY, alt, concurrency, cone, mo, pd, run_load, time, total):
                 await asyncio.gather(*(one(i) for i in range(total.value)))
                 return latencies, errors, time.perf_counter() - started
 
-        _lat, _errors, _wall = asyncio.run(_drive())
+        # `await`, not `asyncio.run`: marimo runs cells inside its own event
+        # loop, and asyncio.run refuses to nest ("cannot be called from a
+        # running event loop"). marimo supports top-level await in a cell
+        # declared `async def`, which is the whole fix -- verified against the
+        # marimo in this deployment's singleuser image rather than assumed.
+        _lat, _errors, _wall = await _drive()
         _df = pd.DataFrame(_lat, columns=["t", "latency_s"])
         _p = _df["latency_s"].quantile([0.5, 0.95, 0.99])
 
