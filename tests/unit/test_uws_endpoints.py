@@ -70,6 +70,25 @@ def test_run_rejected_unless_pending_or_held(client, fake_db):
     assert "cannot start job in phase EXECUTING" in response.text
 
 
+def test_abort_wins_race_with_run(client, fake_db, monkeypatch):
+    from egernia_core import uws
+
+    job_id = _create_job(client)
+    update_job = uws.update_job
+
+    def abort_before_update(conn, target, expected_phases=None, **fields):
+        if expected_phases is not None:
+            fake_db.jobs[target]["phase"] = "ABORTED"
+        return update_job(conn, target, expected_phases=expected_phases, **fields)
+
+    monkeypatch.setattr(uws, "update_job", abort_before_update)
+    response = client.post(f"/tap/async/{job_id}/phase", data={"PHASE": "RUN"})
+
+    assert response.status_code == 400
+    assert "cannot start job in phase ABORTED" in response.text
+    assert fake_db.jobs[job_id]["phase"] == "ABORTED"
+
+
 def test_execution_duration_roundtrip(client, fake_db):
     job_id = _create_job(client)
     assert client.get(f"/tap/async/{job_id}/executionduration").text == "600"

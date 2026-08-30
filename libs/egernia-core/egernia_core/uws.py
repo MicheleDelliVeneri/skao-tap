@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import time
+from collections.abc import Iterable
 from xml.etree import ElementTree as ET
 
 from .auth.context import current_job_viewer
@@ -169,15 +170,23 @@ def list_jobs(
     return [_row_to_job(r) for r in conn.execute(sql, args).fetchall()]
 
 
-def update_job(conn, job_id: str, **fields) -> None:
+def update_job(conn, job_id: str, expected_phases: Iterable[str] | None = None, **fields) -> bool:
     if not fields:
-        return
+        return True
     _check_owner_of(conn, job_id)
     sets = ", ".join(f"{k} = %s" for k in fields)
     values = [json.dumps(v) if k == "parameters" else v for k, v in fields.items()]
-    cur = conn.execute(f"UPDATE uws.jobs SET {sets} WHERE job_id = %s", (*values, job_id))
-    if cur.rowcount == 0:
+    where = "job_id = %s"
+    args = [*values, job_id]
+    if expected_phases is not None:
+        where += " AND phase = ANY(%s)"
+        args.append(list(expected_phases))
+    cur = conn.execute(f"UPDATE uws.jobs SET {sets} WHERE {where}", args)
+    if cur.rowcount == 0 and expected_phases is None:
         raise NotFoundError(f"job {job_id} not found")
+    if cur.rowcount == 0:
+        _check_owner_of(conn, job_id)  # distinguish a missing job from a lost race
+    return cur.rowcount == 1
 
 
 CANCEL_RETRIES = 5

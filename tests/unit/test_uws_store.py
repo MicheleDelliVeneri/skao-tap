@@ -37,6 +37,10 @@ def test_update_job(fake_db):
     with pool().connection() as conn:
         uws.update_job(conn, job["job_id"], phase="QUEUED", query_sql="SELECT 1")
         assert fake_db.jobs[job["job_id"]]["phase"] == "QUEUED"
+        assert not uws.update_job(
+            conn, job["job_id"], expected_phases=("PENDING",), phase="EXECUTING"
+        )
+        assert fake_db.jobs[job["job_id"]]["phase"] == "QUEUED"
         uws.update_job(conn, job["job_id"])  # no fields: no-op
         with pytest.raises(NotFoundError):
             uws.update_job(conn, "0123456789abcdef", phase="QUEUED")

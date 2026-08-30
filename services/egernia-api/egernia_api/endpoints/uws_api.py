@@ -63,16 +63,18 @@ def queue_job(conn, job: dict, prepared: dict) -> None:
     an ADQL parse back on the event loop, since every caller is an async
     handler. Required means a future caller cannot reintroduce that quietly.
     """
-    if job["phase"] not in ("PENDING", "HELD"):
-        raise UsageError(f"cannot start job in phase {job['phase']}")
-    uws.update_job(
+    updated = uws.update_job(
         conn,
         job["job_id"],
+        expected_phases=("PENDING", "HELD"),
         phase="QUEUED",
         query_sql=prepared["sql"],
         # from the parse the API already did, so the executor never parses
         query_tables=sorted(prepared["tables"]),
     )
+    if not updated:
+        current = uws.get_job(conn, job["job_id"])
+        raise UsageError(f"cannot start job in phase {current['phase']}")
 
 
 WAIT_POLL_S = 1.0
