@@ -21,7 +21,7 @@ Parameters:
 | `RESPONSEFORMAT` (or `FORMAT`) | no | `votable` (default), `csv`, `tsv`, `json`, `parquet`, `arrow`, or the equivalent MIME types |
 | `MAXREC` | no | Row limit; `0` returns metadata only; overflow is flagged with `QUERY_STATUS=OVERFLOW` |
 | `REQUEST` | no | `doQuery` accepted for TAP 1.0 compatibility |
-| `UPLOAD` | no | Table upload: `name,uri` pairs separated by `;` (repeatable). The uri is `param:<part>` for an inline multipart VOTable or an `http(s)` URL; the table is queried as `TAP_UPLOAD.<name>`. TABLEDATA serialization only. Limits: `TAP_UPLOAD_MAX_ROWS` (default 100000) and `TAP_UPLOAD_MAX_BYTES` (default 32 MiB) |
+| `UPLOAD` | no | Table upload: repeatable `name,uri` pairs separated by `;`. Use `param:<part>` for inline multipart VOTables. HTTP(S) sources are disabled unless their exact hosts are listed in `TAP_UPLOAD_ALLOWED_HOSTS`. Tables are queried as `TAP_UPLOAD.<name>`; TABLEDATA only. Limits: `TAP_UPLOAD_MAX_ROWS` (100000), `TAP_UPLOAD_MAX_BYTES` (32 MiB per source), `TAP_UPLOAD_MAX_TOTAL_BYTES` (32 MiB total), and `TAP_UPLOAD_MAX_SOURCES` (8). |
 
 ## Asynchronous queries (UWS 1.1)
 

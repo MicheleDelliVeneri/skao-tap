@@ -87,6 +87,14 @@ class Settings:
     job_retention_s: int = _int("TAP_JOB_RETENTION", str(7 * 24 * 3600))
     upload_max_rows: int = _int("TAP_UPLOAD_MAX_ROWS", "100000")
     upload_max_bytes: int = _int("TAP_UPLOAD_MAX_BYTES", str(32 * 1024 * 1024))
+    # Bound the whole request as well as each source. Keeping the aggregate
+    # default equal to the per-source limit prevents a caller multiplying the
+    # memory budget by submitting many individually valid parts.
+    upload_max_total_bytes: int = _int("TAP_UPLOAD_MAX_TOTAL_BYTES", str(32 * 1024 * 1024))
+    upload_max_sources: int = _int("TAP_UPLOAD_MAX_SOURCES", "8")
+    # Remote UPLOAD is an SSRF boundary. Empty is deliberately deny-all;
+    # deployments opt in exact destination hostnames, comma-separated.
+    upload_allowed_hosts: str = _env("TAP_UPLOAD_ALLOWED_HOSTS", "")
     wait_max_s: int = _int("TAP_WAIT_MAX", "60")
     model_plugins: str = _env("TAP_MODEL_PLUGINS", "all")
     # Prefix of every obs_publisher_did the ivoa.obscore view constructs. A

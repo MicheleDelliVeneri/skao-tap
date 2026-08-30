@@ -86,6 +86,11 @@ def _adql_language_features() -> str:
 def _capability_elements() -> str:
     """The <capability> elements, indented two spaces, with no wrapper."""
     base = base_url()
+    remote_upload_methods = ""
+    if settings.upload_allowed_hosts.strip():
+        remote_upload_methods = """    <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-http"/>
+    <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-https"/>
+"""
     return f"""  <capability standardID="ivo://ivoa.net/std/TAP" xsi:type="tr:TableAccess">
     <interface xsi:type="vod:ParamHTTP" role="std" version="1.1">
       <accessURL use="base">{base}</accessURL>
@@ -103,9 +108,9 @@ def _capability_elements() -> str:
     <outputFormat><mime>application/vnd.apache.parquet</mime><alias>parquet</alias></outputFormat>
     <outputFormat><mime>application/vnd.apache.arrow.stream</mime><alias>arrow</alias></outputFormat>
     <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-inline"/>
-    <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-http"/>
-    <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-https"/>
-    <retentionPeriod><default>{settings.job_retention_s}</default></retentionPeriod>
+{remote_upload_methods}    <retentionPeriod>
+      <default>{settings.job_retention_s}</default>
+    </retentionPeriod>
     <executionDuration><default>{settings.default_exec_duration_s}</default></executionDuration>
     <outputLimit>
       <default unit="row">{settings.default_maxrec}</default>

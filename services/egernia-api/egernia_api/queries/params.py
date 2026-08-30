@@ -1,6 +1,7 @@
 """DALI parameter handling: TAP parameters are case-insensitive in name and
 may arrive via query string (GET) or form body (POST)."""
 
+from egernia_core.config import settings
 from egernia_core.errors import UsageError
 from fastapi import Request
 
@@ -22,7 +23,7 @@ async def gather_params(request: Request) -> dict[str, str]:
     if request.method == "POST" and (
         "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type
     ):
-        form = await request.form()
+        form = await request.form(max_files=settings.upload_max_sources)
         for key, value in form.multi_items():
             if isinstance(value, str):
                 _set(params, key, value)
