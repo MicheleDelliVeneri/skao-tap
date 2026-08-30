@@ -107,14 +107,14 @@ async def wait_for_phase(job_id: str, wait_s: int, expected: str | None = None) 
     reference phase (``expected``, or the phase first observed), until the
     phase changes or the wait time expires.
     """
-    job = fetch_job(job_id)
+    job = await run_in_threadpool(fetch_job, job_id)
     if wait_s <= 0 or job["phase"] in uws.FINAL_PHASES:
         return job
     reference = expected or job["phase"]
     deadline = time.monotonic() + wait_s
     while job["phase"] == reference and time.monotonic() < deadline:
         await asyncio.sleep(min(WAIT_POLL_S, max(0.0, deadline - time.monotonic())))
-        job = fetch_job(job_id)
+        job = await run_in_threadpool(fetch_job, job_id)
     return job
 
 
@@ -142,7 +142,7 @@ def parse_job_filters(
 
 
 @router.get("")
-async def job_list(request: Request):
+def job_list(request: Request):
     phases, last, since = parse_job_filters(
         [p.upper() for p in request.query_params.getlist("PHASE")],
         request.query_params.get("LAST"),
@@ -158,19 +158,24 @@ async def create_job(request: Request):
     params = await gather_params(request)
     phase = params.pop("PHASE", None)
     sources = await gather_upload_sources(request, params)
-    parse_uploads(sources)  # reject malformed uploads before storing the job
+    await run_in_threadpool(parse_uploads, sources)  # reject before storing the job
     # One flag decides both the translation and the queueing, so the prepared
     # query cannot be missing where it is used. Not an assert: those vanish
     # under -O, which is exactly when a mistake here would matter.
     run_now = bool(phase and phase.upper() == "RUN")
     # translated off the event loop, before the connection is held
     prepared = await run_in_threadpool(prepare_query, params) if run_now else None
-    with db_connection() as conn:
-        job = uws.create_job(conn, params, owner_id=owner_of(request))
-        if sources:
-            save_upload_sources(job["job_id"], sources)
-        if run_now and prepared is not None:
-            queue_job(conn, job, prepared)
+
+    def store_job():
+        with db_connection() as conn:
+            job = uws.create_job(conn, params, owner_id=owner_of(request))
+            if sources:
+                save_upload_sources(job["job_id"], sources)
+            if run_now and prepared is not None:
+                queue_job(conn, job, prepared)
+            return job
+
+    job = await run_in_threadpool(store_job)
     return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
 
@@ -185,12 +190,12 @@ async def job_action(job_id: str, request: Request):
     params = await gather_params(request)
     action = params.get("ACTION", "").upper()
     if action == "DELETE":
-        return await delete_job(job_id)
+        return await run_in_threadpool(delete_job, job_id)
     raise UsageError("POST to the job URI requires ACTION=DELETE")
 
 
 @router.delete("/{job_id}", dependencies=[Depends(require("jobs.delete"))])
-async def delete_job(job_id: str):
+def delete_job(job_id: str):
     with db_connection() as conn:
         uws.delete_job(conn, job_id)
     shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
@@ -208,17 +213,21 @@ async def run_or_abort(job_id: str, phase: str) -> dict:
     prepared = None
     if phase == "RUN":
         # the job's own parameters, translated off the event loop
-        stored = fetch_job(job_id)
+        stored = await run_in_threadpool(fetch_job, job_id)
         prepared = await run_in_threadpool(prepare_query, stored["parameters"])
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
-        if prepared is not None:  # set exactly when the phase is RUN
-            queue_job(conn, job, prepared)
-        elif phase == "ABORT":
-            uws.abort_job(conn, job)
-        else:
-            raise UsageError("PHASE must be RUN or ABORT")
-        return uws.get_job(conn, job_id)
+
+    def apply_phase():
+        with db_connection() as conn:
+            job = uws.get_job(conn, job_id)
+            if prepared is not None:  # set exactly when the phase is RUN
+                queue_job(conn, job, prepared)
+            elif phase == "ABORT":
+                uws.abort_job(conn, job)
+            else:
+                raise UsageError("PHASE must be RUN or ABORT")
+            return uws.get_job(conn, job_id)
+
+    return await run_in_threadpool(apply_phase)
 
 
 @router.post("/{job_id}/phase", dependencies=[Depends(require("jobs.mutate"))])
@@ -229,7 +238,7 @@ async def post_phase(job_id: str, request: Request):
 
 
 @router.get("/{job_id}/executionduration")
-async def get_execution_duration(job_id: str):
+def get_execution_duration(job_id: str):
     job = fetch_job(job_id)
     return PlainTextResponse(str(job["execution_duration"]))
 
@@ -241,16 +250,21 @@ async def post_execution_duration(job_id: str, request: Request):
         duration = int(params.get("EXECUTIONDURATION", ""))
     except ValueError:
         raise UsageError("EXECUTIONDURATION must be an integer number of seconds") from None
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
-        if job["phase"] != "PENDING":
-            raise UsageError("executionduration can only be set while the job is PENDING")
-        uws.update_job(conn, job_id, execution_duration=max(0, duration))
+
+    def update_duration():
+        with db_connection() as conn:
+            job = uws.get_job(conn, job_id)
+            if job["phase"] != "PENDING":
+                raise UsageError("executionduration can only be set while the job is PENDING")
+            uws.update_job(conn, job_id, execution_duration=max(0, duration))
+            return job
+
+    job = await run_in_threadpool(update_duration)
     return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
 
 @router.get("/{job_id}/destruction")
-async def get_destruction(job_id: str):
+def get_destruction(job_id: str):
     job = fetch_job(job_id)
     return PlainTextResponse(uws.iso_utc(job["destruction"]) or "")
 
@@ -259,26 +273,31 @@ async def get_destruction(job_id: str):
 async def post_destruction(job_id: str, request: Request):
     params = await gather_params(request)
     when = parse_iso(params.get("DESTRUCTION", ""), "DESTRUCTION")
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
-        uws.update_job(conn, job_id, destruction=when)
+
+    def update_destruction():
+        with db_connection() as conn:
+            job = uws.get_job(conn, job_id)
+            uws.update_job(conn, job_id, destruction=when)
+            return job
+
+    job = await run_in_threadpool(update_destruction)
     return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
 
 @router.get("/{job_id}/quote")
-async def get_quote(job_id: str):
+def get_quote(job_id: str):
     job = fetch_job(job_id)
     return PlainTextResponse(uws.iso_utc(job["quote"]) or "")
 
 
 @router.get("/{job_id}/owner")
-async def get_owner(job_id: str):
+def get_owner(job_id: str):
     job = fetch_job(job_id)
     return PlainTextResponse(job["owner_id"] or "")
 
 
 @router.get("/{job_id}/parameters")
-async def get_parameters(job_id: str):
+def get_parameters(job_id: str):
     job = fetch_job(job_id)
     return Response(uws.job_xml(job), media_type=XML)
 
@@ -286,18 +305,23 @@ async def get_parameters(job_id: str):
 @router.post("/{job_id}/parameters", dependencies=[Depends(require("jobs.mutate"))])
 async def post_parameters(job_id: str, request: Request):
     params = await gather_params(request)
-    with db_connection() as conn:
-        job = uws.get_job(conn, job_id)
-        if job["phase"] != "PENDING":
-            raise UsageError("parameters can only be updated while the job is PENDING")
-        merged = dict(job["parameters"] or {})
-        merged.update(params)
-        uws.update_job(conn, job_id, parameters=merged)
+
+    def update_parameters():
+        with db_connection() as conn:
+            job = uws.get_job(conn, job_id)
+            if job["phase"] != "PENDING":
+                raise UsageError("parameters can only be updated while the job is PENDING")
+            merged = dict(job["parameters"] or {})
+            merged.update(params)
+            uws.update_job(conn, job_id, parameters=merged)
+            return job
+
+    job = await run_in_threadpool(update_parameters)
     return RedirectResponse(_job_url(job["job_id"]), status_code=303)
 
 
 @router.get("/{job_id}/results")
-async def get_results(job_id: str):
+def get_results(job_id: str):
     job = fetch_job(job_id)
     return Response(uws.job_xml(job), media_type=XML)
 
@@ -321,13 +345,13 @@ def result_file_response(job: dict, job_id: str) -> FileResponse:
 
 
 @router.get("/{job_id}/results/result")
-async def get_result(job_id: str):
+def get_result(job_id: str):
     job = fetch_job(job_id)
     return result_file_response(job, job_id)
 
 
 @router.get("/{job_id}/error")
-async def get_error(job_id: str):
+def get_error(job_id: str):
     job = fetch_job(job_id)
     return Response(
         error_votable(job["error_message"] or "no error"),
