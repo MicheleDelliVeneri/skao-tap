@@ -98,12 +98,12 @@ def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _bootstrap_metadata()
+    await run_in_threadpool(_bootstrap_metadata)
     # bootstrap is the one path where this service publishes tables itself;
     # anything published out of band is picked up by the cache's own expiry
     forget_published_tables()
     yield
-    close_pool()
+    await run_in_threadpool(close_pool)
 
 
 # Which pod answered. Kubernetes sets the hostname to the pod name, so this
@@ -339,7 +339,7 @@ async def registry():
 
 
 @app.get("/tap/availability")
-async def availability():
+def availability():
     return Response(vosi.availability_xml(), media_type="application/xml")
 
 
@@ -349,7 +349,7 @@ async def capabilities():
 
 
 @app.get("/tap/tables")
-async def tables():
+def tables():
     return Response(vosi.tables_xml(), media_type="application/xml")
 
 
@@ -362,7 +362,8 @@ async def sync(request: Request):
     params = await gather_params(request)
     if params.get("REQUEST") == "getCapabilities":  # TAP 1.0 compatibility
         return RedirectResponse(f"{base_url()}/capabilities", status_code=303)
-    uploads = parse_uploads(await gather_upload_sources(request, params))
+    upload_sources = await gather_upload_sources(request, params)
+    uploads = await run_in_threadpool(parse_uploads, upload_sources)
     # ADQL translation is tens of milliseconds of pure-Python ANTLR work; on
     # the event loop it stalls every other request for that long, which is why
     # throughput stopped rising with concurrency

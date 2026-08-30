@@ -8,6 +8,7 @@ from egernia_core.config import settings
 from egernia_core.errors import UsageError
 from egernia_core.query.upload import UploadedTable, parse_upload_param, parse_votable
 from fastapi import Request
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 FETCH_TIMEOUT_S = 15
@@ -122,7 +123,7 @@ def resolve_upload_sources(upload_param: str | None, files: dict[str, bytes]) ->
 async def gather_upload_sources(request: Request, params: dict) -> dict[str, bytes]:
     """The request's UPLOAD sources: multipart parts and fetched URIs."""
     files = await gather_upload_files(request)
-    return resolve_upload_sources(params.get("UPLOAD"), files)
+    return await run_in_threadpool(resolve_upload_sources, params.get("UPLOAD"), files)
 
 
 def parse_uploads(sources: dict[str, bytes]) -> list[UploadedTable]:
