@@ -215,6 +215,13 @@ def get_parameters(job_id: str):
 @router.post("/{job_id}/parameters", dependencies=[Depends(require("jobs.mutate"))])
 async def post_parameters(job_id: str, request: Request):
     params = await gather_params(request)
+    # An UPLOAD among the new parameters names files the executor will read
+    # at RUN. Resolve and validate them now — a bad reference is a 400 here
+    # rather than an ERROR job later — and persist them once the job accepts
+    # the merge, or the stored parameters would reference uploads that were
+    # never saved.
+    sources = await gather_upload_sources(request, params)
+    await run_in_threadpool(parse_uploads, sources)  # reject before mutating the job
 
     def update_parameters():
         with db_connection() as conn:
@@ -224,6 +231,8 @@ async def post_parameters(job_id: str, request: Request):
             merged = dict(job["parameters"] or {})
             merged.update(params)
             uws.update_job(conn, job_id, parameters=merged)
+            if sources:
+                save_upload_sources(job_id, sources)
             return job
 
     job = await run_in_threadpool(update_parameters)
