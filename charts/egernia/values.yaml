@@ -487,6 +487,12 @@ config:
   # -- Metadata-domain plugins to activate: "all" or a comma-separated
   # subset (e.g. "odp" or "software") for dedicated per-model deployments.
   modelPlugins: all
+  # -- Whether the services run schema DDL at startup (the default, which a
+  # rolling upgrade relies on). Set false after wiring
+  # `python -m egernia_core.bootstrap` into your deploy pipeline: the
+  # services then only verify the schema, and their database credentials
+  # never need to own schema changes.
+  schemaBootstrapOnStartup: true
   # -- Log level for the services' own records (schema bootstrap, legacy-table
   # warnings, metadata deletion audit trail). Uvicorn's access log is separate.
   logLevel: INFO

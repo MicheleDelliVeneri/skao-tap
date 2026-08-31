@@ -83,6 +83,7 @@ def test_api_errors_are_json(client):
 
 def test_bootstrap_retries_then_succeeds(fake_db, monkeypatch):
     from egernia_api import main
+    from egernia_core import bootstrap
 
     calls = {"n": 0}
 
@@ -91,8 +92,8 @@ def test_bootstrap_retries_then_succeeds(fake_db, monkeypatch):
         if calls["n"] == 1:
             raise RuntimeError("db not ready")
 
-    monkeypatch.setattr(main.ingest, "ensure_schema", flaky)
-    monkeypatch.setattr(main.time, "sleep", lambda s: None)
+    monkeypatch.setattr(bootstrap.ingest, "ensure_schema", flaky)
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda s: None)
     main._bootstrap_metadata(attempts=3)
     # one failed call on the first attempt, then one call per active plugin
     assert calls["n"] == 1 + len(main.active_plugins())
@@ -100,13 +101,14 @@ def test_bootstrap_retries_then_succeeds(fake_db, monkeypatch):
 
 def test_bootstrap_fails_after_attempts(fake_db, monkeypatch):
     from egernia_api import main
+    from egernia_core import bootstrap
 
     def broken(conn, plugin):
         raise RuntimeError("db never ready")
 
-    monkeypatch.setattr(main.ingest, "ensure_schema", broken)
-    monkeypatch.setattr(main.time, "sleep", lambda s: None)
-    with pytest.raises(RuntimeError, match="metadata bootstrap failed after 2 attempts"):
+    monkeypatch.setattr(bootstrap.ingest, "ensure_schema", broken)
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda s: None)
+    with pytest.raises(RuntimeError, match="schema bootstrap failed after 2 attempts"):
         main._bootstrap_metadata(attempts=2)
 
 

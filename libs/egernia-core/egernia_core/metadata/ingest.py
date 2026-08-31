@@ -189,7 +189,7 @@ def _resolve_path(instance: BaseModel, path: tuple[str, ...]):
     return value
 
 
-def _upsert(conn, table: TableSpec, row: dict) -> None:
+def _upsert_sql(table: TableSpec) -> str:
     columns = [c.name for c in table.columns]
     placeholders = ", ".join(["%s"] * len(columns))
     non_pk = [c for c in columns if c not in table.pk_columns]
@@ -198,24 +198,27 @@ def _upsert(conn, table: TableSpec, row: dict) -> None:
         if non_pk
         else "DO NOTHING"
     )
-    conn.execute(
+    return (
         f"INSERT INTO {table.qualified} ({', '.join(columns)}) VALUES ({placeholders})"
-        f" ON CONFLICT ({', '.join(table.pk_columns)}) {conflict}",
-        tuple(_column_value(row.get(c)) for c in columns),
+        f" ON CONFLICT ({', '.join(table.pk_columns)}) {conflict}"
     )
 
 
 def ingest_document(conn, plugin: MetadataPlugin, document: BaseModel) -> dict[str, int]:
     """Flatten a validated model instance into the generated tables (upsert).
 
+    The whole document is flattened first, then written one executemany per
+    table — parents before children, which the plugin's table order already
+    guarantees — so a document with hundreds of rows costs one round trip
+    per table rather than one per row.
+
     Returns per-table row counts for the response body.
     """
     tables = plugin.tables
-    counts: dict[str, int] = {}
+    rows: dict[str, list[tuple]] = {t.qualified: [] for t in tables}
 
-    def store(table: TableSpec, instance: BaseModel, key_chain: dict) -> None:
+    def flatten(table: TableSpec, instance: BaseModel, key_chain: dict) -> None:
         row = dict(key_chain)
-        children: list[tuple[TableSpec, list[BaseModel]]] = []
         for col in table.columns:
             if col.name in row:
                 continue
@@ -230,18 +233,23 @@ def ingest_document(conn, plugin: MetadataPlugin, document: BaseModel) -> dict[s
                 row[col.name] = _derive(col, row[col.derived_from])
                 continue
             row[col.name] = _resolve_path(instance, col.path)
-        for child in tables:
-            if child.parent is table:
-                children.append((child, getattr(instance, child.field_name, []) or []))
-        _upsert(conn, table, row)
-        counts[table.qualified] = counts.get(table.qualified, 0) + 1
+        rows[table.qualified].append(tuple(_column_value(row.get(c.name)) for c in table.columns))
         next_chain = dict(key_chain)
         next_chain[table.id_column] = getattr(instance, table.id_column)
-        for child, items in children:
-            for item in items:
-                store(child, item, next_chain)
+        for child in tables:
+            if child.parent is table:
+                for item in getattr(instance, child.field_name, []) or []:
+                    flatten(child, item, next_chain)
 
-    store(tables[0], document, {})
+    flatten(tables[0], document, {})
+    counts: dict[str, int] = {}
+    for table in tables:
+        batch = rows[table.qualified]
+        if not batch:
+            continue
+        with conn.cursor() as cur:
+            cur.executemany(_upsert_sql(table), batch)
+        counts[table.qualified] = len(batch)
     return counts
 
 

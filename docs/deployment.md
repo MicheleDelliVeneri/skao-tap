@@ -394,6 +394,29 @@ misconfiguration.
     `pg_dump --format=custom` archive beforehand and `pg_restore` it into the
     new cluster.
 
+## Pre-deploy schema bootstrap
+
+By default every service replica ensures the database schema at startup —
+idempotent, advisory-locked DDL, which is what a rolling upgrade relies on:
+whichever new pod touches the database first migrates it forward. That means
+the runtime database credentials own schema changes.
+
+To move schema ownership out of the runtime, run the bootstrap once before
+deploying (with credentials that may run DDL) and turn the startup DDL off:
+
+```bash
+# from a checkout (or in a container: /srv/.venv/bin/python)
+TAP_DATABASE_URL=postgresql://owner:...@db/tap \
+  uv run python -m egernia_core.bootstrap
+
+helm upgrade egernia charts/egernia --set config.schemaBootstrapOnStartup=false
+```
+
+With `schemaBootstrapOnStartup=false` the services only *verify* the schema
+at startup (a read-only column-level check) and fail fast, naming the
+bootstrap command, when it is missing or outdated — so re-run the bootstrap
+as part of every deploy that upgrades the images or the model libraries.
+
 ## Configuration
 
 All services read environment variables (see `egernia_core/config.py`):
@@ -411,6 +434,7 @@ All services read environment variables (see `egernia_core/config.py`):
 | `TAP_ASYNC_EXEC_DURATION` | `600` | Default async `executionDuration` (s) |
 | `TAP_JOB_RETENTION` | `604800` | Default job lifetime before destruction (s) |
 | `TAP_MODEL_PLUGINS` | `all` | Metadata domains to activate (`all` or a comma-separated subset) |
+| `TAP_SCHEMA_BOOTSTRAP_ON_STARTUP` | `true` | Whether services run schema DDL at startup; `false` makes them only verify a [pre-deploy bootstrap](#pre-deploy-schema-bootstrap) ran |
 | `TAP_AUTH_ENABLED` | `false` | Enable authentication/authorisation ([guide](auth.md)) |
 | `TAP_AUTH_REQUIRE_TOKEN` | `true` | Require a verified token on every request bar discovery and the health check |
 | `TAP_AUTH_ANONYMOUS_QUERIES` | `false` | Allow token-less reads through `/tap/sync` and `/tap/async` |

@@ -63,6 +63,12 @@ class FakeStreamCursor:
             raise self._db.result_error
         self.description = self._db.result_description
 
+    def executemany(self, sql, params_seq):
+        # batched metadata upserts: route each row like the row-at-a-time
+        # writes it replaced, so the in-memory store stays authoritative
+        for params in params_seq:
+            self._db.run(sql, params)
+
     def stream(self, sql, params=None, *, size=1):
         self.stream_chunk_rows = size
         self.execute(sql, params)
