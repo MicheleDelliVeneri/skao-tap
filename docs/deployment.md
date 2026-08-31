@@ -406,6 +406,7 @@ All services read environment variables (see `egernia_core/config.py`):
 | `TAP_QUERY_ROLE` | `tap_reader` | Read-only role used for user queries |
 | `TAP_DEFAULT_MAXREC` / `TAP_HARD_MAXREC` | `10000` / `1000000` | Row limits |
 | `TAP_SYNC_TIMEOUT` | `30` | Sync query timeout (s) |
+| `TAP_SYNC_MAX_BYTES` | `67108864` | Maximum serialized synchronous result size; use async for larger results |
 | `TAP_TRANSLATION_CACHE_SIZE` | `512` | Entries in the per-worker ADQL translation memo; `0` disables it. Read once at start-up. Its hit rate is `tap_adql_translation_cache_hits_total` over the sum of hits and misses |
 | `TAP_ASYNC_EXEC_DURATION` | `600` | Default async `executionDuration` (s) |
 | `TAP_JOB_RETENTION` | `604800` | Default job lifetime before destruction (s) |

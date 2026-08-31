@@ -19,7 +19,8 @@ with each metadata entry carrying `datatype`, `unit`, `ucd` and
 `description` from TAP_SCHEMA. Set `"format": "parquet"` (or `"arrow"`,
 `"votable"`, `"csv"`, `"tsv"`) for other output formats — Parquet responses
 embed the column metadata in the Arrow schema and the DALI status in the
-file metadata.
+file metadata. Synchronous results larger than `TAP_SYNC_MAX_BYTES` are
+refused; use a job for larger output.
 Errors come back as JSON (`{"error": "UsageError", "message": ...}`) with
 the same HTTP status codes as the DALI VOTable errors on `/tap`.
 
@@ -31,7 +32,7 @@ created here is visible there and vice versa:
 | Method & path | Purpose |
 | --- | --- |
 | `POST /api/v1/jobs` `{query, lang?, maxrec?, format?, run?}` | Create (and with `run: true` queue) a job; the query is validated up front |
-| `GET /api/v1/jobs?phase=COMPLETED,ERROR&last=10` | List jobs |
+| `GET /api/v1/jobs?phase=COMPLETED,ERROR&last=10` | List jobs (100 by default, at most 1,000) |
 | `GET /api/v1/jobs/{id}` | Job document (phase, timing, parameters, result/error) |
 | `POST /api/v1/jobs/{id}/phase` `{"phase": "RUN"\|"ABORT"}` | Start or abort |
 | `GET /api/v1/jobs/{id}/result` | Fetch the result file |
@@ -64,7 +65,7 @@ Every active plugin serves (shown for `odp`; identically for
 | Method & path | Purpose |
 | --- | --- |
 | `POST /api/v1/notifications` | Validate (with the plugin's pydantic models) and store a document; idempotent upsert |
-| `GET /api/v1/notifications` | Root-level summary of ingested metadata, with per-table row counts |
+| `GET /api/v1/notifications?limit=100&after={project_id}` | Root-level summaries with per-table row counts; at most 1,000, with `next_after` in non-final responses |
 | `GET /api/v1/notifications/{project_id}` | Reconstruct the full nested document |
 | `PATCH /api/v1/notifications/{project_id}` | Amend already-ingested rows: `{"table", "match"?, "values"}` |
 | `DELETE /api/v1/notifications/{project_id}` | Delete the document and cascade to all generated child rows |

@@ -490,9 +490,10 @@ class FakeDB:
             return FakeResult(rows)
 
         if text.startswith("SELECT to_jsonb(p)"):  # generic plugin listing
-            root_match = re.search(r"FROM (\S+) p ORDER BY p\.(\w+)", text)
-            assert root_match is not None
-            root, order_column = root_match.group(1), root_match.group(2)
+            root_match = re.search(r"FROM (\S+) p", text)
+            order_match = re.search(r"ORDER BY p\.(\w+)", text)
+            assert root_match is not None and order_match is not None
+            root, order_column = root_match.group(1), order_match.group(1)
             descendants = re.findall(r"FROM (\S+) c WHERE c\.(\w+) = p\.", text)
             listing = []
             for row in self.srcnet.get(root, {}).values():
@@ -503,7 +504,11 @@ class FakeDB:
                     for table, key in descendants
                 )
                 listing.append((dict(row), *child_counts))
+            if " WHERE p." in text:
+                listing = [entry for entry in listing if entry[0].get(order_column) > params[0]]
             listing.sort(key=lambda entry: str(entry[0].get(order_column)))
+            if " LIMIT " in text:
+                listing = listing[: params[-1]]
             return FakeResult(listing)
 
         # DDL and TAP_SCHEMA registration during srcnet bootstrap

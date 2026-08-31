@@ -72,6 +72,7 @@ class Settings:
     default_maxrec: int = _int("TAP_DEFAULT_MAXREC", "10000")
     hard_maxrec: int = _int("TAP_HARD_MAXREC", "1000000")
     sync_timeout_s: int = _int("TAP_SYNC_TIMEOUT", "30")
+    sync_max_bytes: int = _int("TAP_SYNC_MAX_BYTES", str(64 * 1024 * 1024))
     # The kill switch for the server-side DSV path (see query/copy_dsv.py).
     # Off, every DSV result is written by the Python writer again -- which is
     # both the way back out if the bytes are ever found to differ in the

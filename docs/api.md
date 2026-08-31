@@ -10,7 +10,7 @@ Errors are returned as DALI VOTable documents with
 
 | Method | Resource | Description |
 |---|---|---|
-| GET/POST | `/sync` | Execute an ADQL query and stream the result |
+| GET/POST | `/sync` | Execute an ADQL query; results spool before delivery and are limited by `TAP_SYNC_MAX_BYTES` |
 
 Parameters:
 
@@ -27,7 +27,7 @@ Parameters:
 
 | Method | Resource | Description |
 |---|---|---|
-| GET | `/async` | Job list (`PHASE` filter, `LAST` limit, `AFTER` ISO-8601 creation-time filter); returns `<uws:jobs>` |
+| GET | `/async` | Job list (`PHASE` filter, `LAST` limit, `AFTER` ISO-8601 creation-time filter); returns `<uws:jobs>` with 100 jobs by default and at most 1,000 |
 | POST | `/async` | Create a job from the same parameters as `/sync`; add `PHASE=RUN` to queue immediately; 303 → job URI |
 | GET | `/async/{id}` | Job summary `<uws:job>` document; `WAIT=<s>` (or `-1` for the server maximum, `TAP_WAIT_MAX`) blocks until the phase changes, optionally with `PHASE=<phase>` as the reference phase |
 | POST | `/async/{id}` | `ACTION=DELETE` destroys the job |

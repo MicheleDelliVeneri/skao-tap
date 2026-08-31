@@ -71,6 +71,8 @@ tapApi:
       memory: 256Mi
     limits:
       memory: 1Gi
+  # -- Pod-wide ceiling for synchronous response spools and other /tmp use.
+  tmpSizeLimit: 1Gi
 
 tapExecutor:
   # -- Executors claim jobs with FOR UPDATE SKIP LOCKED; scaling out is safe
@@ -465,6 +467,8 @@ config:
   # path's admission control: a query is refused by what it actually costs,
   # not by what an EXPLAIN estimate guessed it would.
   syncTimeoutSeconds: 30
+  # -- Maximum serialized synchronous result size; larger results use async.
+  syncMaxBytes: 67108864
   asyncExecDurationSeconds: 600
   jobRetentionSeconds: 604800
   waitMaxSeconds: 60
