@@ -157,6 +157,44 @@ def test_notification_ingest_list_and_roundtrip(client, fake_db):
     assert len(document["observations"]) == len(SRC_INGESTION_EXAMPLE["observations"])
 
 
+def test_ingest_document_batches_one_statement_per_table():
+    """A document costs one round trip per generated table, not one per row,
+    and parent tables are written before their children so the FKs hold."""
+    from egernia_api.plugins.odp import PLUGIN
+    from egernia_core.metadata import ingest
+
+    class Cursor:
+        def __init__(self, calls):
+            self._calls = calls
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def executemany(self, sql, rows):
+            self._calls.append((sql, list(rows)))
+
+    class Conn:
+        def __init__(self):
+            self.calls = []
+
+        def cursor(self):
+            return Cursor(self.calls)
+
+    document = PLUGIN.model.model_validate(SRC_INGESTION_EXAMPLE)
+    conn = Conn()
+    counts = ingest.ingest_document(conn, PLUGIN, document)
+
+    written = [sql.split()[2] for sql, _ in conn.calls]
+    assert len(written) == len(set(written))
+    assert sum(len(rows) for _, rows in conn.calls) == sum(counts.values())
+    hierarchy = [t.qualified for t in PLUGIN.tables]
+    assert written == [t for t in hierarchy if t in written]
+    assert counts[PLUGIN.tables[0].qualified] == 1
+
+
 def test_notification_validation_and_missing(client):
     bad = dict(SRC_INGESTION_EXAMPLE)
     bad.pop("project_id")

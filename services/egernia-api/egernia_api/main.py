@@ -5,11 +5,10 @@ resources /capabilities, /availability, /tables, plus DALI /examples.
 """
 
 import socket
-import time
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
-from egernia_core import uws
+from egernia_core import bootstrap
 from egernia_core.auth import invalid_token_challenge, verifier
 from egernia_core.config import base_url, request_origin, settings, trusted_hosts
 from egernia_core.db import close_pool, pool
@@ -58,7 +57,8 @@ setup_uvicorn_logging("tap-api")
 
 
 def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
-    """Create/refresh the tables generated from the active metadata plugins."""
+    """Create/refresh (or verify, see TAP_SCHEMA_BOOTSTRAP_ON_STARTUP) the
+    uws.jobs columns and the tables generated from the active plugins."""
     plugins = active_plugins()
     log.info("active metadata plugins: %s", ", ".join(p.name for p in plugins) or "none")
     # Resolve the policy and build the token verifier now, so a bad auth
@@ -68,32 +68,14 @@ def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
     # IAM is briefly unavailable.
     if auth.plugin() is not None:
         verifier()
-    for attempt in range(1, attempts + 1):
-        try:
-            with db_connection() as conn, conn.transaction():
-                # forward-migrate deployments whose uws.jobs predates ABORT
-                # support (the columns are in db/init for fresh databases).
-                # query_tables is ensured here as well as in the executor:
-                # the API writes it at queue time, and in a rolling upgrade a
-                # new API can queue a job before any new executor has started.
-                uws.ensure_job_columns(conn)
-                for plugin in plugins:
-                    ingest.ensure_schema(conn, plugin)
-                # Last, so it sees the finished schema. Reported rather than
-                # enforced: a divergence usually means this service shares a
-                # database with something that owns some of those relations,
-                # which is legitimate — but a client cannot tell, and finds
-                # out as a 500 on a query our own metadata recommended.
-                ingest.warn_tap_schema_divergence(conn)
-            return
-        except Exception as exc:
-            if attempt == attempts:
-                # Fail fast: a half-initialized service would only surface
-                # confusing errors later on the metadata endpoints and
-                # generated-schema queries; the orchestrator should restart us.
-                raise RuntimeError(f"metadata bootstrap failed after {attempts} attempts") from exc
-            log.warning("metadata bootstrap attempt %d failed (%s), retrying", attempt, exc)
-            time.sleep(delay_s)
+    bootstrap.startup(plugins, attempts=attempts, delay_s=delay_s)
+    # After the schema settles, so it sees the finished state. Reported
+    # rather than enforced: a divergence usually means this service shares a
+    # database with something that owns some of those relations, which is
+    # legitimate — but a client cannot tell, and finds out as a 500 on a
+    # query our own metadata recommended.
+    with db_connection() as conn:
+        ingest.warn_tap_schema_divergence(conn)
 
 
 @asynccontextmanager

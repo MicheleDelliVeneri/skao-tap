@@ -99,6 +99,11 @@ class Settings:
     upload_allowed_hosts: str = _env("TAP_UPLOAD_ALLOWED_HOSTS", "")
     wait_max_s: int = _int("TAP_WAIT_MAX", "60")
     model_plugins: str = _env("TAP_MODEL_PLUGINS", "all")
+    # Whether the services run schema DDL at startup (the default, which is
+    # what a rolling upgrade relies on), or only verify that an explicit
+    # pre-deploy `python -m egernia_core.bootstrap` already did. Off, the
+    # runtime database credentials never need to own schema changes.
+    schema_bootstrap_on_startup: bool = _bool("TAP_SCHEMA_BOOTSTRAP_ON_STARTUP", True)
     # Prefix of every obs_publisher_did the ivoa.obscore view constructs. A
     # PublisherDID is a permanent promise: in a real deployment the authority
     # must match the registry's authorityId, so this is configuration, not a

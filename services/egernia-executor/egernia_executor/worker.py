@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional, cast
 
-from egernia_core import uws
+from egernia_core import bootstrap, uws
 from egernia_core.config import settings
 from egernia_core.db import connection as db_connection
 from egernia_core.observability import (
@@ -462,21 +462,6 @@ def cleanup_expired() -> None:
         log.info("destroyed expired job %s", job_id)
 
 
-def _ensure_job_columns(attempts: int = 30, delay_s: float = 2.0) -> None:
-    """Forward-migrate uws.jobs for deployments whose schema predates a
-    column CLAIM_SQL now selects; retry until the database is reachable."""
-    for attempt in range(1, attempts + 1):
-        try:
-            with db_connection() as conn:
-                uws.ensure_job_columns(conn)
-            return
-        except Exception as exc:
-            if attempt == attempts:
-                raise
-            log.warning("uws.jobs migration attempt %d failed (%s), retrying", attempt, exc)
-            time.sleep(delay_s)
-
-
 QUEUE_METRICS_INTERVAL_S = 5.0
 
 
@@ -519,7 +504,10 @@ def main() -> None:
         settings.executor_metrics_port,
     )
     Path(settings.results_dir).mkdir(parents=True, exist_ok=True)
-    _ensure_job_columns()
+    # forward-migrate (or verify, see TAP_SCHEMA_BOOTSTRAP_ON_STARTUP) the
+    # uws.jobs columns CLAIM_SQL selects; generous retries because on a fresh
+    # install the database may still be starting
+    bootstrap.startup([], attempts=30)
     last_cleanup = 0.0
     last_recovery = 0.0
     last_queue_metrics = 0.0

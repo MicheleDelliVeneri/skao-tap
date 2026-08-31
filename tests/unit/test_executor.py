@@ -206,7 +206,7 @@ def test_a_busy_executor_still_reports_the_queue(monkeypatch, fake_db, results_d
     monkeypatch.setattr(worker, "execute_job", lambda job: None)
     monkeypatch.setattr(worker, "refresh_queue_metrics", lambda: calls.append("metrics"))
     monkeypatch.setattr(worker, "cleanup_expired", cleanup)
-    monkeypatch.setattr(worker, "_ensure_job_columns", lambda: None)
+    monkeypatch.setattr(worker.bootstrap, "startup", lambda *args, **kwargs: None)
     monkeypatch.setattr(worker, "start_http_server", lambda *args, **kwargs: None)
     monkeypatch.setattr(worker.time, "sleep", lambda seconds: slept.append(seconds))
 
