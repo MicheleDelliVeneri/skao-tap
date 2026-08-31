@@ -1,22 +1,27 @@
 """UWS 1.1 REST resources under {base}/async."""
 
-import asyncio
-import datetime
-import os
 import shutil
-import time
 
-from egernia_core import uws
+from egernia_core import uws, uws_xml
 from egernia_core.config import base_url, settings
 from egernia_core.db import connection as db_connection
-from egernia_core.errors import NotFoundError, UsageError
+from egernia_core.errors import UsageError
 from egernia_core.query.upload import save_upload_sources
 from egernia_core.query.votable import error_votable
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from ..auth import owner_of, require
+from ..queries.jobs import (
+    fetch_job,
+    parse_iso,
+    parse_job_filters,
+    queue_job,
+    result_file_response,
+    run_or_abort,
+    wait_for_phase,
+)
 from ..queries.params import gather_params
 from ..queries.query import prepare_query
 from ..queries.uploads import gather_upload_sources, parse_uploads
@@ -41,45 +46,6 @@ def _job_url(job_id: str) -> str:
     return f"{base_url()}/async/{job_id}"
 
 
-def fetch_job(job_id: str) -> dict:
-    """The job, on a connection held only for the read. The mutating
-    endpoints keep their own ``with`` block on purpose: they read and update
-    inside one transaction, so their read must not become this one."""
-    with db_connection() as conn:
-        return uws.get_job(conn, job_id)
-
-
-def parse_iso(raw: str, param: str) -> datetime.datetime:
-    try:
-        return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        raise UsageError(f"{param} must be an ISO-8601 timestamp") from None
-
-
-def queue_job(conn, job: dict, prepared: dict) -> None:
-    """Move a job to QUEUED, using an already-translated query.
-
-    ``prepared`` is required rather than optional: translating here would put
-    an ADQL parse back on the event loop, since every caller is an async
-    handler. Required means a future caller cannot reintroduce that quietly.
-    """
-    updated = uws.update_job(
-        conn,
-        job["job_id"],
-        expected_phases=("PENDING", "HELD"),
-        phase="QUEUED",
-        query_sql=prepared["sql"],
-        # from the parse the API already did, so the executor never parses
-        query_tables=sorted(prepared["tables"]),
-    )
-    if not updated:
-        current = uws.get_job(conn, job["job_id"])
-        raise UsageError(f"cannot start job in phase {current['phase']}")
-
-
-WAIT_POLL_S = 1.0
-
-
 def _parse_wait(request: Request) -> tuple[int, str | None]:
     """UWS 1.1 blocking parameters: WAIT seconds (-1 = server maximum) and
     the optional PHASE the client believes the job is in."""
@@ -102,45 +68,9 @@ def _parse_wait(request: Request) -> tuple[int, str | None]:
     return min(wait, settings.wait_max_s), phase
 
 
-async def wait_for_phase(job_id: str, wait_s: int, expected: str | None = None) -> dict:
-    """Fetch the job, blocking per UWS 1.1 WAIT semantics.
-
-    Blocks while the job is in an active phase and its phase equals the
-    reference phase (``expected``, or the phase first observed), until the
-    phase changes or the wait time expires.
-    """
-    job = await run_in_threadpool(fetch_job, job_id)
-    if wait_s <= 0 or job["phase"] in uws.FINAL_PHASES:
-        return job
-    reference = expected or job["phase"]
-    deadline = time.monotonic() + wait_s
-    while job["phase"] == reference and time.monotonic() < deadline:
-        await asyncio.sleep(min(WAIT_POLL_S, max(0.0, deadline - time.monotonic())))
-        job = await run_in_threadpool(fetch_job, job_id)
-    return job
-
-
 async def _get_job_waiting(job_id: str, request: Request) -> dict:
     wait_s, expected = _parse_wait(request)
     return await wait_for_phase(job_id, wait_s, expected)
-
-
-def parse_job_filters(
-    phases: list[str], last, after: str | None
-) -> tuple[list[str] | None, int | None, datetime.datetime | None]:
-    """Validate the UWS 1.1 job-list filters (PHASE / LAST / AFTER)."""
-    for phase in phases:
-        if phase not in uws.ALL_PHASES:
-            raise UsageError(f"unknown PHASE {phase}")
-    if last is not None:
-        try:
-            last = int(last)
-        except ValueError:
-            raise UsageError("LAST must be a positive integer") from None
-        if last < 1:
-            raise UsageError("LAST must be a positive integer")
-    since = parse_iso(after, "AFTER") if after is not None else None
-    return phases or None, last, since
 
 
 @router.get("")
@@ -152,7 +82,7 @@ def job_list(request: Request):
     )
     with db_connection() as conn:
         jobs = uws.list_jobs(conn, phases, last, since)
-    return Response(uws.joblist_xml(jobs), media_type=XML)
+    return Response(uws_xml.joblist_xml(jobs), media_type=XML)
 
 
 @router.post("", dependencies=[Depends(require("jobs.create"))])
@@ -184,7 +114,7 @@ async def create_job(request: Request):
 @router.get("/{job_id}")
 async def job_summary(job_id: str, request: Request):
     job = await _get_job_waiting(job_id, request)
-    return Response(uws.job_xml(job), media_type=XML)
+    return Response(uws_xml.job_xml(job), media_type=XML)
 
 
 @router.post("/{job_id}", dependencies=[Depends(require("jobs.delete"))])
@@ -208,28 +138,6 @@ def delete_job(job_id: str):
 async def get_phase(job_id: str, request: Request):
     job = await _get_job_waiting(job_id, request)
     return PlainTextResponse(job["phase"])
-
-
-async def run_or_abort(job_id: str, phase: str) -> dict:
-    """Apply a UWS phase command (RUN or ABORT) and return the job."""
-    prepared = None
-    if phase == "RUN":
-        # the job's own parameters, translated off the event loop
-        stored = await run_in_threadpool(fetch_job, job_id)
-        prepared = await run_in_threadpool(prepare_query, stored["parameters"])
-
-    def apply_phase():
-        with db_connection() as conn:
-            job = uws.get_job(conn, job_id)
-            if prepared is not None:  # set exactly when the phase is RUN
-                queue_job(conn, job, prepared)
-            elif phase == "ABORT":
-                uws.abort_job(conn, job)
-            else:
-                raise UsageError("PHASE must be RUN or ABORT")
-            return uws.get_job(conn, job_id)
-
-    return await run_in_threadpool(apply_phase)
 
 
 @router.post("/{job_id}/phase", dependencies=[Depends(require("jobs.mutate"))])
@@ -301,7 +209,7 @@ def get_owner(job_id: str):
 @router.get("/{job_id}/parameters")
 def get_parameters(job_id: str):
     job = fetch_job(job_id)
-    return Response(uws.job_xml(job), media_type=XML)
+    return Response(uws_xml.job_xml(job), media_type=XML)
 
 
 @router.post("/{job_id}/parameters", dependencies=[Depends(require("jobs.mutate"))])
@@ -325,25 +233,7 @@ async def post_parameters(job_id: str, request: Request):
 @router.get("/{job_id}/results")
 def get_results(job_id: str):
     job = fetch_job(job_id)
-    return Response(uws.job_xml(job), media_type=XML)
-
-
-def result_file_response(job: dict, job_id: str) -> FileResponse:
-    """The job's result file, or NotFoundError if it has none (yet)."""
-    if job["phase"] != "COMPLETED":
-        raise NotFoundError(f"job {job_id} has no result (phase {job['phase']})")
-    result_dir = uws.job_results_dir(job_id)
-    try:
-        names = os.listdir(result_dir) if os.path.isdir(result_dir) else []
-    except OSError:
-        names = []
-    for name in names:
-        if name.startswith("result."):
-            return FileResponse(
-                os.path.join(result_dir, name),
-                media_type=job["result_mime"] or "application/octet-stream",
-            )
-    raise NotFoundError(f"result file for job {job_id} not found")
+    return Response(uws_xml.job_xml(job), media_type=XML)
 
 
 @router.get("/{job_id}/results/result")

@@ -12,7 +12,7 @@ Column metadata is transcribed from REC-ObsCore-v1.1-20170509 Table 6 (the
 TAP_SCHEMA values for the mandatory fields); utypes carry the ``obscore:``
 prefix the table's caption says it omits. One non-standard column rides
 along: ``s_region_geom``, the pgsphere footprint the ingest pipeline
-derives from ``s_region`` (package 7), registered with ``std = 0`` so ADQL
+derives from ``s_region``, registered with ``std = 0`` so ADQL
 ``INTERSECTS``/``CONTAINS`` work on the view too.
 
 Mapping decisions (each visible in the SQL below):
@@ -333,9 +333,9 @@ OBSCORE_COLUMNS: list[ObsCoreColumn] = [
         "Name of the instrument used for this observation",
         "o.instrument_name",
     ),
-    # Non-standard companion: the pgsphere footprint derived from s_region
-    # (package 7). std = 0 says it plainly; it exists so INTERSECTS/CONTAINS
-    # work directly on the view.
+    # Non-standard companion: the pgsphere footprint derived from s_region.
+    # std = 0 says it plainly; it exists so INTERSECTS/CONTAINS work directly
+    # on the view.
     ObsCoreColumn(
         "s_region_geom",
         "char",
@@ -539,7 +539,7 @@ def ensure_obscore(conn) -> None:
     ).fetchone()
     if existing and existing[0] != "v":
         # A deployment that already has an ivoa.obscore *table* (its own
-        # archive, or the benchmark suite's synthetic one) is publishing its
+        # archive, or a test harness's synthetic one) is publishing its
         # own ObsCore: replacing it would destroy data the service does not
         # own, and crashing on it would take the whole bootstrap down.
         log.warning(

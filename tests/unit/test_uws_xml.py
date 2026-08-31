@@ -3,7 +3,7 @@
 import datetime
 from xml.etree import ElementTree as ET
 
-from egernia_core import uws
+from egernia_core import uws_xml
 
 NS = {
     "uws": "http://www.ivoa.net/xml/UWS/v1.0",
@@ -36,7 +36,7 @@ def _job(**overrides):
 
 
 def test_job_xml_basic_fields():
-    root = ET.fromstring(uws.job_xml(_job()).decode())
+    root = ET.fromstring(uws_xml.job_xml(_job()).decode())
     assert root.tag == f"{{{NS['uws']}}}job"
     assert root.get("version") == "1.1"
     assert root.find("uws:jobId", NS).text == "abc123"
@@ -46,21 +46,21 @@ def test_job_xml_basic_fields():
 
 
 def test_job_xml_nillable_fields():
-    root = ET.fromstring(uws.job_xml(_job()).decode())
+    root = ET.fromstring(uws_xml.job_xml(_job()).decode())
     for tag in ("runId", "ownerId", "quote", "startTime", "endTime"):
         el = root.find(f"uws:{tag}", NS)
         assert el.get(f"{{{NS['xsi']}}}nil") == "true", tag
 
 
 def test_job_xml_parameters():
-    root = ET.fromstring(uws.job_xml(_job()).decode())
+    root = ET.fromstring(uws_xml.job_xml(_job()).decode())
     params = {p.get("id"): p.text for p in root.findall("uws:parameters/uws:parameter", NS)}
     assert params == {"lang": "ADQL", "query": "SELECT 1"}
 
 
 def test_completed_job_has_result_reference():
     job = _job(phase="COMPLETED", result_mime="text/csv")
-    root = ET.fromstring(uws.job_xml(job).decode())
+    root = ET.fromstring(uws_xml.job_xml(job).decode())
     result = root.find("uws:results/uws:result", NS)
     assert result.get("id") == "result"
     assert result.get(f"{{{NS['xlink']}}}href").endswith("/async/abc123/results/result")
@@ -69,7 +69,7 @@ def test_completed_job_has_result_reference():
 
 def test_error_job_has_error_summary():
     job = _job(phase="ERROR", error_type="fatal", error_message="division by zero")
-    root = ET.fromstring(uws.job_xml(job).decode())
+    root = ET.fromstring(uws_xml.job_xml(job).decode())
     err = root.find("uws:errorSummary", NS)
     assert err.get("type") == "fatal"
     assert err.find("uws:message", NS).text == "division by zero"
@@ -77,7 +77,7 @@ def test_error_job_has_error_summary():
 
 def test_joblist_xml():
     jobs = [_job(), _job(job_id="def456", phase="COMPLETED")]
-    root = ET.fromstring(uws.joblist_xml(jobs).decode())
+    root = ET.fromstring(uws_xml.joblist_xml(jobs).decode())
     refs = root.findall("uws:jobref", NS)
     assert [r.get("id") for r in refs] == ["abc123", "def456"]
     assert refs[1].find("uws:phase", NS).text == "COMPLETED"

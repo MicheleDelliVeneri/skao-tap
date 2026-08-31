@@ -236,7 +236,7 @@ def _scalar_column(
 
 # The footprint column the data models carry as STC-S text. Text is not
 # queryable: each such column gets a derived pgsphere companion so ADQL
-# INTERSECTS/CONTAINS work over the ingested metadata (package 7).
+# INTERSECTS/CONTAINS work over the ingested metadata.
 REGION_SOURCE = "s_region"
 REGION_SUFFIX = "_geom"
 
@@ -393,9 +393,8 @@ def ddl_statements(tables: list[TableSpec], query_role: str) -> list[str]:
         # estimates over the chain. What they do *not* do is fix join
         # selectivity — the planner estimates `child.key = parent.key` from
         # per-column statistics on the two relations and never consults
-        # extended statistics for it, so the 50x-477x join misestimates on
-        # the benchmark's join-heavy classes (Q09, Q11, Q14) stay open for a
-        # different lever.
+        # extended statistics for it, so join misestimates over the hierarchy
+        # need a different lever (evidence: docs/postgres-performance.md).
         #
         # The name is schema-qualified where the CREATE INDEX above is not,
         # and the asymmetry is real: an index is always created in its

@@ -1,37 +1,23 @@
 """DSV written by PostgreSQL instead of by CPython.
 
-`stream_dsv` is the single busiest frame in the service: `_csv.writer`'s quoting
-at 9.19 µs/row, plus psycopg materialising every row as a tuple of Python
-objects to feed it. Package 10 took the Python writer as far as it goes; what
-remains is CPython's floor and can only be moved, not shrunk. `COPY (<query>) TO
-STDOUT WITH (FORMAT csv)` produces the bytes in the server and hands them to the
-socket as buffers, so neither the tuples nor the writer exist.
+`stream_dsv` is the single busiest frame in the service: `_csv.writer`'s
+quoting, plus psycopg materialising every row as a tuple of Python objects to
+feed it — CPython's floor, which can only be moved, not shrunk. `COPY
+(<query>) TO STDOUT WITH (FORMAT csv)` produces the bytes in the server and
+hands them to the socket as buffers, so neither the tuples nor the writer
+exist. In a deployment PostgreSQL is a different pod, so the split matters
+more than the total: the writer's per-row cost leaves the API's CPU, and what
+the database takes on in exchange is the projection. (Measurements:
+docs/python-performance.md; reproduce with tests/component/test_copy_dsv_cost.py
+and tests/benchmarks/test_hot_paths.py.)
 
-The catch is that the two renderings are not the same bytes. Raw `COPY` diverges
-from `stream_dsv` in eleven ways at last count — four of them in float8, which
-is most of ObsCore — so this module does not use raw `COPY`. It re-projects
-every column through an expression chosen to reproduce what the Python path
-emits, and `tests/component/test_copy_dsv_differential.py` is what says whether
-it does. Formatting in the projection rather than afterwards is the whole point:
-a per-row Python pass to repair the bytes would put back the cost being removed.
-
-What it costs, measured against the projection this module actually builds
-(tests/component/test_copy_dsv_cost.py, seeded ObsCore, 12 columns):
-
-    python writer (before)      28.40 µs/row
-    COPY, raw (wrong bytes)     12.76 µs/row    2.22x
-    COPY + projection (after)   14.17 µs/row    2.00x
-
-The formatting costs about 1.4 µs/row, and the move is still worth 2x with both
-sides charged to one machine. On a corpus where every float is integral — round
-exposure times, whole coordinates, the branch that fires least on random data
-and most on real archives — it is 3.02x, because the writer is the side that
-gets slower.
-
-In a deployment PostgreSQL is a different pod, so the split matters more than
-the total: what leaves the API's own CPU is the writer's 28.40 µs/row against
-0.134 µs/row to receive the bytes (tests/benchmarks/test_hot_paths.py), and what
-the database takes on in exchange is the projection.
+The catch is that the two renderings are not the same bytes — several of the
+divergences in float8, which is most of ObsCore — so this module does not use
+raw `COPY`. It re-projects every column through an expression chosen to
+reproduce what the Python path emits, and
+`tests/component/test_copy_dsv_differential.py` is what says whether it does.
+Formatting in the projection rather than afterwards is the whole point: a
+per-row Python pass to repair the bytes would put back the cost being removed.
 
 Any column this module cannot promise to reproduce — an unrecognised type, a
 repeated column name, a single-column result — declines the whole result and the
@@ -287,7 +273,7 @@ class CopiedRows:
 
 
 def header(columns, delimiter: str) -> bytes:
-    """The header row, written by the same `csv.writer` the body used to be.
+    """The header row, written by the `csv.writer` the fallback body uses.
 
     `COPY ... HEADER` would write it too, but out of the aliases the projection
     invented, and quoting names is a second place for the two paths to

@@ -20,7 +20,7 @@ project implements the full TAP 1.1 endpoint set:
 | Concern | Library |
 |---|---|
 | ADQL parsing & translation to PostgreSQL | vendored ADQL 2.1 fork of [`queryparser-python3`](https://github.com/aipescience/queryparser) (ANTLR-based, translates ADQL geometry to [pg_sphere](https://pgsphere.github.io/); fork in `libs/egernia-core/egernia_core/query/_adql/`, the non-ADQL parts still from PyPI) |
-| VOTable serialization | `astropy.io.votable` |
+| VOTable serialization | hand-written streaming writer (`egernia_core.query.results`); astropy parses it in tests |
 | HTTP layer | FastAPI / uvicorn |
 | Job queue | PostgreSQL `FOR UPDATE SKIP LOCKED` — no extra broker |
 

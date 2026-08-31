@@ -83,7 +83,7 @@ class Settings:
     # import: lru_cache fixes its size at decoration. 0 disables the cache
     # without a rebuild -- every call becomes a miss and nothing is stored,
     # which is the way back out and the way to measure the cache on one host.
-    # 512 entries with their keys measured ~473 KiB per worker.
+    # Memory sizing per worker: docs/python-performance.md.
     translation_cache_size: int = _int("TAP_TRANSLATION_CACHE_SIZE", "512")
     default_exec_duration_s: int = _int("TAP_ASYNC_EXEC_DURATION", "600")
     job_retention_s: int = _int("TAP_JOB_RETENTION", str(7 * 24 * 3600))

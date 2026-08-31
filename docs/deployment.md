@@ -43,7 +43,7 @@ Key values (see `values.yaml` for the full list):
 
 | Value | Default | Description |
 |---|---|---|
-| `image.registry` / `image.tag` | `ghcr.io/ska-telescope` / chart appVersion | Where CI publishes the service images |
+| `image.registry` / `image.tag` | `ghcr.io/ska-telescope/egernia` / `latest` | Where CI publishes the service images (an empty tag falls back to the chart appVersion) |
 | `tapApi.replicas` | `1` | API replicas (stateless) |
 | `tapApi.baseUrl` | in-cluster service URL | External base URL written into capabilities and result links |
 | `tapExecutor.replicas` | `1` | Executor replicas; safe to scale out (jobs claimed with `SKIP LOCKED`) |
@@ -127,14 +127,15 @@ Two knobs shape this behaviour:
 ```yaml
 tapApi:
   backlog: 2048          # accept-queue size (uvicorn --backlog)
-  limitConcurrency: 0    # connections per worker before answering 503
+  limitConcurrency: 64   # connections per worker before answering 503
 ```
 
 `backlog` sizes the kernel's accept queue; raising it absorbs sharper
 arrival bursts but adds queueing, not capacity. `limitConcurrency` is the
 application-level counterpart: past that many concurrent connections *per
 worker process*, uvicorn answers `503` immediately — a refusal a client can
-back off from. It is off (`0`, unlimited) by default because the right value
+back off from. The chart defaults it to `64` per worker (`0` disables the
+limit) because the right value
 depends on what one worker can actually serve; when set, put it above the
 worker's normal concurrent load and below where resets were observed.
 
@@ -223,7 +224,7 @@ through node drains and cluster upgrades.
 ### Automatic scaling
 
 Those replica counts can be handed to an autoscaler instead: tap-api on CPU,
-tap-executor on the age of the oldest queued job. Both are off by default and
+tap-executor on the depth of the job queue. Both are off by default and
 have their own page — [Autoscaling](autoscaling.md) — including the
 combinations the chart refuses, among them the connection ceiling that a
 maximum replica count makes reachable.

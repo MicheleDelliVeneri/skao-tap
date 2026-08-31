@@ -120,8 +120,8 @@ def _first_unpublished(
 
 
 # TAP_SCHEMA's table list changes when a deployment gains a metadata domain or
-# an operator publishes a table — rarely, and never per request, which is how
-# often this used to be read. Cached with a short life so a table published
+# an operator publishes a table — rarely, and never per request.
+# Cached with a short life so a table published
 # out of band still appears without a restart, and invalidated outright when
 # this service is the one that changed it.
 _PUBLISHED_TTL_S = 30.0

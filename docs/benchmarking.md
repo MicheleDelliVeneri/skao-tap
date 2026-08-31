@@ -45,7 +45,7 @@ cluster involved, via `pytest-benchmark`. Run by
 say where a request's CPU goes.
 
 ```bash
-uv run pytest tests/benchmarks --benchmark-only
+uv run --group microbenchmark pytest tests/benchmarks --benchmark-only
 ```
 
 ## The dataset

@@ -284,7 +284,7 @@ transition, which is why it is rendered only when the minimum is 0.
 ```console
 $ kubectl get hpa
 NAME           REFERENCE              TARGETS   MINPODS  MAXPODS  REPLICAS
-tap-api        Deployment/tap-api     12%/70%   2        6        2
+egernia-tap-api   Deployment/egernia-tap-api   12%/70%   2        6        2
 $ kubectl get scaledobject          # with KEDA
 $ kubectl describe scaledobject tap-executor   # trigger errors show here
 ```

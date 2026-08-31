@@ -99,7 +99,7 @@ def tap_schema_divergence(conn) -> tuple[list[str], list[str]]:
     ``column "s_region_geom" does not exist``.
 
     Reported, never repaired. The rows may describe a relation this service
-    does not own — the benchmark suite replaces ``ivoa.obscore`` with its own
+    does not own — a test harness may replace ``ivoa.obscore`` with its own
     table, and a deployment may publish tables the chart never created — and
     deleting somebody else's metadata to tidy our own view of it is worse
     than naming the problem.

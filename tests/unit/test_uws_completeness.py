@@ -4,7 +4,7 @@ and real ABORT via pg_cancel_backend (roadmap package 3)."""
 import datetime
 from typing import Any, cast
 
-from egernia_api.endpoints import uws_api
+from egernia_api.queries import jobs
 
 QUERY = "SELECT source_id, ra FROM ska.continuum_sources"
 
@@ -16,7 +16,7 @@ def _flip_phase_on_sleep(monkeypatch, fake_db, job_id, to_phase):
     async def flipping_sleep(seconds):
         fake_db.jobs[job_id]["phase"] = to_phase
 
-    monkeypatch.setattr(uws_api.asyncio, "sleep", flipping_sleep)
+    monkeypatch.setattr(jobs.asyncio, "sleep", flipping_sleep)
 
 
 def test_wait_validates_parameters(client, fake_db):
@@ -41,7 +41,7 @@ def test_wait_returns_immediately_on_phase_mismatch(client, fake_db, monkeypatch
     async def must_not_sleep(seconds):
         raise AssertionError("WAIT blocked despite PHASE mismatch")
 
-    monkeypatch.setattr(uws_api.asyncio, "sleep", must_not_sleep)
+    monkeypatch.setattr(jobs.asyncio, "sleep", must_not_sleep)
     job = fake_db.add_job(phase="EXECUTING")
     response = client.get(
         f"/tap/async/{job['job_id']}/phase", params={"WAIT": "30", "PHASE": "QUEUED"}
@@ -66,8 +66,8 @@ def test_wait_expires_with_unchanged_phase(client, fake_db, monkeypatch):
     async def instant(seconds):
         pass
 
-    monkeypatch.setattr(uws_api.asyncio, "sleep", instant)
-    monkeypatch.setattr(uws_api.time, "monotonic", lambda: float(next(ticks)))
+    monkeypatch.setattr(jobs.asyncio, "sleep", instant)
+    monkeypatch.setattr(jobs.time, "monotonic", lambda: float(next(ticks)))
     job = fake_db.add_job(phase="EXECUTING")
     response = client.get(f"/tap/async/{job['job_id']}/phase", params={"WAIT": "3"})
     assert response.text == "EXECUTING"

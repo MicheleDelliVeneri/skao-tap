@@ -3,6 +3,8 @@ name: egernia
 description: IVOA TAP 1.1 server — microservices on PostgreSQL (tap-api, tap-executor, optional in-chart PostgreSQL with pg_sphere)
 type: application
 version: 0.1.0
+# tracks the service packages' version (services/*/pyproject.toml); used as
+# the image tag only when image.tag is set to empty
 appVersion: "0.1.0"
 keywords:
   - ivoa

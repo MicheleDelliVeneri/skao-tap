@@ -48,7 +48,8 @@ column metadata in a `metadata` array beside the `data` array.
 
 ## What it costs
 
-Measured with `make benchmark-serialize`, which runs the writers in process on
+Measured with the since-removed `make benchmark-serialize` harness, which ran
+the writers in process on
 the Q11 projection — eleven ObsCore columns, five doubles, five wide text
 fields, one small integer — with no database, no HTTP and no cluster in the
 way, so a per-row cost is a per-row cost. 10,000 rows, best of 15 repetitions,
@@ -115,23 +116,17 @@ still there and still worth taking, but by a different route — a `COPY` of the
 row tuples wrapped in TABLEDATA, or an Arrow-backed writer — and that is a
 separate argument, not an extension of this one.
 
-Reproduce it, or measure your own hardware:
-
-```bash
-make benchmark-serialize                      # 1,000 and 10,000 rows
-make benchmark-serialize ROWS="1000 100000"   # or wherever your results live
-```
-
-The same comparison behind a real HTTP request — the writers plus the
-database, the connection pool and the network — is
-`make benchmark-result-formats`, which drives Q10 and Q11 through every format
-at fixed concurrency and publishes a per-format p95 and response size. Use it
-to decide what a *deployment* should recommend; use `benchmark-serialize` to
-decide whether a change to the serialisation path did anything. Measured
-end-to-end (run `20260824T181653Z-a5e3d315`, D1, 10,000 rows per response,
+The `make benchmark-serialize` and `make benchmark-result-formats` harnesses
+that produced these figures have been removed with the rest of the cluster
+benchmark suite (see [the performance archive](performance/index.md)). The
+serialization hot paths are still measured per commit by
+`uv run --group microbenchmark pytest tests/benchmarks --benchmark-only`
+(`tests/benchmarks/test_hot_paths.py`), which is the tool for deciding whether
+a change to the serialisation path did anything. The archived end-to-end
+comparison (run `20260824T181653Z-a5e3d315`, D1, 10,000 rows per response,
 4 clients): parquet p95 307 ms and 0.54 MiB per response, arrow 313 ms and
 2.16 MiB, json 544 ms, votable 615 ms, csv/tsv ~750 ms — warm-cache figures,
-since the family holds the database cost constant to isolate the writer.
+since the family held the database cost constant to isolate the writer.
 
 ## How the writers stay cheap
 
