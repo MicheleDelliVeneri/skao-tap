@@ -450,6 +450,9 @@ config:
   # -- Port the executor serves its metrics on. It has no HTTP API, so this
   # is the only way its queue depth and job outcomes leave the process.
   executorMetricsPort: 9100
+  # -- Seconds an executor owns a running job without renewing its claim.
+  # Increase this above the longest expected database/control-plane outage.
+  executorLeaseSeconds: 30
   # -- How long a request waits for a free connection before being told the
   # service is full. Short on purpose: a request that cannot proceed should
   # answer 503 with Retry-After rather than hold the client, and anything

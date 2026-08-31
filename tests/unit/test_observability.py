@@ -6,6 +6,7 @@ performance fixes take a local harness and a sampling profiler.
 """
 
 import time
+from typing import Any, cast
 
 import pytest
 from egernia_core import observability as obs
@@ -226,7 +227,7 @@ def test_an_abandoned_stream_is_still_measured():
     before = count()
     stream = _timed(iter([b"a", b"b", b"c"]), time.perf_counter())
     next(stream)
-    stream.close()  # the client went away
+    cast(Any, stream).close()  # the client went away
     assert count() == before + 1
 
 
@@ -273,7 +274,12 @@ def test_a_failed_job_is_counted_as_a_failure(monkeypatch, fake_db):
     def explode(*args, **kwargs):
         raise RuntimeError("query blew up")
 
-    job = fake_db.add_job(phase="EXECUTING", query_sql="SELECT 1", parameters={})
+    job = fake_db.add_job(
+        phase="EXECUTING",
+        query_sql="SELECT 1",
+        parameters={},
+        worker_id=cast(Any, worker).WORKER_ID,
+    )
     monkeypatch.setattr(worker, "run_query", explode, raising=False)
 
     before = generate_latest(obs.REGISTRY).decode()
@@ -306,6 +312,7 @@ def _run_a_job_that_is_finalized_mid_stream(fake_db, monkeypatch):
         query_sql=QUERY,
     )
     claimed = worker.claim_job()
+    assert claimed is not None
     real_stream = worker.result_stream
 
     def abort_then_stream(*args, **kwargs):
@@ -345,6 +352,7 @@ def test_an_abort_before_the_query_starts_is_counted_but_not_timed(
         query_sql=QUERY,
     )
     claimed = worker.claim_job()
+    assert claimed is not None
     fake_db.jobs[job["job_id"]]["phase"] = "ABORTED"  # before the PID is published
 
     counted = _metric('tap_jobs_completed_total{phase="ABORTED"}')
@@ -365,6 +373,7 @@ def test_a_deleted_job_is_not_counted_as_an_outcome(fake_db, results_dir, monkey
         query_sql=QUERY,
     )
     claimed = worker.claim_job()
+    assert claimed is not None
     real_stream = worker.result_stream
 
     def delete_then_stream(*args, **kwargs):

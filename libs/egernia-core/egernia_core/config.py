@@ -4,6 +4,7 @@ import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from typing import Optional
 from urllib.parse import urlsplit
 
 TRUE_VALUES = ("1", "true", "yes", "on")
@@ -120,6 +121,10 @@ class Settings:
     # Port the executor serves its metrics on; the API serves them on its own
     # port at /metrics, but a worker loop has no listener of its own.
     executor_metrics_port: int = _int("TAP_EXECUTOR_METRICS_PORT", "9100")
+    # Long enough to tolerate a brief database stall; workers renew at one
+    # third of this interval. Tune above the longest expected control-plane
+    # outage before enabling more aggressive crash recovery.
+    executor_lease_s: int = _int("TAP_EXECUTOR_LEASE_SECONDS", "30")
 
     # -- database connection pool ------------------------------------------
     # The pool bounds how many queries a process can have in flight, so it is
@@ -199,7 +204,9 @@ settings = Settings()
 # one request. A ContextVar rather than a parameter because the URL builders
 # are spread across the UWS store, the VOSI documents and both APIs, and the
 # executor calls some of them with no request at all.
-_origin: ContextVar[str | None] = ContextVar("tap_request_origin", default=None)
+_origin: ContextVar[Optional[str]] = ContextVar(  # noqa: UP045
+    "tap_request_origin", default=None
+)
 
 
 def trusted_hosts() -> frozenset[str]:
@@ -208,7 +215,7 @@ def trusted_hosts() -> frozenset[str]:
 
 
 @contextmanager
-def request_origin(origin: str | None):
+def request_origin(origin: Optional[str]):  # noqa: UP045
     """Bind the client's origin for one request. None keeps the configured URL."""
     token = _origin.set(origin)
     try:

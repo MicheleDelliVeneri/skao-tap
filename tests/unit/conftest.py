@@ -12,6 +12,7 @@ import datetime
 import io
 import json
 import re
+from typing import Any, cast
 
 import egernia_core.db
 import pytest
@@ -203,7 +204,7 @@ class FakeDB:
     # -- helpers -----------------------------------------------------------
 
     def add_job(self, **overrides) -> dict:
-        job = dict.fromkeys(JOB_KEYS)
+        job: dict = dict.fromkeys(JOB_KEYS)
         job.update(
             job_id=uws.new_job_id(),
             phase="PENDING",
@@ -219,7 +220,7 @@ class FakeDB:
     # -- SQL routing --------------------------------------------------------
 
     def run(self, sql, params=()):
-        text = sql.strip()
+        text = sql.as_string() if hasattr(sql, "as_string") else sql.strip()
         self.statements.append(text)
         head = text.upper()
 
@@ -307,6 +308,7 @@ class FakeDB:
             return FakeResult(rowcount=1)
 
         if "FOR UPDATE SKIP LOCKED" in text:  # executor claim
+            worker_id, lease_s = params
             queued = sorted(
                 (j for j in self.jobs.values() if j["phase"] == "QUEUED"),
                 key=lambda j: j["creation_time"],
@@ -314,9 +316,16 @@ class FakeDB:
             if not queued:
                 return FakeResult()
             job = queued[0]
+            now = datetime.datetime.now(datetime.UTC)
             job["phase"] = "EXECUTING"
-            job["start_time"] = datetime.datetime.now(datetime.UTC)
+            job["start_time"] = now
+            job["worker_id"] = worker_id
+            job["lease_expires"] = now + datetime.timedelta(seconds=lease_s)
             return FakeResult([_job_row(job)])
+
+        if text.startswith("SELECT phase, worker_id FROM uws.jobs"):
+            job = self.jobs.get(params[0])
+            return FakeResult([(job["phase"], job["worker_id"])] if job else [])
 
         if text.startswith("SELECT owner_id FROM uws.jobs WHERE job_id"):
             job = self.jobs.get(params[0])
@@ -345,10 +354,29 @@ class FakeDB:
                 jobs = jobs[: params[index]]
             return FakeResult([_job_row(j) for j in jobs])
 
+        if head.startswith("UPDATE UWS.JOBS SET") and "LEASE_EXPIRES < NOW()" in head:
+            now = datetime.datetime.now(datetime.UTC)
+            expired = [
+                job
+                for job in self.jobs.values()
+                if job["phase"] == "EXECUTING"
+                and (job["lease_expires"] is None or job["lease_expires"] < now)
+            ]
+            for job in expired:
+                job.update(
+                    phase="QUEUED",
+                    start_time=None,
+                    backend_pid=None,
+                    worker_id=None,
+                    lease_expires=None,
+                )
+            return FakeResult([(job["job_id"],) for job in expired])
+
         if head.startswith("UPDATE UWS.JOBS SET"):
             match = re.match(
                 r"UPDATE uws\.jobs SET (.*?) WHERE (.*?)(?: RETURNING (.*))?$", text, re.S
             )
+            assert match is not None
             set_part, where_part, returning = match.groups()
             remaining = list(params)
             sets = {}
@@ -357,6 +385,10 @@ class FakeDB:
                 name, rhs = name.strip(), rhs.strip()
                 if rhs == "%s":
                     sets[name] = remaining.pop(0)
+                elif rhs.startswith("now() + %s"):
+                    sets[name] = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
+                        seconds=remaining.pop(0)
+                    )
                 elif rhs.upper() == "NULL":
                     sets[name] = None
                 else:
@@ -459,17 +491,18 @@ class FakeDB:
 
         if text.startswith("SELECT to_jsonb(p)"):  # generic plugin listing
             root_match = re.search(r"FROM (\S+) p ORDER BY p\.(\w+)", text)
+            assert root_match is not None
             root, order_column = root_match.group(1), root_match.group(2)
             descendants = re.findall(r"FROM (\S+) c WHERE c\.(\w+) = p\.", text)
             listing = []
             for row in self.srcnet.get(root, {}).values():
-                counts = tuple(
+                child_counts = tuple(
                     sum(
                         1 for r in self.srcnet.get(table, {}).values() if r.get(key) == row.get(key)
                     )
                     for table, key in descendants
                 )
-                listing.append((dict(row), *counts))
+                listing.append((dict(row), *child_counts))
             listing.sort(key=lambda entry: str(entry[0].get(order_column)))
             return FakeResult(listing)
 
@@ -489,7 +522,7 @@ def _cold_translation_cache():
     """
     from egernia_core.query.adql import translate
 
-    translate.cache_clear()
+    cast(Any, translate).cache_clear()
 
 
 @pytest.fixture
@@ -543,7 +576,8 @@ def _rsa_jwk(kid="k1"):
     from cryptography.hazmat.primitives.asymmetric import rsa
 
     private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    jwk = _json.loads(_jwt.algorithms.RSAAlgorithm.to_jwk(private.public_key()))
+    algorithms = cast(Any, _jwt).algorithms
+    jwk = _json.loads(algorithms.RSAAlgorithm.to_jwk(private.public_key()))
     jwk.update({"kid": kid, "alg": "RS256", "use": "sig"})
     return private, jwk
 

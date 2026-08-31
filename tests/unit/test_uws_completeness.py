@@ -2,6 +2,7 @@
 and real ABORT via pg_cancel_backend (roadmap package 3)."""
 
 import datetime
+from typing import Any, cast
 
 from egernia_api.endpoints import uws_api
 
@@ -81,8 +82,12 @@ def test_json_wait_blocks_until_phase_changes(client, fake_db, monkeypatch):
 
 
 def test_after_filters_job_list(client, fake_db):
-    old = fake_db.add_job(creation_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC))
-    new = fake_db.add_job(creation_time=datetime.datetime(2026, 8, 1, tzinfo=datetime.UTC))
+    old = fake_db.add_job(
+        creation_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)  # noqa: UP017
+    )
+    new = fake_db.add_job(
+        creation_time=datetime.datetime(2026, 8, 1, tzinfo=datetime.timezone.utc)  # noqa: UP017
+    )
     listing = client.get("/tap/async", params={"AFTER": "2026-06-01T00:00:00Z"})
     assert new["job_id"] in listing.text
     assert old["job_id"] not in listing.text
@@ -122,7 +127,9 @@ def test_executor_registers_and_clears_backend_pid(fake_db, results_dir):
     from egernia_executor import worker
 
     job = fake_db.add_job(phase="QUEUED", parameters={"QUERY": QUERY}, query_sql=QUERY)
-    worker.execute_job(worker.claim_job())
+    claimed = worker.claim_job()
+    assert claimed is not None
+    worker.execute_job(claimed)
     assert any(s.startswith("SELECT pg_backend_pid()") for s in fake_db.statements)
     stored = fake_db.jobs[job["job_id"]]
     assert stored["phase"] == "COMPLETED"
@@ -135,6 +142,7 @@ def test_executor_treats_cancellation_of_aborted_job_as_abort(fake_db, results_d
     fake_db.result_error = RuntimeError("canceling statement due to user request")
     job = fake_db.add_job(phase="QUEUED", parameters={"QUERY": QUERY}, query_sql=QUERY)
     claimed = worker.claim_job()
+    assert claimed is not None
     fake_db.jobs[job["job_id"]]["phase"] = "ABORTED"  # ABORT raced the execution
     worker.execute_job(claimed)
     stored = fake_db.jobs[job["job_id"]]
@@ -179,7 +187,7 @@ def test_watchdog_stays_quiet_while_job_active(fake_db, monkeypatch):
     from egernia_executor import worker
 
     monkeypatch.setattr(worker._AbortWatchdog, "POLL_S", 0.01)
-    job = fake_db.add_job(phase="EXECUTING")
+    job = fake_db.add_job(phase="EXECUTING", worker_id=cast(Any, worker).WORKER_ID)
     with worker._AbortWatchdog(job["job_id"], 4242):
         time_module.sleep(0.1)
     assert fake_db.cancelled == []

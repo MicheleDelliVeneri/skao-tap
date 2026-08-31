@@ -7,12 +7,17 @@ writes the serialized result to the shared results volume, and finalizes
 the job phase. Also garbage-collects jobs past their destruction time.
 """
 
+import contextlib
 import datetime
 import os
+import secrets
 import shutil
+import socket
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional, cast
 
 from egernia_core import uws
 from egernia_core.config import settings
@@ -38,28 +43,74 @@ from egernia_core.query.upload import (
 )
 from egernia_core.query.votable import normalize_format
 from prometheus_client import start_http_server
+from psycopg import sql as pg_sql
 from ska_src_logging import LogContext
 
 log = configure_logging("tap-executor")
 
 POLL_INTERVAL_S = 1.0
 CLEANUP_INTERVAL_S = 60.0
+RECOVERY_INTERVAL_S = 10.0
+LEASE_S = max(3, settings.executor_lease_s)
+HEARTBEAT_S = max(1.0, LEASE_S / 3)
+WORKER_ID = f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
 
-CLAIM_SQL = f"""
-UPDATE uws.jobs
-   SET phase = 'EXECUTING', start_time = now()
- WHERE job_id = (
-        SELECT job_id FROM uws.jobs
-         WHERE phase = 'QUEUED'
-         ORDER BY creation_time
-         FOR UPDATE SKIP LOCKED
-         LIMIT 1)
-RETURNING {uws.JOB_COLUMNS_SQL}
-"""
+CLAIM_SQL = pg_sql.SQL(
+    """
+    UPDATE uws.jobs
+       SET phase = 'EXECUTING', start_time = now(), worker_id = %s,
+           lease_expires = now() + %s * interval '1 second'
+     WHERE job_id = (
+            SELECT job_id FROM uws.jobs
+             WHERE phase = 'QUEUED'
+             ORDER BY creation_time
+             FOR UPDATE SKIP LOCKED
+             LIMIT 1)
+    RETURNING {}
+    """
+).format(pg_sql.SQL(", ").join(map(pg_sql.Identifier, uws.JOB_COLUMNS)))
 
 
 def _now():
-    return datetime.datetime.now(datetime.UTC)
+    return datetime.datetime.now(datetime.timezone.utc)  # noqa: UP017
+
+
+def _renew_lease(job_id: str) -> bool:
+    with db_connection() as conn:
+        return bool(
+            conn.execute(
+                "UPDATE uws.jobs SET lease_expires ="
+                " now() + %s * interval '1 second'"
+                " WHERE job_id = %s AND phase = 'EXECUTING' AND worker_id = %s",
+                (LEASE_S, job_id, WORKER_ID),
+            ).rowcount
+        )
+
+
+class _LeaseHeartbeat:
+    """Renew this process's claim while a job is executing."""
+
+    def __init__(self, job_id: str):
+        self._job_id = job_id
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._stop.set()
+        self._thread.join(timeout=HEARTBEAT_S + 1)
+
+    def _run(self):
+        while not self._stop.wait(HEARTBEAT_S):
+            try:
+                if not _renew_lease(self._job_id):
+                    log.warning("job %s lease is no longer owned by this worker", self._job_id)
+                    return
+            except Exception:
+                log.exception("failed to renew job %s lease", self._job_id)
 
 
 class _AbortWatchdog:
@@ -91,7 +142,7 @@ class _AbortWatchdog:
         self._thread.start()
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, exc_type, exc_value, traceback):
         self._stop.set()
         self._thread.join(timeout=5)
 
@@ -102,9 +153,10 @@ class _AbortWatchdog:
             try:
                 with db_connection() as conn:
                     row = conn.execute(
-                        "SELECT phase FROM uws.jobs WHERE job_id = %s", (self._job_id,)
+                        "SELECT phase, worker_id FROM uws.jobs WHERE job_id = %s",
+                        (self._job_id,),
                     ).fetchone()
-                    if row is not None and row[0] != "ABORTED":
+                    if row is not None and row == ("EXECUTING", WORKER_ID):
                         continue
                     # aborted (or deleted): interrupt the running statement,
                     # and keep doing so until execution ends. The signal is
@@ -125,7 +177,7 @@ class _AbortWatchdog:
                 log.exception("abort watchdog check failed for job %s", self._job_id)
 
 
-def _reap_backend(job_id: str, pid: int | None) -> None:
+def _reap_backend(job_id: str, pid: Optional[int]) -> None:  # noqa: UP045
     """After an abort or error, make sure this job's executing backend is
     really gone. Once the executor abandons its connection nothing else
     stops the server side: PostgreSQL only notices a lost client on the
@@ -169,15 +221,16 @@ def _job_tables(job: dict) -> set[str]:
     return touched_tables(job["query_sql"])
 
 
-def claim_job() -> dict | None:
+def claim_job() -> Optional[dict]:  # noqa: UP045
     with db_connection() as conn:
-        row = conn.execute(CLAIM_SQL).fetchone()
+        # pi-lens-ignore: python-sql-injection
+        row = conn.execute(CLAIM_SQL, (WORKER_ID, LEASE_S)).fetchone()
     if row is None:
         return None
     return uws._row_to_job(row)
 
 
-def _count_finalized_elsewhere(job_id: str) -> None:
+def _count_finalized_elsewhere(job_id: str):
     """Count a job this executor worked on but did not finalize itself.
 
     Reaching one of these paths means the phase was no longer EXECUTING: an
@@ -191,13 +244,21 @@ def _count_finalized_elsewhere(job_id: str) -> None:
         row = conn.execute("SELECT phase FROM uws.jobs WHERE job_id = %s", (job_id,)).fetchone()
     if row is None:
         log.info("job %s was deleted while running; no outcome to record", job_id)
-        return
+        return None
     phase = row[0]
     if phase == "EXECUTING":
         # nothing has finalized it after all, so it is not an outcome yet
         log.warning("job %s is still EXECUTING after failing to finalize", job_id)
-        return
+        return phase
     JOBS_COMPLETED.labels(phase=phase).inc()
+    return phase
+
+
+def _remove_result_dir(job_id: str) -> None:
+    try:
+        shutil.rmtree(uws.job_results_dir(job_id))
+    except FileNotFoundError:
+        log.debug("job %s had no result directory", job_id)
 
 
 def execute_job(job: dict) -> None:
@@ -222,7 +283,8 @@ def execute_job(job: dict) -> None:
         ),
     ):
         try:
-            _execute_job_inner(job, job_id, params, duration)
+            with _LeaseHeartbeat(job_id):
+                _execute_job_inner(job, job_id, params, duration)
         finally:
             if duration.query_ran:
                 QUERY_DURATION.labels(kind="async").observe(time.monotonic() - started)
@@ -230,6 +292,7 @@ def execute_job(job: dict) -> None:
 
 def _execute_job_inner(job: dict, job_id, params, duration) -> None:
     backend_pid = None
+    temp_path = None
     log.info("executing job %s", job_id)
     try:
         maxrec = min(int(params.get("MAXREC", settings.default_maxrec)), settings.hard_maxrec)
@@ -249,6 +312,7 @@ def _execute_job_inner(job: dict, job_id, params, duration) -> None:
         result_dir = uws.job_results_dir(job_id)
         os.makedirs(result_dir, exist_ok=True)
         result_path = os.path.join(result_dir, f"result.{ext}")
+        temp_path = f"{result_path}.{WORKER_ID}.tmp"
 
         # stream the statement straight into the result file, so large
         # result sets are never materialized in memory
@@ -266,23 +330,26 @@ def _execute_job_inner(job: dict, job_id, params, duration) -> None:
             # publish this backend's PID so ABORT can pg_cancel_backend() it —
             # conditionally, so an ABORT that already landed is honoured
             # before the query starts and never gains a stale PID
-            backend_pid = pid = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
+            pid_row = conn.execute("SELECT pg_backend_pid()").fetchone()
+            if pid_row is None:
+                raise RuntimeError("database did not report a backend PID")
+            backend_pid = pid = pid_row[0]
             with db_connection() as side:
                 published = side.execute(
                     "UPDATE uws.jobs SET backend_pid = %s"
-                    " WHERE job_id = %s AND phase = 'EXECUTING'",
-                    (pid, job_id),
+                    " WHERE job_id = %s AND phase = 'EXECUTING' AND worker_id = %s",
+                    (pid, job_id, WORKER_ID),
                 ).rowcount
                 if not published:
-                    shutil.rmtree(result_dir, ignore_errors=True)
-                    _count_finalized_elsewhere(job_id)
+                    if _count_finalized_elsewhere(job_id) == "ABORTED":
+                        _remove_result_dir(job_id)
                     log.info("job %s aborted before execution", job_id)
                     return
             # JIT compilation runs uninterruptibly before the first row and
             # can ignore cancellation for many seconds on high-cost plans; it
             # is a net loss for streaming workloads anyway
             conn.execute("SET LOCAL jit = off")
-            conn.execute(f"SET LOCAL ROLE {settings.query_role}")
+            conn.execute("SELECT set_config('role', %s, true)", (settings.query_role,))
             # A plain streamed statement, not a DECLARE'd cursor: the planner
             # may use parallel workers and plans for the whole result, which
             # a cursor forbids. statement_timeout (the job's execution
@@ -294,29 +361,37 @@ def _execute_job_inner(job: dict, job_id, params, duration) -> None:
                 result_stream(cur, sql, tap_meta, fmt_key, maxrec, 5000) as (chunks, limiter),
             ):
                 duration.query_ran = True
-                with open(result_path, "wb") as fh:
+                with open(temp_path, "wb") as fh:
                     for chunk in chunks:
                         result_size += fh.write(chunk)
 
-        with db_connection() as conn:
+        with db_connection() as conn, conn.transaction():
             # atomic transition: an ABORT committed at any point (even
             # between this statement and the stream ending) can never be
             # overwritten with COMPLETED
             completed = conn.execute(
                 "UPDATE uws.jobs SET phase = 'COMPLETED', end_time = %s,"
-                " result_mime = %s, result_size = %s, backend_pid = NULL"
-                " WHERE job_id = %s AND phase = 'EXECUTING'",
-                (_now(), mime, result_size, job_id),
-            ).rowcount
-        if not completed:  # aborted (or deleted) while running
-            shutil.rmtree(result_dir, ignore_errors=True)
-            _count_finalized_elsewhere(job_id)
+                " result_mime = %s, result_size = %s, backend_pid = NULL,"
+                " worker_id = NULL, lease_expires = NULL"
+                " WHERE job_id = %s AND phase = 'EXECUTING' AND worker_id = %s"
+                " RETURNING job_id",
+                (_now(), mime, result_size, job_id, WORKER_ID),
+            ).fetchone()
+            if completed:
+                os.replace(temp_path, result_path)
+        if not completed:  # aborted, deleted, or reclaimed while running
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(temp_path)
+            if _count_finalized_elsewhere(job_id) == "ABORTED":
+                _remove_result_dir(job_id)
             log.info("job %s finished but was already finalized; discarding", job_id)
             return
         JOBS_COMPLETED.labels(phase="COMPLETED").inc()
         log.info("job %s completed (%d rows, %s)", job_id, limiter.count, limiter.status)
     except Exception as exc:
-        shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
+        if temp_path:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(temp_path)
         _reap_backend(job_id, backend_pid)
         with db_connection() as conn:
             current = uws.get_job(conn, job_id)
@@ -327,17 +402,20 @@ def _execute_job_inner(job: dict, job_id, params, duration) -> None:
                 current = uws.get_job(conn, job_id)
             if current["phase"] == "ABORTED":
                 # ABORT cancelled our statement mid-run: not an error
+                _remove_result_dir(job_id)
                 JOBS_COMPLETED.labels(phase="ABORTED").inc()
                 log.info("job %s aborted while executing", job_id)
                 return
             # atomic: a racing ABORT wins, never overwritten with ERROR
             errored = conn.execute(
                 "UPDATE uws.jobs SET phase = 'ERROR', end_time = %s,"
-                " error_type = 'fatal', error_message = %s, backend_pid = NULL"
-                " WHERE job_id = %s AND phase = 'EXECUTING'",
-                (_now(), str(exc)[:4000], job_id),
+                " error_type = 'fatal', error_message = %s, backend_pid = NULL,"
+                " worker_id = NULL, lease_expires = NULL"
+                " WHERE job_id = %s AND phase = 'EXECUTING' AND worker_id = %s",
+                (_now(), str(exc)[:4000], job_id, WORKER_ID),
             ).rowcount
             if errored:
+                _remove_result_dir(job_id)
                 JOBS_COMPLETED.labels(phase="ERROR").inc()
                 log.exception("job %s failed", job_id)
             else:
@@ -347,13 +425,40 @@ def _execute_job_inner(job: dict, job_id, params, duration) -> None:
                 log.info("job %s aborted while executing", job_id)
 
 
+def _discard_partial_results(job_id: str) -> None:
+    result_dir = uws.job_results_dir(job_id)
+    try:
+        names = os.listdir(result_dir)
+    except FileNotFoundError:
+        return
+    for name in names:
+        if name.startswith("result."):
+            Path(result_dir, name).unlink(missing_ok=True)
+
+
+def recover_orphaned_jobs() -> int:
+    """Requeue EXECUTING jobs whose worker stopped renewing its lease."""
+    with db_connection() as conn:
+        rows = conn.execute(
+            "UPDATE uws.jobs SET phase = 'QUEUED', start_time = NULL,"
+            " backend_pid = NULL, worker_id = NULL, lease_expires = NULL"
+            " WHERE phase = 'EXECUTING'"
+            " AND (lease_expires IS NULL OR lease_expires < now())"
+            " RETURNING job_id"
+        ).fetchall()
+    for (job_id,) in rows:
+        _discard_partial_results(job_id)
+        log.warning("requeued job %s after its executor lease expired", job_id)
+    return len(rows)
+
+
 def cleanup_expired() -> None:
     with db_connection() as conn:
         rows = conn.execute(
             "DELETE FROM uws.jobs WHERE destruction < now() RETURNING job_id"
         ).fetchall()
     for (job_id,) in rows:
-        shutil.rmtree(uws.job_results_dir(job_id), ignore_errors=True)
+        _remove_result_dir(job_id)
         log.info("destroyed expired job %s", job_id)
 
 
@@ -399,7 +504,8 @@ def refresh_queue_metrics() -> None:
     # reading emptiness cannot tell "drained" from "broken"
     if not any(phase == "QUEUED" for phase, _ in counts):
         JOBS_BY_PHASE.labels(phase="QUEUED").set(0)
-    OLDEST_QUEUED_JOB.set(float((oldest and oldest[0]) or 0.0))
+    oldest_seconds = cast(Optional[float], oldest[0]) if oldest else None  # noqa: UP045
+    OLDEST_QUEUED_JOB.set(oldest_seconds or 0.0)
 
 
 def main() -> None:
@@ -412,9 +518,10 @@ def main() -> None:
         settings.results_dir,
         settings.executor_metrics_port,
     )
-    os.makedirs(settings.results_dir, exist_ok=True)
+    Path(settings.results_dir).mkdir(parents=True, exist_ok=True)
     _ensure_job_columns()
     last_cleanup = 0.0
+    last_recovery = 0.0
     last_queue_metrics = 0.0
     while True:
         # survive transient failures (e.g. an ABORT's pg_cancel_backend
@@ -432,6 +539,9 @@ def main() -> None:
             if time.monotonic() - last_queue_metrics > QUEUE_METRICS_INTERVAL_S:
                 refresh_queue_metrics()
                 last_queue_metrics = time.monotonic()
+            if time.monotonic() - last_recovery > RECOVERY_INTERVAL_S:
+                recover_orphaned_jobs()
+                last_recovery = time.monotonic()
             if time.monotonic() - last_cleanup > CLEANUP_INTERVAL_S:
                 cleanup_expired()
                 last_cleanup = time.monotonic()
