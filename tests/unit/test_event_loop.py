@@ -8,7 +8,7 @@ from fastapi import Request
 
 
 def test_concurrent_phase_reads_leave_the_event_loop(monkeypatch):
-    from egernia_api.endpoints import uws_api
+    from egernia_api.queries import jobs
 
     started = 0
     lock = threading.Lock()
@@ -23,10 +23,10 @@ def test_concurrent_phase_reads_leave_the_event_loop(monkeypatch):
         assert all_started.wait(1), "phase reads ran serially on the event loop"
         return {"job_id": job_id, "phase": "COMPLETED"}
 
-    monkeypatch.setattr(uws_api, "fetch_job", fetch_job)
+    monkeypatch.setattr(jobs, "fetch_job", fetch_job)
 
     async def read_all():
-        await asyncio.gather(*(uws_api.wait_for_phase(str(i), 0) for i in range(10)))
+        await asyncio.gather(*(jobs.wait_for_phase(str(i), 0) for i in range(10)))
 
     asyncio.run(read_all())
 

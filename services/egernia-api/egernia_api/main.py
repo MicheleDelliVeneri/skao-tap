@@ -4,6 +4,7 @@ Implements the TAP 1.1 endpoint set: /sync, /async (UWS 1.1), and the VOSI
 resources /capabilities, /availability, /tables, plus DALI /examples.
 """
 
+import importlib.metadata
 import socket
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
@@ -97,7 +98,9 @@ SERVED_BY = socket.gethostname()
 
 app = FastAPI(
     title="egernia TAP service",
-    version="0.1.0",
+    # the installed package's own version, so the OpenAPI document cannot
+    # drift from the code serving it
+    version=importlib.metadata.version("egernia-api"),
     lifespan=lifespan,
     # verify any bearer token on any route; the per-operation gates below
     # decide what a verified principal is then allowed to do
@@ -156,14 +159,12 @@ async def correlate(request: Request, call_next):
 
 # Probes.
 #
-# Deliberately not /tap/availability, which is what they used to be pointed at
-# and which is a VOSI resource that reports on the *database*. Under load the
-# connection pool saturates, that endpoint queues for a connection, the probe's
-# one-second default timeout expires, and Kubernetes kills a process that is
-# busy rather than broken — turning an overload into an outage, and dropping
-# every in-flight request with it. Measured: at an offered rate well inside the
-# service's own closed-loop capacity, the API was SIGKILLed twice by its
-# liveness probe.
+# Deliberately not /tap/availability, which is a VOSI resource that reports
+# on the *database*. Under load the connection pool saturates, that endpoint
+# queues for a connection, the probe's one-second default timeout expires, and
+# Kubernetes kills a process that is busy rather than broken — turning an
+# overload into an outage, and dropping every in-flight request with it
+# (observed under load; see docs/python-performance.md).
 #
 # So the two questions are asked separately, because their remedies differ.
 # Liveness asks "is this process wedged?", whose remedy is a restart, and it
@@ -349,8 +350,7 @@ async def sync(request: Request):
     upload_sources = await gather_upload_sources(request, params)
     uploads = await run_in_threadpool(parse_uploads, upload_sources)
     # ADQL translation is tens of milliseconds of pure-Python ANTLR work; on
-    # the event loop it stalls every other request for that long, which is why
-    # throughput stopped rising with concurrency
+    # the event loop it would stall every other request for that long
     prepared = await run_in_threadpool(prepare_query, params)
     # Spooling uses blocking PostgreSQL and file I/O, so it stays in the
     # threadpool; the request helper cancels that work if the client leaves.

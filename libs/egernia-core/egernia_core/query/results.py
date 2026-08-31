@@ -341,8 +341,8 @@ def stream_dsv(columns: list[ColumnMeta], rows: RowLimiter, delimiter: str) -> I
     writer = csv.writer(out, delimiter=delimiter, lineterminator="\n")
     writer.writerow([c.name for c in columns])
     # `csv.writer` already renders None as an empty field and calls `str` on
-    # everything else in C, so a fully typed row goes straight to it: the
-    # per-cell list comprehension this used to build was the whole cost.
+    # everything else in C, so a fully typed row goes straight to it — a
+    # per-cell Python comprehension here would be the dominant cost.
     for row in _coerced_rows(rows, _coercion_plan(columns, _VALUE_COERCIONS)):
         writer.writerow(row)
         if out.tell() >= 65536:
@@ -371,7 +371,7 @@ def stream_json(columns: list[ColumnMeta], rows: RowLimiter) -> Iterator[bytes]:
         # One encoder call for the whole batch rather than one per row. A
         # list dumps as `[a, b], [c, d]` between its outer brackets, with the
         # separator json already uses, so trimming them yields exactly the
-        # rows this used to join by hand.
+        # joined rows.
         text = json.dumps(batch)[1:-1]
         return text.encode() if first else f", {text}".encode()
 

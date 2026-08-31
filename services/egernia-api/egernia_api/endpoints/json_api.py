@@ -31,8 +31,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import iterate_in_threadpool
 
 from ..auth import auth_summary, gated, owner_of, require
-from ..queries.query import prepare_query, run_sync_for_request
-from .uws_api import (
+from ..queries.jobs import (
     fetch_job,
     parse_job_filters,
     queue_job,
@@ -40,6 +39,7 @@ from .uws_api import (
     run_or_abort,
     wait_for_phase,
 )
+from ..queries.query import prepare_query, run_sync_for_request
 
 API_PREFIX = "/api/v1"
 METADATA_LIST_DEFAULT = 100

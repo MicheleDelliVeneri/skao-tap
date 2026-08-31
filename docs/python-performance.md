@@ -46,11 +46,13 @@ measured — the mean successful response divided by that class's row width — 
 the `TOP` clause. A cone search with `TOP 500` returns around 233 rows, and
 sizing the writers by the limit would make every cone class several times its
 measured weight. `test_benchmark_sync_request_normal_mix` draws one request per
-iteration from the mix in `config/scenarios.yaml`'s proportions, so its **mean**
+iteration from the mix's proportions, so its **mean**
 is the mix-weighted per-request cost: at `replicas: 1, workers: 1` the service
 serves one request at a time, so the reciprocal of that mean is comparable to a
 measured single-worker saturation throughput. The comparison is a sanity check
-on the benchmark's scale, not a service-level objective.
+on the benchmark's scale, not a service-level objective. The mix proportions
+are inlined in `tests/benchmarks/test_hot_paths.py` (they came from the removed
+cluster harness's scenario configuration).
 
 ## Run locally
 
@@ -71,9 +73,9 @@ and a threadpool that turns seconds of benchmarking into hours — measured at
 saturated `tap-api` worker 74% of its throughput when profiled the same way.
 The cost of avoiding it is torn stacks: py-spy discards the reads it can detect
 as inconsistent, roughly half of them here, which leaves a flamegraph thin on
-samples but still showing the widest frames. For per-subsystem shares rather
-than a visual scan, use the cluster profile (`make benchmark-profile`), which
-samples one worker for ten minutes.
+samples but still showing the widest frames. (Per-subsystem shares used to come
+from the cluster harness's ten-minute worker profile; that harness has been
+removed — see [the performance archive](performance/index.md).)
 
 The benchmark JSON shows distributions and relative speeds. Open the SVG
 flamegraph and look for the widest application frames: those functions consume
@@ -83,3 +85,38 @@ optimisation.
 A result is a regression signal, not an application service-level objective.
 New benchmarks should use representative fixed input and avoid clocks,
 randomness, network calls, and database access.
+
+## Measurements retired from source comments
+
+Point-in-time figures that used to live in code comments. The invariants they
+motivated remain in the code; the numbers are provenance, kept here so a
+comment cannot silently go stale. All were taken on the development corpus
+around commit `29b8aa6` (2026-08) unless a run directory says otherwise.
+
+- **ADQL translation** (`egernia_core/query/adql.py`): translation was 41 ms of
+  a ~50 ms request before the one-parse + SLL-first changes; ANTLR full-context
+  prediction was 71% of the profile (~42,000 closure operations per query).
+  After: ~1.2 ms on the fast path (~35x). A translation-cache miss holds its
+  window open ~2.5 ms; the thread-local outcome flag replaced a
+  `cache_info()` delta that misreported ~1 hit in 8,000 at a 0.7% miss rate.
+- **Translation cache sizing** (`egernia_core/config.py`): 512 entries with
+  their keys measured ~473 KiB per worker.
+- **COPY DSV** (`egernia_core/query/copy_dsv.py`, reproduce with
+  `tests/component/test_copy_dsv_cost.py` on a seeded ObsCore, 12 columns):
+  Python writer 28.40 µs/row (of which `_csv.writer` quoting 9.19 µs/row);
+  raw `COPY` (wrong bytes) 12.76 µs/row (2.22x); `COPY` + projection
+  14.17 µs/row (2.00x, the shipped path — formatting costs ~1.4 µs/row).
+  On a corpus of integral floats the advantage grows to 3.02x. Receiving the
+  COPY bytes costs the API 0.134 µs/row (`tests/benchmarks/test_hot_paths.py`);
+  the raw divergence count between the two writers was eleven, four in float8.
+- **Probes** (`egernia_api/main.py`): with liveness pointed at
+  `/tap/availability`, the API was SIGKILLed twice by its own liveness probe
+  at an offered rate well inside its closed-loop capacity.
+- **Pool-wait histogram** (`egernia_core/observability.py`): without a bucket
+  edge at the pool timeout, a 5 s timeout was reported as a 9.7 s p95.
+- **Queue metrics** (`egernia_core/observability.py`): with 1,713 jobs queued
+  under steady drain, the oldest job's age saturated at 54 s — depth, not age,
+  is the scaling signal.
+- **Join misestimates** (`egernia_core/metadata/schema_gen.py`): the removed
+  cluster benchmark measured 50x–477x join misestimates on its join-heavy
+  classes (Q09, Q11, Q14); extended statistics do not fix join selectivity.

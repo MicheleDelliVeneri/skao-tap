@@ -54,7 +54,7 @@ class Translation:
     CIRCLE centres. Translation is pure and consults no TAP_SCHEMA, so a
     text column such as ObsCore's ``s_region`` passes through here and
     would only fail inside PostgreSQL; a caller that has column metadata
-    uses this list to refuse it with a usage error instead (package 22).
+    uses this list to refuse it with a usage error instead.
     """
 
     sql: str
@@ -66,22 +66,21 @@ class _Translator(ADQLQueryTranslator):
     """The library's translator with the two ways it wastes time removed.
 
     Both are in the parse, and the parse is where essentially all of a
-    request's CPU goes: measured on this corpus, translation is 41 ms of a
-    ~50 ms request, so the service's single-core ceiling is set here and
-    nowhere else.
+    request's CPU goes, so the service's single-core ceiling is set here and
+    nowhere else (measurements: docs/python-performance.md).
 
     **One parse instead of two.** The base class parses in ``set_query`` (from
     the constructor) and then ``to_postgresql`` parses again, throwing the
     first tree away. Storing the query without parsing leaves exactly the one
     parse that produces the tree actually used.
 
-    **SLL prediction first.** ANTLR's default full-context (LL) prediction was
-    71% of the profile — 42,000 closure operations per query. The standard
-    two-stage strategy is to try the cheap SLL mode with an error strategy that
-    bails out immediately, and re-parse with the library's own full-context
-    path if anything at all goes wrong. A query SLL cannot handle therefore
-    still gets exactly the parse it would have got before; the fast path is
-    only ever taken when it succeeds outright.
+    **SLL prediction first.** ANTLR's default full-context (LL) prediction
+    dominates the parse. The standard two-stage strategy is to try the cheap
+    SLL mode with an error strategy that bails out immediately, and re-parse
+    with the library's own full-context path if anything at all goes wrong.
+    A query SLL cannot handle therefore still gets exactly the parse it
+    would have got before; the fast path is only ever taken when it
+    succeeds outright.
     """
 
     def set_query(self, query):
@@ -150,9 +149,9 @@ def _normalise(query: str) -> str:
     around it) — verified to translate identically, and neither can occur at
     the end of a string literal, so neither can be part of one.
 
-    Deliberately *not* case-folded and *not* whitespace-collapsed, though
-    #107 asked for both. Translation is not case-insensitive where it
-    matters: ``name = 'AbC'`` and ``name = 'abc'`` translate to different SQL,
+    Deliberately *not* case-folded and *not* whitespace-collapsed.
+    Translation is not case-insensitive where it matters: ``name = 'AbC'``
+    and ``name = 'abc'`` translate to different SQL,
     so folding the key would serve one query the other's results. Collapsing
     runs of whitespace has the same flaw inside a literal. Turning more
     near-misses into hits means a parameterising translator, which is a much
@@ -166,11 +165,10 @@ def _normalise(query: str) -> str:
 #: `lru_cache` runs the wrapped body on the *calling* thread, so a thread-local
 #: is exact where a before/after read of `cache_info().misses` is not: the
 #: request path is `run_in_threadpool(prepare_query, ...)` at five call sites,
-#: and a miss holds its window open for ~2.5 ms, during which every concurrent
-#: hit reads the miss as its own. Measured: ~1 hit in 8,000 misreported at a
-#: 0.7% miss rate, always as a miss, so the bias understated exactly the number
-#: these counters exist to report. This version cannot misreport, and is
-#: cheaper -- one attribute write against two `cache_info()` calls.
+#: and a miss holds its window open for the whole parse, during which every
+#: concurrent hit would read the miss as its own. This version cannot
+#: misreport, and is cheaper -- one attribute write against two
+#: `cache_info()` calls.
 _outcome = threading.local()
 
 
@@ -199,11 +197,9 @@ def _translated(query: str) -> Translation:
 def translate(query: str) -> Translation:
     """Translate ADQL to PostgreSQL and list the tables, parsing once.
 
-    The table list is what the publication check needs, and it used to come
-    from a second ANTLR pass over the *translated* SQL — which cost more than
-    the translation itself (locally, 39 ms against 14 ms for a point lookup).
-    The translator keeps its parse tree, so the names come from a walk of the
-    tree that already exists.
+    The table list is what the publication check needs. The translator keeps
+    its parse tree, so the names come from a walk of the tree that already
+    exists — never from a second parse.
 
     ADQL-side names are also the better source: TAP_SCHEMA publishes what a
     client is allowed to write in a query, which is what this returns.
