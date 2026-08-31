@@ -24,9 +24,27 @@ uv run --group tap-compare python benchmarks/tap-compare run \
 uv run --group tap-compare python benchmarks/tap-compare run \
     --target egernia-local --scenario ladder
 
+# 4. the comparison: DaCHS up, corpus exported, gates + interleaved rungs
+scripts/export_obscore_snapshot.sh benchmarks/tap-compare/corpus
+docker compose -f benchmarks/tap-compare/docker-compose.dachs.yml up -d
+uv run --group tap-compare python benchmarks/tap-compare compare \
+    --targets egernia-local dachs-local --scenario compare
+
+# 5. render the report into docs/performance/<run-name>/
+uv run --group tap-compare python benchmarks/tap-compare publish --run <run-name>
+
 # unit tests
 uv run --group tap-compare pytest benchmarks/tap-compare/tests -q
 ```
+
+Scenarios: `compare` is the reference protocol (fixed 1–32 ladder, VOTable +
+CSV, 120 s windows, 3 interleaved repetitions); `compare-demo` is the same
+protocol shortened for developer hardware; `compare-smoke` proves the
+pipeline and measures nothing. The gates (taplint conformance and the
+cross-server agreement check) run first and a taplint failure refuses the
+comparison. Comparative cells carry 95% confidence intervals and the
+pre-registered tie rule: overlapping intervals, or under 10% apart in
+throughput, is a tie.
 
 Results land in `benchmarks/tap-compare/results/<UTCstamp>-<sha>-<scenario>-<target>/`:
 per-rung Parquet samples (every request, with TTFB), per-rung JSON summaries
@@ -53,6 +71,51 @@ operates**. Every target is deployed locally by the operator, and:
   conformance gate and a cross-server agreement gate (same query → same row
   count and checksum), so "same data, conformant servers" is verified rather
   than assumed.
+
+## Remaining work (the runbook for the next session)
+
+Phases 1–2 and the phase-4 machinery are done: harness, DaCHS target, gates
+(both servers pass taplint; 11/11 classes agree), the `compare` command with
+interleaved repetitions, and the `publish` renderer — all live-verified, the
+pipeline proven end-to-end with `compare-smoke`. What remains, in order:
+
+1. **Run the comparison on real hardware** (not a laptop). On a dedicated
+   Linux box with Docker:
+   ```bash
+   # egernia stack + corpus
+   docker compose up -d --build
+   TAP_DATABASE_URL=postgresql://tap:tap@localhost:5432/tap \
+     PYTHONPATH=dataset uv run --group dataset python -m egernia_dataset.seed
+   scripts/export_obscore_snapshot.sh benchmarks/tap-compare/corpus
+   # DaCHS (first start ingests the corpus, ~15 min)
+   docker compose -f benchmarks/tap-compare/docker-compose.dachs.yml up -d --build
+   # the reference comparison (hours; resumable with --resume <run-name>)
+   uv run --group tap-compare python benchmarks/tap-compare compare \
+       --targets egernia-local dachs-local --scenario compare
+   ```
+   Sanity first: `--scenario compare-smoke` end-to-end, then the real one.
+   Mind the parity pins: nothing else running on the box; the DaCHS compose
+   file pins cpus/mem — pin the egernia stack to the same budget (compose
+   override) and record both in the report.
+2. **Publish**: `... publish --run <run-name>` renders into
+   `docs/performance/<run-name>/`; then add the run to the "Latest by
+   family" and "All runs" tables in `docs/performance/index.md` (family:
+   `tap-compare`) and check `uv run mkdocs build --strict`.
+3. **Pre-registration tag**: before the first run whose numbers will be
+   quoted publicly, tag the commit holding the protocol
+   (`git tag tap-compare-prereg-v1 && git push --tags`) so the query
+   classes, mix, windows and tie rule are provably frozen before the data
+   existed. Optionally offer the DaCHS maintainers a look at
+   `targets/dachs/` ("correct our deployment") and record the exchange.
+4. **Phase 3 — CADC TAP target** (after a working DaCHS comparison): compose
+   file + TAP_SCHEMA/obscore init SQL with pgsphere `spoint` columns per
+   opencadc docs (Rubin's `lsst-sqre/cadc-tap-postgres` chart is the config
+   reference); probe cone-search geometry support before anything else —
+   the agreement gate catches wrong answers, not missing capability.
+5. **Phase 5 — depth**: async/UWS rung (the runner's `_issue_async` is
+   ready), D2 10 GiB tier repeat, egernia-only parquet/arrow appendix,
+   open-loop fixed-rate latency rungs at {25,50,70,90}% of each server's
+   measured capacity (retires the coordinated-omission critique).
 
 ## Claims policy
 
