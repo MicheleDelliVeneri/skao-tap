@@ -228,6 +228,7 @@ def _binary_rows(
     variable-length arrays, NULLs only via each FIELD's declared sentinel
     (BINARY, unlike BINARY2, has no null mask)."""
     import base64
+    import math
     import struct
 
     stream = next((el for el in binary if _local(el.tag) == "STREAM"), None)
@@ -295,7 +296,7 @@ def _binary_rows(
             row = []
             for reader, (_, pg_type), sentinel in zip(readers, columns, sentinels, strict=True):
                 value, offset = reader(buf, offset)
-                is_nan = isinstance(value, float) and value != value
+                is_nan = isinstance(value, float) and math.isnan(value)
                 if (sentinel is not None and str(value) == sentinel) or is_nan:
                     value = None
                 elif isinstance(value, str):
