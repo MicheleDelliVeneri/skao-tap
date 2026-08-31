@@ -3,7 +3,7 @@
 # One container carries DaCHS and its PostgreSQL, which is the layout the
 # package configures out of the box — the vendor-documented deployment this
 # benchmark promises to measure, not a layout we invented.
-FROM debian:trixie-slim
+FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 
 ENV DEBIAN_FRONTEND=noninteractive
 # The package's postinst configures DaCHS against a running PostgreSQL, so

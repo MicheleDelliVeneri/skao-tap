@@ -131,12 +131,17 @@ def test_runtime_error_yields_error_phase_and_document(tap_service):
     job.delete()
 
 
-def test_invalid_query_rejected_at_run(tap_service):
+def test_invalid_query_moves_the_job_to_error_at_run(tap_service):
+    """UWS: RUN answers 303 and the bad query surfaces in the job's ERROR
+    phase — an HTTP 400 here fails taplint (E-QAS-DFIO), because problems
+    with the job belong in the job."""
     svc = _service(tap_service)
     job = svc.submit_job("SELECT * FROM uws.jobs")  # unpublished table
-    response = httpx.post(f"{job.url}/phase", data={"PHASE": "RUN"})
-    assert response.status_code == 400
-    assert 'value="ERROR"' in response.text
+    response = httpx.post(f"{job.url}/phase", data={"PHASE": "RUN"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert httpx.get(f"{job.url}/phase").text == "ERROR"
+    error = httpx.get(f"{job.url}/error").text
+    assert "not published" in error
     job.delete()
 
 

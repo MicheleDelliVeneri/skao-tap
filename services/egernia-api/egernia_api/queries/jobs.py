@@ -12,7 +12,7 @@ import time
 
 from egernia_core import uws
 from egernia_core.db import connection as db_connection
-from egernia_core.errors import NotFoundError, UsageError
+from egernia_core.errors import NotFoundError, QueryParseError, TAPError, UsageError
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -94,18 +94,38 @@ def parse_job_filters(
 
 
 async def run_or_abort(job_id: str, phase: str) -> dict:
-    """Apply a UWS phase command (RUN or ABORT) and return the job."""
+    """Apply a UWS phase command (RUN or ABORT) and return the job.
+
+    A RUN whose query fails to translate does not refuse the request: UWS
+    problems with the job live *in* the job, so the caller gets its 303 and
+    finds the bad ADQL in the ERROR phase (taplint E-Q*-DFIO). Service
+    faults still raise — they are not properties of the job.
+    """
     prepared = None
+    prepare_error: TAPError | None = None
     if phase == "RUN":
         # the job's own parameters, translated off the event loop
         stored = await run_in_threadpool(fetch_job, job_id)
-        prepared = await run_in_threadpool(prepare_query, stored["parameters"])
+        try:
+            prepared = await run_in_threadpool(prepare_query, stored["parameters"])
+        except (UsageError, QueryParseError) as exc:
+            prepare_error = exc
 
     def apply_phase():
         with db_connection() as conn:
             job = uws.get_job(conn, job_id)
             if prepared is not None:  # set exactly when the phase is RUN
                 queue_job(conn, job, prepared)
+            elif prepare_error is not None:
+                uws.update_job(
+                    conn,
+                    job_id,
+                    expected_phases=("PENDING", "HELD"),
+                    phase="ERROR",
+                    end_time=datetime.datetime.now(datetime.UTC),
+                    error_type="fatal",
+                    error_message=prepare_error.message,
+                )
             elif phase == "ABORT":
                 uws.abort_job(conn, job)
             else:

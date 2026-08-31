@@ -231,3 +231,10 @@ def test_availability_is_still_the_vosi_resource(client):
     response = client.get("/tap/availability")
     assert response.status_code == 200
     assert "<vosi:available>true</vosi:available>" in response.text
+
+
+def test_capabilities_declare_examples_endpoint(client):
+    """/tap/examples exists, so DALI requires the capability to say so
+    (taplint E-EXA-EXDH)."""
+    text = client.get("/tap/capabilities").text
+    assert "ivo://ivoa.net/std/DALI#examples" in text

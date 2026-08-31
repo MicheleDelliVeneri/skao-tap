@@ -156,12 +156,13 @@ def _timestamp(col: str, offset: str = "") -> str:
 
 
 def _timestamptz(col: str) -> str:
-    """As `_timestamp`, plus the offset Python writes.
+    """As `_timestamp`, converted to UTC with the offset dropped.
 
-    `TZH:TZM` and not `OF`: `OF` drops the minutes on a whole-hour offset
-    ('+00'), where `datetime.isoformat` always writes both ('+00:00').
+    DALI timestamps are UTC by definition and carry no zone suffix; the
+    Python writer converts aware datetimes the same way, and the
+    differential test holds the two renderings byte-identical.
     """
-    return _timestamp(col, offset=f""" || to_char({col}, 'TZH:TZM')""")
+    return _timestamp(f"({col} AT TIME ZONE 'UTC')")
 
 
 _EXPRESSIONS = {

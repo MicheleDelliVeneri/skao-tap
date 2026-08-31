@@ -77,7 +77,7 @@ def test_char_columns_declare_a_variable_arraysize():
         (
             "obs_publisher_did",
             None,
-            "meta.ref.uri;meta.curation",
+            "meta.ref.ivoid",
             "obscore:Curation.publisherDID",
         ),
         ("pol_states", None, "meta.code;phys.polarization", None),

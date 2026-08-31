@@ -117,12 +117,15 @@ def tap_schema_divergence(conn) -> tuple[list[str], list[str]]:
     missing_columns = [
         f"{row[0]}.{row[1]}"
         for row in conn.execute(
+            # trim ADQL delimiters when matching: a reserved-word column is
+            # registered as '"size"' (TAP requires the name as a query must
+            # write it) while information_schema knows it as 'size'
             "SELECT c.table_name, c.column_name FROM tap_schema.columns c"
             " WHERE to_regclass(c.table_name) IS NOT NULL"
             "   AND NOT EXISTS ("
             "       SELECT 1 FROM information_schema.columns i"
             "        WHERE format('%s.%s', i.table_schema, i.table_name) = c.table_name"
-            "          AND i.column_name = c.column_name)"
+            "          AND i.column_name = trim(both '\"' from c.column_name))"
             " ORDER BY c.table_name, c.column_name"
         ).fetchall()
     ]
