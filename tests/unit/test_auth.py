@@ -4,6 +4,8 @@ IAM: the point of this layer is that a forged or stale token is rejected, so
 the signature path must be real rather than mocked out."""
 
 import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, cast
 
 import httpx
 import jwt
@@ -34,6 +36,43 @@ def test_token_signed_by_another_key_is_rejected(iam_verifier, forged_keypair, m
     forged = forged_keypair[0]
     with pytest.raises(AuthenticationError):
         iam_verifier.verify(make_token(forged))
+
+
+def test_unknown_kid_refresh_is_coalesced_and_negatively_cached(
+    iam_verifier, stub_iam, forged_keypair, make_token
+):
+    iam_verifier.verify(make_token())  # warm the current JWKS
+    stub_iam["jwks_calls"] = 0
+    unknown = make_token(forged_keypair[0], kid="missing")
+
+    def rejected(_):
+        with pytest.raises(AuthenticationError):
+            iam_verifier.verify(unknown)
+        return True
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        assert all(pool.map(rejected, range(32)))
+
+    assert stub_iam["jwks_calls"] == 1
+    with pytest.raises(AuthenticationError):
+        iam_verifier.verify(unknown)
+    refreshed_at = iam_verifier._jwks_refreshed_at
+    with pytest.raises(AuthenticationError):
+        iam_verifier.verify(make_token(forged_keypair[0], kid="another-missing"))
+    assert stub_iam["jwks_calls"] == 1
+    assert iam_verifier._jwks_refreshed_at == refreshed_at
+
+
+def test_new_signing_key_is_found_after_one_refresh(
+    iam_verifier, stub_iam, forged_keypair, make_token
+):
+    iam_verifier.verify(make_token())
+    stub_iam["jwks_calls"] = 0
+    private, jwk = forged_keypair
+    stub_iam["keys"].append(jwk | {"kid": "k2"})
+
+    assert iam_verifier.verify(make_token(private, kid="k2")).subject == "user-1"
+    assert stub_iam["jwks_calls"] == 1
 
 
 def test_expired_token_is_rejected(iam_verifier, make_token):
@@ -88,7 +127,9 @@ def test_only_the_trailing_slash_is_forgiven(iam_verifier, make_token):
 
 def test_unsigned_token_is_rejected(iam_verifier):
     none_token = jwt.encode(
-        {"sub": "x", "iss": "https://iam.example.org"}, key=None, algorithm="none"
+        {"sub": "x", "iss": "https://iam.example.org"},
+        key=cast(Any, None),
+        algorithm="none",
     )
     with pytest.raises(AuthenticationError):
         iam_verifier.verify(none_token)
@@ -234,7 +275,7 @@ def test_iam_groups_rejects_unknown_operations_and_bad_json():
     with pytest.raises(ServiceError, match="unknown operation"):
         IAMGroupsPlugin(roles={"metadata.nope": {}})
     with pytest.raises(ServiceError, match="not valid JSON"):
-        IAMGroupsPlugin(roles="{oops")
+        IAMGroupsPlugin(roles=cast(Any, "{oops"))
 
 
 # -- permissions-api plugin -------------------------------------------------
