@@ -86,6 +86,10 @@ async def lifespan(app: FastAPI):
     # anything published out of band is picked up by the cache's own expiry
     forget_published_tables()
     yield
+    active_plugin = auth.plugin()
+    if active_plugin is not None:
+        # e.g. the permissions-api plugin's pooled HTTP client
+        active_plugin.close()
     await run_in_threadpool(close_pool)
 
 
