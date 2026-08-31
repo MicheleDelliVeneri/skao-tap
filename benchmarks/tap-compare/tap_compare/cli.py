@@ -163,6 +163,62 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gates(args: argparse.Namespace) -> int:
+    """The pre-measurement gates: VOSI provenance, taplint, agreement.
+
+    Runs against every named target and writes one gates run directory. No
+    timed rung may be compared across servers unless this passed for all of
+    them on the same corpus.
+    """
+    from . import conformance, validate, vosi
+
+    cfg = _load_yaml(SUITE / "config" / "scenarios.yaml")
+    all_targets = targets.load()
+    chosen = {}
+    for name in args.targets:
+        if name not in all_targets:
+            raise SystemExit(f"unknown target {name!r} (one of: {', '.join(all_targets)})")
+        chosen[name] = all_targets[name]
+
+    entries = _build_corpus(cfg, portable_only=True)
+    run = runs.new_run("gates-" + "-".join(sorted(chosen)))
+    outcome: dict = {"targets": {}}
+    for name, target in chosen.items():
+        facts = vosi.capture(target.base_url, run.path / "capabilities" / name)
+        log.info(
+            "%s: TAP %s, %d formats, maxrec default %s",
+            name,
+            ",".join(facts["tap_versions"]) or "?",
+            len(facts["output_formats"]),
+            facts["maxrec_default"],
+        )
+        lint = conformance.run_taplint(target.base_url, run.path / "taplint" / f"{name}.txt")
+        log.info(
+            "%s: taplint %s (%d blocking / %d total errors)",
+            name,
+            "PASS" if lint["passed"] else "FAIL",
+            lint["errors_blocking"],
+            lint["errors_total"],
+        )
+        outcome["targets"][name] = {"vosi": facts, "taplint": lint}
+    if len(chosen) > 1:
+        verdict = validate.agreement(
+            {name: t.base_url for name, t in chosen.items()},
+            entries,
+            maxrec=cfg["scenarios"]["ladder"]["maxrec"],
+        )
+        outcome["agreement"] = verdict
+        log.info(
+            "agreement: %d classes agree, disagreeing: %s",
+            len(verdict["agreed"]),
+            ", ".join(verdict["disagreed"]) or "none",
+        )
+    run.write_json("gates.json", outcome)
+    log.info("gates -> %s", run.path)
+    failed = any(not t["taplint"]["passed"] for t in outcome["targets"].values())
+    return 1 if failed else 0
+
+
 def cmd_corpus(args: argparse.Namespace) -> int:
     """Print the corpus (for inspection and for the future agreement gate)."""
     cfg = _load_yaml(SUITE / "config" / "scenarios.yaml")
@@ -186,6 +242,12 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--resume", help="existing run directory name to continue")
     run_parser.add_argument("--base-url", help="override the target's TAP root (local ports)")
     run_parser.set_defaults(func=cmd_run)
+
+    gates_parser = sub.add_parser(
+        "gates", help="VOSI provenance + taplint conformance + cross-server agreement"
+    )
+    gates_parser.add_argument("--targets", nargs="+", required=True)
+    gates_parser.set_defaults(func=cmd_gates)
 
     corpus_parser = sub.add_parser("corpus", help="print the deterministic query corpus")
     corpus_parser.add_argument("--all-classes", action="store_true")

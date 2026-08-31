@@ -12,3 +12,14 @@
 AVD-KSV-0047
 KSV-0047
 KSV0047
+
+# DS-0002 — "Specify at least 1 USER command with non-root user".
+# benchmarks/tap-compare/targets/dachs/Dockerfile only: the benchmark's DaCHS
+# comparison container reproduces the gavodachs2-server Debian package's own
+# layout, whose entrypoint must start the bundled PostgreSQL cluster (root),
+# after which DaCHS drops to its own dachsroot/postgres users. A USER line
+# would break `service postgresql start`. Local benchmark tooling, never a
+# service image, never deployed by the chart.
+AVD-DS-0002
+DS-0002
+DS0002

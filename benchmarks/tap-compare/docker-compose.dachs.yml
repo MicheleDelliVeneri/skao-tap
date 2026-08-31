@@ -1,0 +1,30 @@
+# GAVO DaCHS, the benchmark's first comparison target: the Debian
+# gavodachs2-server package in its out-of-the-box layout (DaCHS + its own
+# PostgreSQL in one container), serving the exported ObsCore corpus.
+#
+#   scripts/export_obscore_snapshot.sh benchmarks/tap-compare/corpus
+#   docker compose -f benchmarks/tap-compare/docker-compose.dachs.yml up -d
+#   # first start ingests the corpus (dachs imp bench/q && dachs imp //obscore)
+#
+# Port 8081 on the host: egernia holds 8080. Resource limits are pinned so a
+# comparison run can hold them equal across targets.
+services:
+  dachs:
+    build: targets/dachs
+    ports:
+      - "8081:8080"
+    environment:
+      # what capabilities and UWS job documents advertise — must be the URL
+      # clients reach the service by, i.e. the *mapped* port
+      DACHS_SERVER_URL: http://localhost:8081
+    volumes:
+      - ./targets/dachs/inputs/bench:/var/gavo/inputs/bench:ro
+      - ./corpus:/var/gavo/inputs/bench/data:ro
+      - dachs-state:/var/gavo/state
+      - dachs-pg:/var/lib/postgresql
+    cpus: 8
+    mem_limit: 8g
+
+volumes:
+  dachs-state:
+  dachs-pg:
