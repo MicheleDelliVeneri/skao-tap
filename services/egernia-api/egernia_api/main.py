@@ -47,7 +47,7 @@ from .endpoints.json_api import metadata_routers
 from .endpoints.json_api import router as json_router
 from .endpoints.uws_api import router as uws_router
 from .queries.params import gather_params
-from .queries.query import forget_published_tables, prepare_query, run_sync
+from .queries.query import forget_published_tables, prepare_query, run_sync_for_request
 from .queries.uploads import gather_upload_sources, parse_uploads
 
 # Structured records with SRCNet's shared fields, JSON in a container and
@@ -159,12 +159,14 @@ async def correlate(request: Request, call_next):
     # in a header, written into a SQL comment and logged, so anything else
     # gets replaced rather than escaped
     rid = safe_request_id(request.headers.get(REQUEST_ID_HEADER)) or new_request_id()
+    response = None
     with (
         request_context(rid),
         request_origin(client_origin(request)),
         LogContext(request_id=rid, path=request.url.path),
     ):
         response = await call_next(request)
+    assert response is not None
     response.headers[REQUEST_ID_HEADER] = rid
     response.headers[SERVED_BY_HEADER] = SERVED_BY
     return response
@@ -368,11 +370,9 @@ async def sync(request: Request):
     # the event loop it stalls every other request for that long, which is why
     # throughput stopped rising with concurrency
     prepared = await run_in_threadpool(prepare_query, params)
-    # run_sync takes a pool connection and produces the first chunk, and the
-    # iterator does blocking reads for the rest. On the event loop that means
-    # one slow query — or one wait for a busy pool — stalls every other
-    # request in this worker, including ones ready to send.
-    chunks, mime = await run_in_threadpool(run_sync, prepared, uploads)
+    # Spooling uses blocking PostgreSQL and file I/O, so it stays in the
+    # threadpool; the request helper cancels that work if the client leaves.
+    chunks, mime = await run_sync_for_request(request, prepared, uploads)
     return StreamingResponse(iterate_in_threadpool(chunks), media_type=mime)
 
 

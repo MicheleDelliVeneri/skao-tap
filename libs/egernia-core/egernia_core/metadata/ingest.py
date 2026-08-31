@@ -30,6 +30,8 @@ from .schema_gen import TableSpec, ddl_statements, registration_statements
 # by SQL type (see ColumnSpec.derived_from in schema_gen). A conversion
 # error is the caller's mistake, so it surfaces as UsageError.
 DERIVATIONS = {"spoly": regions.stcs_to_spoly}
+DEFAULT_LIST_LIMIT = 100
+MAX_LIST_LIMIT = 1000
 
 
 def _derive(col, source_value):
@@ -389,8 +391,13 @@ def delete_document(conn, plugin: MetadataPlugin, root_id: str, actor: str | Non
     return deleted
 
 
-def list_documents(conn, plugin: MetadataPlugin) -> list[dict]:
-    """Root-level summary: every root row plus per-descendant-table counts."""
+def list_documents(
+    conn,
+    plugin: MetadataPlugin,
+    limit: int = DEFAULT_LIST_LIMIT,
+    after: str | None = None,
+) -> list[dict]:
+    """Bounded root summaries, ordered after an optional root-id cursor."""
     tables = plugin.tables
     root = tables[0]
     descendants = [t for t in tables if t.parent is not None]
@@ -398,8 +405,13 @@ def list_documents(conn, plugin: MetadataPlugin) -> list[dict]:
         f", (SELECT count(*) FROM {t.qualified} c WHERE c.{root.id_column} = p.{root.id_column})"
         for t in descendants
     )
+    where = f" WHERE p.{root.id_column} > %s" if after is not None else ""
+    args: list[object] = [after] if after is not None else []
+    args.append(min(max(1, limit), MAX_LIST_LIMIT + 1))
     rows = conn.execute(
-        f"SELECT to_jsonb(p){count_selects} FROM {root.qualified} p ORDER BY p.{root.id_column}"
+        f"SELECT to_jsonb(p){count_selects} FROM {root.qualified} p{where}"
+        f" ORDER BY p.{root.id_column} LIMIT %s",
+        args,
     ).fetchall()
     root_derived = {c.name for c in root.columns if c.derived_from}
     summaries = []

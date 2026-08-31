@@ -192,31 +192,9 @@ def test_a_hostile_id_never_reaches_the_database(client, fake_db):
     assert not any("DROP TABLE" in s for s in fake_db.statements)
 
 
-def test_the_sync_duration_is_recorded_when_the_stream_ends():
-    """It says "to the last row", so it must observe at the end and not after
-    the first chunk. Tested on the wrapper directly: through the test client
-    the whole body is read before the call returns, so it could not tell the
-    two apart."""
-    from egernia_api.queries.query import _timed
-
-    def sum_of():
-        for line in generate_latest(obs.REGISTRY).decode().splitlines():
-            if line.startswith('tap_query_duration_seconds_sum{kind="sync"}'):
-                return float(line.split()[-1])
-        return 0.0
-
-    before = sum_of()
-    stream = _timed(iter([b"a", b"b"]), time.perf_counter())
-    next(stream)
-    assert sum_of() == before, "nothing is recorded while rows are still coming"
-    list(stream)  # exhaust
-    assert sum_of() > before
-
-
-def test_an_abandoned_stream_is_still_measured():
-    """A client that disconnects halfway is a slow query too — dropping it
-    would bias the metric towards the requests that finished."""
-    from egernia_api.queries.query import _timed
+def test_sync_duration_excludes_body_delivery(fake_db):
+    """The query is complete once its spool is filled, before socket pacing."""
+    from egernia_api.queries.query import prepare_query, run_sync
 
     def count():
         for line in generate_latest(obs.REGISTRY).decode().splitlines():
@@ -225,10 +203,12 @@ def test_an_abandoned_stream_is_still_measured():
         return 0.0
 
     before = count()
-    stream = _timed(iter([b"a", b"b", b"c"]), time.perf_counter())
+    stream, _ = run_sync(prepare_query({"QUERY": QUERY}))
+    recorded = count()
+    assert recorded == before + 1
     next(stream)
-    cast(Any, stream).close()  # the client went away
-    assert count() == before + 1
+    cast(Any, stream).close()  # client delivery cannot extend query duration
+    assert count() == recorded
 
 
 def test_the_pool_wait_is_only_the_wait(fake_db):

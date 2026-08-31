@@ -23,6 +23,8 @@ XSI_NS = "http://www.w3.org/2001/XMLSchema-instance"
 ACTIVE_PHASES = {"PENDING", "QUEUED", "EXECUTING", "HELD", "SUSPENDED"}
 FINAL_PHASES = {"COMPLETED", "ERROR", "ABORTED", "ARCHIVED"}
 ALL_PHASES = ACTIVE_PHASES | FINAL_PHASES
+DEFAULT_LIST_LIMIT = 100
+MAX_LIST_LIMIT = 1000
 
 #: the job row, in SELECT order. A tuple rather than a comma-joined string
 #: because it is read back per row: splitting and stripping nineteen names
@@ -171,10 +173,8 @@ def list_jobs(
         # own jobs, plus the ownerless ones anonymous callers create
         sql += " AND (owner_id IS NULL OR owner_id = %s)"
         args.append(viewer.subject)
-    sql += " ORDER BY creation_time DESC"
-    if last:
-        sql += " LIMIT %s"
-        args.append(last)
+    sql += " ORDER BY creation_time DESC LIMIT %s"
+    args.append(min(last or DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT))
     return [_row_to_job(r) for r in conn.execute(sql, args).fetchall()]
 
 

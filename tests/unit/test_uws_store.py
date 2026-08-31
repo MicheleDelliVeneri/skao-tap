@@ -32,6 +32,14 @@ def test_list_jobs_filters_and_limits(fake_db):
         assert len(uws.list_jobs(conn, None, 1)) == 1
 
 
+def test_list_jobs_has_a_default_and_hard_bound(fake_db):
+    for _ in range(uws.MAX_LIST_LIMIT + 1):
+        fake_db.add_job()
+    with pool().connection() as conn:
+        assert len(uws.list_jobs(conn)) == uws.DEFAULT_LIST_LIMIT
+        assert len(uws.list_jobs(conn, last=uws.MAX_LIST_LIMIT + 1)) == uws.MAX_LIST_LIMIT
+
+
 def test_update_job(fake_db):
     job = fake_db.add_job()
     with pool().connection() as conn:

@@ -17,6 +17,7 @@ packages register through the egernia.models entry-point group.
 
 import logging
 import shutil
+from typing import Any, cast
 
 from egernia_core import uws
 from egernia_core.config import base_url, settings
@@ -24,13 +25,13 @@ from egernia_core.db import connection as db_connection
 from egernia_core.errors import NotFoundError, UsageError
 from egernia_core.metadata import ingest
 from egernia_core.metadata.plugins import MetadataPlugin, active_plugins
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import iterate_in_threadpool
 
 from ..auth import auth_summary, gated, owner_of, require
-from ..queries.query import prepare_query, run_sync
+from ..queries.query import prepare_query, run_sync_for_request
 from .uws_api import (
     fetch_job,
     parse_job_filters,
@@ -41,6 +42,8 @@ from .uws_api import (
 )
 
 API_PREFIX = "/api/v1"
+METADATA_LIST_DEFAULT = 100
+METADATA_LIST_MAX = 1000
 router = APIRouter(prefix=API_PREFIX, tags=["json-api"])
 log = logging.getLogger("egernia_api")
 
@@ -114,13 +117,13 @@ async def auth_info():
 
 
 @router.post("/query", dependencies=[Depends(require("query.sync"))])
-def sync_query(body: QueryRequest):
+async def sync_query(body: QueryRequest, request: Request):
     """Synchronous ADQL query, JSON by default (metadata, data, status).
 
     Set ``format`` to ``parquet`` or ``arrow`` for columnar responses.
     """
     prepared = prepare_query(_tap_params(body, fmt=body.format))
-    chunks, mime = run_sync(prepared)
+    chunks, mime = await run_sync_for_request(request, prepared)
     return StreamingResponse(iterate_in_threadpool(chunks), media_type=mime)
 
 
@@ -320,10 +323,15 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
     )
 
     @domain.get("")
-    def list_endpoint():
+    def list_endpoint(
+        limit: int = Query(METADATA_LIST_DEFAULT, ge=1, le=METADATA_LIST_MAX),
+        after: str | None = None,
+    ):
         with db_connection() as conn:
-            summaries = ingest.list_documents(conn, plugin)
-        return {plugin.root_table: summaries}
+            summaries = cast(Any, ingest).list_documents(conn, plugin, limit + 1, after)
+        page = summaries[:limit]
+        next_after = str(page[-1][id_column]) if len(summaries) > limit else None
+        return {plugin.root_table: page, "next_after": next_after}
 
     @domain.get("/{root_id}")
     def fetch_endpoint(root_id: str):
