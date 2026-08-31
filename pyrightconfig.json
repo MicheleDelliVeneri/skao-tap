@@ -1,0 +1,10 @@
+{
+  "pythonVersion": "3.14",
+  "venvPath": ".",
+  "venv": ".venv",
+  "extraPaths": [
+    "libs/egernia-core",
+    "services/egernia-api",
+    "services/egernia-executor"
+  ]
+}

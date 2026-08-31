@@ -25,6 +25,7 @@ data:
          a tapApi.port other than the image default would leave uvicorn on
          8080 while the probes and Service looked elsewhere */}}
   TAP_EXECUTOR_METRICS_PORT: {{ .Values.config.executorMetricsPort | int64 | quote }}
+  TAP_EXECUTOR_LEASE_SECONDS: {{ .Values.config.executorLeaseSeconds | int64 | quote }}
   {{- if .Values.tracing.otlpEndpoint }}
   OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.tracing.otlpEndpoint | quote }}
   OTEL_SERVICE_NAME: {{ include "egernia.fullname" . | quote }}

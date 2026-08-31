@@ -47,6 +47,8 @@ JOB_COLUMNS = (
     "result_size",
     "backend_pid",
     "request_id",
+    "worker_id",
+    "lease_expires",
 )
 JOB_COLUMNS_SQL = ", ".join(JOB_COLUMNS)
 
@@ -88,6 +90,12 @@ def ensure_job_columns(conn) -> None:
     conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS backend_pid integer")
     conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS request_id text")
     conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS query_tables text[]")
+    conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS worker_id text")
+    conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS lease_expires timestamptz")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS jobs_expired_leases"
+        " ON uws.jobs (lease_expires) WHERE phase = 'EXECUTING'"
+    )
 
 
 def create_job(conn, parameters: dict[str, str], owner_id: str | None = None) -> dict:

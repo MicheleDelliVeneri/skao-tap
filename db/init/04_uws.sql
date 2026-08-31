@@ -25,8 +25,11 @@ CREATE TABLE uws.jobs (
     backend_pid         integer,                            -- executing backend, for ABORT
     -- the API request that created the job, so its records, the executor's
     -- and the SQL in pg_stat_activity all carry one id
-    request_id          text
+    request_id          text,
+    worker_id           text,                               -- executor process owning the lease
+    lease_expires       timestamptz                         -- expired claims are recoverable
 );
 
 CREATE INDEX jobs_phase_creation ON uws.jobs (phase, creation_time);
 CREATE INDEX jobs_destruction ON uws.jobs (destruction);
+CREATE INDEX jobs_expired_leases ON uws.jobs (lease_expires) WHERE phase = 'EXECUTING';
