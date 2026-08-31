@@ -237,22 +237,15 @@ def test_executor_missing_upload_file_marks_job_error(fake_db, results_dir):
     assert "missing" in job["error_message"]
 
 
-def test_capabilities_only_declare_enabled_upload_methods(client):
+def test_capabilities_declare_the_mandatory_upload_methods(client):
+    """TAP 1.1 makes upload-http mandatory for a service that supports
+    uploads at all (taplint E-CAP-MUPM); the allowlist stays what decides,
+    per request, which destinations a fetch may reach."""
     text = client.get("/tap/capabilities").text
     assert "ivo://ivoa.net/std/TAPRegExt#upload-inline" in text
-    assert "ivo://ivoa.net/std/TAPRegExt#upload-http" not in text
-    assert "<uploadLimit>" in text
-
-
-def test_capabilities_declare_allowed_remote_upload(client, monkeypatch):
-    from egernia_api.endpoints import vosi
-
-    monkeypatch.setattr(
-        vosi, "settings", replace(vosi.settings, upload_allowed_hosts="data.example.org")
-    )
-    text = client.get("/tap/capabilities").text
     assert "ivo://ivoa.net/std/TAPRegExt#upload-http" in text
     assert "ivo://ivoa.net/std/TAPRegExt#upload-https" in text
+    assert "<uploadLimit>" in text
 
 
 def test_parameter_update_persists_new_upload_sources(client, fake_db, results_dir):

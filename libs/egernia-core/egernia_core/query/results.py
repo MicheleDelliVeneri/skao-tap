@@ -164,7 +164,7 @@ def _plain(value):
     if isinstance(value, Decimal):
         return float(value)
     if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
-        return value.isoformat()
+        return _isoformat(value)
     if isinstance(value, (bytes, memoryview)):
         return bytes(value).hex()
     if isinstance(value, (dict, list)):
@@ -178,6 +178,15 @@ def _plain_text(value) -> str:
 
 
 def _isoformat(value) -> str:
+    """DALI 3.3.3 timestamp text: YYYY-MM-DDThh:mm:ss[.f...], no zone.
+
+    A timestamptz arrives from PostgreSQL timezone-aware; DALI timestamps
+    are UTC by definition and carry no offset, so the value is converted to
+    UTC and the offset dropped — ``isoformat()`` on an aware datetime writes
+    "+00:00", which DALI (and taplint) reject.
+    """
+    if isinstance(value, datetime.datetime) and value.tzinfo is not None:
+        value = value.astimezone(datetime.UTC).replace(tzinfo=None)
     return value.isoformat()
 
 
