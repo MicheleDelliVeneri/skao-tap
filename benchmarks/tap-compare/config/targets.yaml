@@ -12,3 +12,11 @@ targets:
     notes: >-
       The repository's own docker-compose.yml stack, seeded with
       `uv run --group dataset python -m egernia_dataset.seed`.
+  - name: dachs-local
+    server: dachs
+    base_url: http://localhost:8081/tap
+    portable_only: true
+    notes: >-
+      GAVO DaCHS from the Debian gavodachs2-server package
+      (benchmarks/tap-compare/docker-compose.dachs.yml), serving the exported
+      ObsCore corpus via //obscore#publishObscoreLike.

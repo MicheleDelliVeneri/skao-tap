@@ -223,3 +223,4 @@ benchmarks/egernia-performance/results/
 # macOS finder metadata
 .DS_Store
 benchmarks/tap-compare/results/
+benchmarks/tap-compare/corpus/
