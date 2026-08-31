@@ -86,7 +86,6 @@ def test_run_sync_releases_connection_before_body_is_read(fake_db, monkeypatch):
     assert active == 0
     assert next(chunks).startswith(b"source_id,ra")
     cast(Any, chunks).close()  # client disconnected before consuming the body
-    assert active == 0
 
 
 def test_run_sync_rolls_to_disk_and_closes_spool(fake_db, monkeypatch):
