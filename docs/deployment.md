@@ -43,7 +43,7 @@ Key values (see `values.yaml` for the full list):
 
 | Value | Default | Description |
 |---|---|---|
-| `image.registry` / `image.tag` | `ghcr.io/ska-telescope` / chart appVersion | Where CI publishes the service images |
+| `image.registry` / `image.tag` | `ghcr.io/ska-telescope/egernia` / `latest` | Where CI publishes the service images (an empty tag falls back to the chart appVersion) |
 | `tapApi.replicas` | `1` | API replicas (stateless) |
 | `tapApi.baseUrl` | in-cluster service URL | External base URL written into capabilities and result links |
 | `tapExecutor.replicas` | `1` | Executor replicas; safe to scale out (jobs claimed with `SKIP LOCKED`) |
@@ -127,14 +127,15 @@ Two knobs shape this behaviour:
 ```yaml
 tapApi:
   backlog: 2048          # accept-queue size (uvicorn --backlog)
-  limitConcurrency: 0    # connections per worker before answering 503
+  limitConcurrency: 64   # connections per worker before answering 503
 ```
 
 `backlog` sizes the kernel's accept queue; raising it absorbs sharper
 arrival bursts but adds queueing, not capacity. `limitConcurrency` is the
 application-level counterpart: past that many concurrent connections *per
 worker process*, uvicorn answers `503` immediately — a refusal a client can
-back off from. It is off (`0`, unlimited) by default because the right value
+back off from. The chart defaults it to `64` per worker (`0` disables the
+limit) because the right value
 depends on what one worker can actually serve; when set, put it above the
 worker's normal concurrent load and below where resets were observed.
 
@@ -223,7 +224,7 @@ through node drains and cluster upgrades.
 ### Automatic scaling
 
 Those replica counts can be handed to an autoscaler instead: tap-api on CPU,
-tap-executor on the age of the oldest queued job. Both are off by default and
+tap-executor on the depth of the job queue. Both are off by default and
 have their own page — [Autoscaling](autoscaling.md) — including the
 combinations the chart refuses, among them the connection ceiling that a
 maximum replica count makes reachable.
@@ -394,6 +395,29 @@ misconfiguration.
     `pg_dump --format=custom` archive beforehand and `pg_restore` it into the
     new cluster.
 
+## Pre-deploy schema bootstrap
+
+By default every service replica ensures the database schema at startup —
+idempotent, advisory-locked DDL, which is what a rolling upgrade relies on:
+whichever new pod touches the database first migrates it forward. That means
+the runtime database credentials own schema changes.
+
+To move schema ownership out of the runtime, run the bootstrap once before
+deploying (with credentials that may run DDL) and turn the startup DDL off:
+
+```bash
+# from a checkout (or in a container: /srv/.venv/bin/python)
+TAP_DATABASE_URL=postgresql://owner:...@db/tap \
+  uv run python -m egernia_core.bootstrap
+
+helm upgrade egernia charts/egernia --set config.schemaBootstrapOnStartup=false
+```
+
+With `schemaBootstrapOnStartup=false` the services only *verify* the schema
+at startup (a read-only column-level check) and fail fast, naming the
+bootstrap command, when it is missing or outdated — so re-run the bootstrap
+as part of every deploy that upgrades the images or the model libraries.
+
 ## Configuration
 
 All services read environment variables (see `egernia_core/config.py`):
@@ -406,10 +430,12 @@ All services read environment variables (see `egernia_core/config.py`):
 | `TAP_QUERY_ROLE` | `tap_reader` | Read-only role used for user queries |
 | `TAP_DEFAULT_MAXREC` / `TAP_HARD_MAXREC` | `10000` / `1000000` | Row limits |
 | `TAP_SYNC_TIMEOUT` | `30` | Sync query timeout (s) |
+| `TAP_SYNC_MAX_BYTES` | `67108864` | Maximum serialized synchronous result size; use async for larger results |
 | `TAP_TRANSLATION_CACHE_SIZE` | `512` | Entries in the per-worker ADQL translation memo; `0` disables it. Read once at start-up. Its hit rate is `tap_adql_translation_cache_hits_total` over the sum of hits and misses |
 | `TAP_ASYNC_EXEC_DURATION` | `600` | Default async `executionDuration` (s) |
 | `TAP_JOB_RETENTION` | `604800` | Default job lifetime before destruction (s) |
 | `TAP_MODEL_PLUGINS` | `all` | Metadata domains to activate (`all` or a comma-separated subset) |
+| `TAP_SCHEMA_BOOTSTRAP_ON_STARTUP` | `true` | Whether services run schema DDL at startup; `false` makes them only verify a [pre-deploy bootstrap](#pre-deploy-schema-bootstrap) ran |
 | `TAP_AUTH_ENABLED` | `false` | Enable authentication/authorisation ([guide](auth.md)) |
 | `TAP_AUTH_REQUIRE_TOKEN` | `true` | Require a verified token on every request bar discovery and the health check |
 | `TAP_AUTH_ANONYMOUS_QUERIES` | `false` | Allow token-less reads through `/tap/sync` and `/tap/async` |

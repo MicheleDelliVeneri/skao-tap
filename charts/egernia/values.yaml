@@ -71,6 +71,8 @@ tapApi:
       memory: 256Mi
     limits:
       memory: 1Gi
+  # -- Pod-wide ceiling for synchronous response spools and other /tmp use.
+  tmpSizeLimit: 1Gi
 
 tapExecutor:
   # -- Executors claim jobs with FOR UPDATE SKIP LOCKED; scaling out is safe
@@ -450,6 +452,9 @@ config:
   # -- Port the executor serves its metrics on. It has no HTTP API, so this
   # is the only way its queue depth and job outcomes leave the process.
   executorMetricsPort: 9100
+  # -- Seconds an executor owns a running job without renewing its claim.
+  # Increase this above the longest expected database/control-plane outage.
+  executorLeaseSeconds: 30
   # -- How long a request waits for a free connection before being told the
   # service is full. Short on purpose: a request that cannot proceed should
   # answer 503 with Retry-After rather than hold the client, and anything
@@ -462,6 +467,8 @@ config:
   # path's admission control: a query is refused by what it actually costs,
   # not by what an EXPLAIN estimate guessed it would.
   syncTimeoutSeconds: 30
+  # -- Maximum serialized synchronous result size; larger results use async.
+  syncMaxBytes: 67108864
   asyncExecDurationSeconds: 600
   jobRetentionSeconds: 604800
   waitMaxSeconds: 60
@@ -480,6 +487,12 @@ config:
   # -- Metadata-domain plugins to activate: "all" or a comma-separated
   # subset (e.g. "odp" or "software") for dedicated per-model deployments.
   modelPlugins: all
+  # -- Whether the services run schema DDL at startup (the default, which a
+  # rolling upgrade relies on). Set false after wiring
+  # `python -m egernia_core.bootstrap` into your deploy pipeline: the
+  # services then only verify the schema, and their database credentials
+  # never need to own schema changes.
+  schemaBootstrapOnStartup: true
   # -- Log level for the services' own records (schema bootstrap, legacy-table
   # warnings, metadata deletion audit trail). Uvicorn's access log is separate.
   logLevel: INFO

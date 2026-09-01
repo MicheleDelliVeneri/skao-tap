@@ -1,0 +1,8 @@
+measurement,rows_or_readers,median_ms
+slow_reader_retained,2,686.93
+slow_reader_spooled,2,2.99
+uws_default,100,5.04
+uws_maximum,1000,5.44
+uws_unbounded,88889,22.90
+metadata_first,101,1.18
+metadata_cursor,101,1.07

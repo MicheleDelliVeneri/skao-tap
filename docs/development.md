@@ -4,7 +4,7 @@ The repository is a [uv](https://docs.astral.sh/uv/) workspace with three
 members: `libs/egernia-core`, `services/egernia-api`, `services/egernia-executor`.
 
 ```bash
-uv sync --all-groups        # create .venv with all members + dev/docs groups
+uv sync --all-groups        # create .venv with all members + every group (dev, docs, demo, dataset, microbenchmark)
 ```
 
 ## Lint & format
@@ -100,7 +100,7 @@ name, so an older column order still migrates), unregisters the legacy tables
 from `TAP_SCHEMA` and drops the old schema:
 
 ```bash
-docker compose exec -T postgres psql -U postgres -d tap -v ON_ERROR_STOP=1 \
+docker compose exec -T db psql -U tap -d tap -v ON_ERROR_STOP=1 \
     -f - < scripts/migrate_legacy_tables.sql
 ```
 

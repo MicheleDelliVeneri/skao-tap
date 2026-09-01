@@ -1,0 +1,70 @@
+# Measurement scenarios. Every knob that decides what a number means lives
+# here, versioned, so a run's provenance can point at one commit.
+
+corpus:
+  seed: 424242
+  combinations: 400
+  # Projects in the seeded database: cone centres aim at real survey fields
+  # by recomputing the generator's md5 PRNG per *project* index. The default
+  # matches `python -m egernia_dataset.seed` (TARGET_PRODUCTS=500000 at 128
+  # products/project -> 3906 projects). Override per deployment if seeded
+  # differently.
+  projects: 3906
+
+# The default class mix for the mixed-workload rung, matching the weights in
+# tests/benchmarks/test_hot_paths.py (portable classes only).
+mix:
+  Q01: 1
+  Q02: 3
+  Q03: 3
+  Q04: 2
+  Q05: 5
+  Q06: 2
+  Q07: 2
+  Q10: 1
+
+scenarios:
+  # A short shake-out: proves the target answers, the corpus renders, and a
+  # run directory appears. Not a measurement.
+  smoke:
+    ladder: [1, 4]
+    warmup_seconds: 5
+    measure_seconds: 20
+    repetitions: 1
+    response_formats: [csv]
+    maxrec: 100000
+    generator_processes: 1
+
+  # The capacity ladder: per-format closed loop over the mixed workload.
+  ladder:
+    ladder: [1, 2, 4, 8, 16, 32]
+    warmup_seconds: 30
+    measure_seconds: 120
+    repetitions: 3
+    response_formats: [votable, csv]
+    maxrec: 100000
+    generator_processes: 4
+    # Climbing stops when at least this many saturation signals agree. One
+    # signal alone is noise; two together are a ceiling.
+    saturation_signals_required: 2
+    signals:
+      throughput_gain_below_fraction: 0.05
+      p95_multiple_of_baseline: 5.0
+      error_rate_above_fraction: 0.01
+
+  # Per-class rungs at a fixed concurrency, for the comparison table's rows.
+  per-class:
+    ladder: [8]
+    warmup_seconds: 30
+    measure_seconds: 120
+    repetitions: 3
+    response_formats: [votable, csv]
+    maxrec: 100000
+    generator_processes: 2
+    per_class: true
+
+guards:
+  # The busiest generator process must stay under this fraction of one core,
+  # or the rung is invalidated: a pinned generator reports its own ceiling as
+  # the server's.
+  generator_cpu_max_fraction: 0.6

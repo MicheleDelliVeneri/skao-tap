@@ -6,6 +6,7 @@ performance fixes take a local harness and a sampling profiler.
 """
 
 import time
+from typing import Any, cast
 
 import pytest
 from egernia_core import observability as obs
@@ -191,31 +192,9 @@ def test_a_hostile_id_never_reaches_the_database(client, fake_db):
     assert not any("DROP TABLE" in s for s in fake_db.statements)
 
 
-def test_the_sync_duration_is_recorded_when_the_stream_ends():
-    """It says "to the last row", so it must observe at the end and not after
-    the first chunk. Tested on the wrapper directly: through the test client
-    the whole body is read before the call returns, so it could not tell the
-    two apart."""
-    from egernia_api.queries.query import _timed
-
-    def sum_of():
-        for line in generate_latest(obs.REGISTRY).decode().splitlines():
-            if line.startswith('tap_query_duration_seconds_sum{kind="sync"}'):
-                return float(line.split()[-1])
-        return 0.0
-
-    before = sum_of()
-    stream = _timed(iter([b"a", b"b"]), time.perf_counter())
-    next(stream)
-    assert sum_of() == before, "nothing is recorded while rows are still coming"
-    list(stream)  # exhaust
-    assert sum_of() > before
-
-
-def test_an_abandoned_stream_is_still_measured():
-    """A client that disconnects halfway is a slow query too — dropping it
-    would bias the metric towards the requests that finished."""
-    from egernia_api.queries.query import _timed
+def test_sync_duration_excludes_body_delivery(fake_db):
+    """The query is complete once its spool is filled, before socket pacing."""
+    from egernia_api.queries.query import prepare_query, run_sync
 
     def count():
         for line in generate_latest(obs.REGISTRY).decode().splitlines():
@@ -224,10 +203,12 @@ def test_an_abandoned_stream_is_still_measured():
         return 0.0
 
     before = count()
-    stream = _timed(iter([b"a", b"b", b"c"]), time.perf_counter())
+    stream, _ = run_sync(prepare_query({"QUERY": QUERY}))
+    recorded = count()
+    assert recorded == before + 1
     next(stream)
-    stream.close()  # the client went away
-    assert count() == before + 1
+    cast(Any, stream).close()  # client delivery cannot extend query duration
+    assert count() == recorded
 
 
 def test_the_pool_wait_is_only_the_wait(fake_db):
@@ -273,7 +254,12 @@ def test_a_failed_job_is_counted_as_a_failure(monkeypatch, fake_db):
     def explode(*args, **kwargs):
         raise RuntimeError("query blew up")
 
-    job = fake_db.add_job(phase="EXECUTING", query_sql="SELECT 1", parameters={})
+    job = fake_db.add_job(
+        phase="EXECUTING",
+        query_sql="SELECT 1",
+        parameters={},
+        worker_id=cast(Any, worker).WORKER_ID,
+    )
     monkeypatch.setattr(worker, "run_query", explode, raising=False)
 
     before = generate_latest(obs.REGISTRY).decode()
@@ -306,6 +292,7 @@ def _run_a_job_that_is_finalized_mid_stream(fake_db, monkeypatch):
         query_sql=QUERY,
     )
     claimed = worker.claim_job()
+    assert claimed is not None
     real_stream = worker.result_stream
 
     def abort_then_stream(*args, **kwargs):
@@ -345,6 +332,7 @@ def test_an_abort_before_the_query_starts_is_counted_but_not_timed(
         query_sql=QUERY,
     )
     claimed = worker.claim_job()
+    assert claimed is not None
     fake_db.jobs[job["job_id"]]["phase"] = "ABORTED"  # before the PID is published
 
     counted = _metric('tap_jobs_completed_total{phase="ABORTED"}')
@@ -365,6 +353,7 @@ def test_a_deleted_job_is_not_counted_as_an_outcome(fake_db, results_dir, monkey
         query_sql=QUERY,
     )
     claimed = worker.claim_job()
+    assert claimed is not None
     real_stream = worker.result_stream
 
     def delete_then_stream(*args, **kwargs):

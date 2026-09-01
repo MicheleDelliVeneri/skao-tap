@@ -122,13 +122,14 @@ sequenceDiagram
     A->>P: acquire pooled connection
     Note over A,P: pool wait is measured separately from query time
     A->>P: BEGIN, SET LOCAL ROLE tap_reader, SET LOCAL statement_timeout
-    A->>P: DECLARE server-side cursor
+    A->>P: stream statement (chunked reads)
     P-->>A: first rows
-    A-->>C: 200, streaming body (first chunk produced eagerly)
     loop until MAXREC or exhausted
-        P-->>A: next batch
-        A-->>C: next chunk
+        P-->>A: next chunk of rows
+        A->>A: serialize to spool file
     end
+    Note over A: connection released before delivery —<br/>a slow reader must not hold a pooled connection
+    A-->>C: 200, body streamed from the spool
     A->>P: COMMIT, release connection
 ```
 
@@ -210,10 +211,10 @@ descriptions follow the data into whichever container the client asked for.
 
 ```mermaid
 graph LR
-    cur["server-side cursor<br/>itersize 5000"] --> lim["RowLimiter<br/>MAXREC + overflow status"]
+    cur["streamed statement<br/>chunks of 2,000 rows"] --> lim["RowLimiter<br/>MAXREC + overflow status"]
     lim --> cols["ColumnMeta<br/>name, kind, unit, ucd, description"]
     cols --> ser{"RESPONSEFORMAT"}
-    ser -->|votable| vt["VOTable 1.4<br/>astropy.io.votable"]
+    ser -->|votable| vt["VOTable 1.4<br/>TABLEDATA, streamed"]
     ser -->|csv / tsv| dsv["delimited text"]
     ser -->|json| js["JSON"]
     ser -->|parquet| pq["Apache Parquet<br/>zstd, row groups"]
@@ -221,7 +222,8 @@ graph LR
     vt & dsv & js & pq & ar --> out["HTTP chunks / result file"]
 ```
 
-Everything streams. Rows arrive from a server-side cursor in batches of 5,000
+Everything streams. Rows arrive from a streamed statement in chunks (2,000
+rows in the API, 5,000 in the executor)
 and leave as HTTP chunks, so a ten-million-row result never exists in memory in
 either service.
 

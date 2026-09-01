@@ -17,6 +17,7 @@ packages register through the egernia.models entry-point group.
 
 import logging
 import shutil
+from typing import Any, cast
 
 from egernia_core import uws
 from egernia_core.config import base_url, settings
@@ -24,14 +25,13 @@ from egernia_core.db import connection as db_connection
 from egernia_core.errors import NotFoundError, UsageError
 from egernia_core.metadata import ingest
 from egernia_core.metadata.plugins import MetadataPlugin, active_plugins
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
+from starlette.concurrency import iterate_in_threadpool
 
 from ..auth import auth_summary, gated, owner_of, require
-from ..queries.query import prepare_query, run_sync
-from .uws_api import (
+from ..queries.jobs import (
     fetch_job,
     parse_job_filters,
     queue_job,
@@ -39,8 +39,11 @@ from .uws_api import (
     run_or_abort,
     wait_for_phase,
 )
+from ..queries.query import prepare_query, run_sync_for_request
 
 API_PREFIX = "/api/v1"
+METADATA_LIST_DEFAULT = 100
+METADATA_LIST_MAX = 1000
 router = APIRouter(prefix=API_PREFIX, tags=["json-api"])
 log = logging.getLogger("egernia_api")
 
@@ -114,14 +117,13 @@ async def auth_info():
 
 
 @router.post("/query", dependencies=[Depends(require("query.sync"))])
-async def sync_query(body: QueryRequest):
+async def sync_query(body: QueryRequest, request: Request):
     """Synchronous ADQL query, JSON by default (metadata, data, status).
 
     Set ``format`` to ``parquet`` or ``arrow`` for columnar responses.
     """
-    prepared = await run_in_threadpool(prepare_query, _tap_params(body, fmt=body.format))
-    # off the event loop, for the same reason as /tap/sync
-    chunks, mime = await run_in_threadpool(run_sync, prepared)
+    prepared = prepare_query(_tap_params(body, fmt=body.format))
+    chunks, mime = await run_sync_for_request(request, prepared)
     return StreamingResponse(iterate_in_threadpool(chunks), media_type=mime)
 
 
@@ -165,13 +167,13 @@ def _job_json(job: dict) -> dict:
 
 
 @router.post("/jobs", status_code=201, dependencies=[Depends(require("jobs.create"))])
-async def create_job(body: JobRequest, request: Request):
+def create_job(body: JobRequest, request: Request):
     params = _tap_params(body, fmt=body.format)
     if body.run_id:
         params["RUNID"] = body.run_id
     # validate before storing, unlike the lenient UWS XML flow — and keep the
     # result, so running the job now does not re-translate the same query
-    prepared = await run_in_threadpool(prepare_query, params)
+    prepared = prepare_query(params)
     with db_connection() as conn:
         job = uws.create_job(conn, params, owner_id=owner_of(request))
         if body.run:
@@ -180,7 +182,7 @@ async def create_job(body: JobRequest, request: Request):
 
 
 @router.get("/jobs")
-async def list_jobs(phase: str | None = None, last: int | None = None, after: str | None = None):
+def list_jobs(phase: str | None = None, last: int | None = None, after: str | None = None):
     phases = [p.strip().upper() for p in phase.split(",")] if phase else []
     phases, last, since = parse_job_filters(phases, last, after)
     with db_connection() as conn:
@@ -210,7 +212,7 @@ async def post_phase(job_id: str, body: PhaseRequest):
 
 
 @router.delete("/jobs/{job_id}", status_code=204, dependencies=[Depends(require("jobs.delete"))])
-async def delete_job(job_id: str):
+def delete_job(job_id: str):
     with db_connection() as conn:
         uws.delete_job(conn, job_id)
     try:
@@ -228,7 +230,7 @@ async def delete_job(job_id: str):
 
 
 @router.get("/jobs/{job_id}/result")
-async def get_result(job_id: str):
+def get_result(job_id: str):
     return result_file_response(fetch_job(job_id), job_id)
 
 
@@ -238,7 +240,7 @@ async def get_result(job_id: str):
 
 
 @router.get("/tables")
-async def tables():
+def tables():
     """JSON rendering of TAP_SCHEMA (machine-friendly alternative to VOSI XML)."""
     with db_connection() as conn:
         rows = conn.execute(
@@ -294,7 +296,7 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
     # "projects" -> "project", for readable 404 messages
     resource = root.name[:-1] if root.name.endswith("s") else root.name
 
-    async def ingest_endpoint(document):
+    def ingest_endpoint(document):
         with db_connection() as conn:
             counts = ingest.ingest_document(conn, plugin, document)
         root_id = getattr(document, id_column)
@@ -321,13 +323,18 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
     )
 
     @domain.get("")
-    async def list_endpoint():
+    def list_endpoint(
+        limit: int = Query(METADATA_LIST_DEFAULT, ge=1, le=METADATA_LIST_MAX),
+        after: str | None = None,
+    ):
         with db_connection() as conn:
-            summaries = ingest.list_documents(conn, plugin)
-        return {plugin.root_table: summaries}
+            summaries = cast(Any, ingest).list_documents(conn, plugin, limit + 1, after)
+        page = summaries[:limit]
+        next_after = str(page[-1][id_column]) if len(summaries) > limit else None
+        return {plugin.root_table: page, "next_after": next_after}
 
     @domain.get("/{root_id}")
-    async def fetch_endpoint(root_id: str):
+    def fetch_endpoint(root_id: str):
         with db_connection() as conn:
             document = ingest.fetch_document(conn, plugin, root_id)
         if document is None:
@@ -335,7 +342,7 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
         return document
 
     @domain.delete("/{root_id}", dependencies=[Depends(require("metadata.delete"))])
-    async def delete_endpoint(root_id: str, request: Request):
+    def delete_endpoint(root_id: str, request: Request):
         """Delete a document; generated foreign keys cascade to every child row."""
         with db_connection() as conn:
             deleted = ingest.delete_document(conn, plugin, root_id, actor=owner_of(request))
@@ -344,7 +351,7 @@ def build_metadata_router(plugin: MetadataPlugin) -> APIRouter:
         return {"status": "deleted", id_column: root_id}
 
     @domain.patch("/{root_id}", dependencies=[Depends(require("metadata.amend"))])
-    async def amend_endpoint(root_id: str, body: AmendRequest):
+    def amend_endpoint(root_id: str, body: AmendRequest):
         """Amend already-ingested rows — e.g. backfill a column added by a
         newer data-model release — without re-sending the whole document.
 

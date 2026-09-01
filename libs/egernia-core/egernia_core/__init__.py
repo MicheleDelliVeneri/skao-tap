@@ -4,8 +4,6 @@ import logging
 from collections.abc import Callable
 from importlib.metadata import entry_points
 
-__version__ = "0.1.0"
-
 _log = logging.getLogger("egernia_core")
 
 

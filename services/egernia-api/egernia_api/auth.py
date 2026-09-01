@@ -32,10 +32,12 @@ wants to serve standard VO clients sets.
 """
 
 import logging
+from typing import cast
 
 from egernia_core.auth import (
     ANONYMOUS,
     QUERY_OPERATIONS,
+    AuthPlugin,
     Principal,
     active_auth_plugin,
     clear_job_viewer,
@@ -59,7 +61,7 @@ _PLUGIN: object = _UNRESOLVED
 _GATED: tuple[str, ...] | None = None
 
 
-def plugin():
+def plugin() -> AuthPlugin | None:
     """The active authorisation plugin, resolved once."""
     global _PLUGIN
     if _PLUGIN is _UNRESOLVED:
@@ -75,7 +77,7 @@ def plugin():
         # assigned only after a successful resolve, so a misconfiguration
         # keeps raising instead of being cached as "auth off"
         _PLUGIN = resolved
-    return _PLUGIN
+    return cast("AuthPlugin | None", _PLUGIN)
 
 
 def gated() -> tuple[str, ...]:

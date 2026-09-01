@@ -41,12 +41,20 @@ class PermissionsApiPlugin(AuthPlugin):
         self.service = service or settings.permissions_service_name
         self.version = settings.permissions_service_version
         self.timeout_s = settings.permissions_timeout_s
+        # One client for the plugin's lifetime, not one per decision: a fresh
+        # client pays a TCP (and TLS) handshake on every authorisation, per
+        # request. Bounded so a burst cannot open arbitrarily many sockets to
+        # the Permissions API; closed by the API's lifespan at shutdown.
+        self._client = httpx.Client(
+            timeout=self.timeout_s,
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
 
     def authorize(self, principal: Principal, operation: str, context: dict) -> bool:
         if principal.is_anonymous or not principal.token:
             return False
         try:
-            response = httpx.post(
+            response = self._client.post(
                 f"{self.url}/authorise/route/{self.service}",
                 params={
                     "route": context.get("route", ""),
@@ -55,7 +63,6 @@ class PermissionsApiPlugin(AuthPlugin):
                     "token": principal.token,
                 },
                 json=context.get("path_params") or {},
-                timeout=self.timeout_s,
             )
         except httpx.HTTPError as exc:
             # fail closed, but as a service fault: a permissions API that is
@@ -72,6 +79,9 @@ class PermissionsApiPlugin(AuthPlugin):
         except ValueError as exc:
             raise ServiceError("permissions API returned a non-JSON decision") from exc
         return bool(decision.get("is_authorised", False))
+
+    def close(self) -> None:
+        self._client.close()
 
     def describe(self) -> str:
         return f"{self.name} ({self.url}, service={self.service} v{self.version})"

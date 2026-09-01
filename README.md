@@ -40,7 +40,8 @@ database.
   checked against `TAP_SCHEMA`, then executed under `SET LOCAL ROLE tap_reader`
   with a statement timeout. An ADQL query cannot write, whatever it manages to
   express.
-- **Everything streams.** Rows leave a server-side cursor and become HTTP
+- **Everything streams.** Rows leave a streamed statement in server-side
+  chunks and become HTTP
   chunks, so a ten-million-row result never exists in memory. **Parquet** and
   **Arrow** are first-class formats carrying units, UCDs and descriptions as
   field metadata — not exports bolted on afterwards.
@@ -82,11 +83,11 @@ Cone search, UWS jobs, Parquet output, TOPCAT and metadata ingest are in the
 | Standard | Surface |
 | --- | --- |
 | **TAP 1.1** | `/sync`, `/async`, `TAP_SCHEMA`, `UPLOAD` (inline multipart and `http(s)`) |
-| **ADQL 2.0** | Parsed and translated by [`queryparser-python3`][queryparser]; geometry becomes [pg_sphere][pgsphere] expressions |
+| **ADQL 2.1** | Parsed and translated by a vendored [`queryparser-python3`][queryparser] fork; geometry becomes [pg_sphere][pgsphere] expressions |
 | **UWS 1.1** | Complete job lifecycle, including `WAIT` blocking, `AFTER` filtering, and `ABORT` that cancels the running statement |
 | **VOSI** | `/capabilities` (TAPRegExt), `/availability`, `/tables` (VODataService) |
 | **DALI** | Parameter conventions, error VOTables, `/examples` |
-| **VOTable 1.4** | via `astropy.io.votable`; plus CSV, TSV, JSON, Parquet, Arrow |
+| **VOTable 1.4** | hand-written streaming writer; plus CSV, TSV, JSON, Parquet, Arrow |
 | **VOResource** | `/tap/registry` record for registry harvesting |
 | **AuthVO** | Challenges naming the IAM, so a client can go and get a token |
 

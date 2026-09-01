@@ -1,0 +1,22 @@
+# The TAP services this harness may point at. Lane A only: every target here
+# is a locally deployed server the operator controls — this harness is never
+# pointed at somebody else's production service.
+targets:
+  - name: egernia-local
+    server: egernia
+    base_url: http://localhost:8080/tap
+    # egernia can also answer the srcnet.* classes (Q08/Q09/Q14), but a
+    # cross-server run holds every target to the portable ObsCore subset;
+    # set false for an egernia-only appendix run.
+    portable_only: true
+    notes: >-
+      The repository's own docker-compose.yml stack, seeded with
+      `uv run --group dataset python -m egernia_dataset.seed`.
+  - name: dachs-local
+    server: dachs
+    base_url: http://localhost:8081/tap
+    portable_only: true
+    notes: >-
+      GAVO DaCHS from the Debian gavodachs2-server package
+      (benchmarks/tap-compare/docker-compose.dachs.yml), serving the exported
+      ObsCore corpus via //obscore#publishObscoreLike.

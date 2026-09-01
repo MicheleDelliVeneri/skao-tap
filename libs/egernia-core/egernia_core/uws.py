@@ -1,4 +1,7 @@
-"""UWS 1.1 job model: persistence in uws.jobs and XML rendering."""
+"""UWS 1.1 job model: persistence in uws.jobs, and job cancellation.
+
+XML rendering lives in :mod:`egernia_core.uws_xml`; only the API needs it.
+"""
 
 import datetime
 import json
@@ -6,22 +9,20 @@ import os
 import re
 import secrets
 import time
-from xml.etree import ElementTree as ET
+from collections.abc import Iterable
 
 from .auth.context import current_job_viewer
-from .config import base_url, settings
+from .config import settings
 from .errors import AuthorizationError, NotFoundError
 from .observability import request_id
 
 JOB_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
-UWS_NS = "http://www.ivoa.net/xml/UWS/v1.0"
-XLINK_NS = "http://www.w3.org/1999/xlink"
-XSI_NS = "http://www.w3.org/2001/XMLSchema-instance"
-
 ACTIVE_PHASES = {"PENDING", "QUEUED", "EXECUTING", "HELD", "SUSPENDED"}
 FINAL_PHASES = {"COMPLETED", "ERROR", "ABORTED", "ARCHIVED"}
 ALL_PHASES = ACTIVE_PHASES | FINAL_PHASES
+DEFAULT_LIST_LIMIT = 100
+MAX_LIST_LIMIT = 1000
 
 #: the job row, in SELECT order. A tuple rather than a comma-joined string
 #: because it is read back per row: splitting and stripping nineteen names
@@ -46,6 +47,8 @@ JOB_COLUMNS = (
     "result_size",
     "backend_pid",
     "request_id",
+    "worker_id",
+    "lease_expires",
 )
 JOB_COLUMNS_SQL = ", ".join(JOB_COLUMNS)
 
@@ -87,6 +90,12 @@ def ensure_job_columns(conn) -> None:
     conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS backend_pid integer")
     conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS request_id text")
     conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS query_tables text[]")
+    conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS worker_id text")
+    conn.execute("ALTER TABLE uws.jobs ADD COLUMN IF NOT EXISTS lease_expires timestamptz")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS jobs_expired_leases"
+        " ON uws.jobs (lease_expires) WHERE phase = 'EXECUTING'"
+    )
 
 
 def create_job(conn, parameters: dict[str, str], owner_id: str | None = None) -> dict:
@@ -162,22 +171,28 @@ def list_jobs(
         # own jobs, plus the ownerless ones anonymous callers create
         sql += " AND (owner_id IS NULL OR owner_id = %s)"
         args.append(viewer.subject)
-    sql += " ORDER BY creation_time DESC"
-    if last:
-        sql += " LIMIT %s"
-        args.append(last)
+    sql += " ORDER BY creation_time DESC LIMIT %s"
+    args.append(min(last or DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT))
     return [_row_to_job(r) for r in conn.execute(sql, args).fetchall()]
 
 
-def update_job(conn, job_id: str, **fields) -> None:
+def update_job(conn, job_id: str, expected_phases: Iterable[str] | None = None, **fields) -> bool:
     if not fields:
-        return
+        return True
     _check_owner_of(conn, job_id)
     sets = ", ".join(f"{k} = %s" for k in fields)
     values = [json.dumps(v) if k == "parameters" else v for k, v in fields.items()]
-    cur = conn.execute(f"UPDATE uws.jobs SET {sets} WHERE job_id = %s", (*values, job_id))
-    if cur.rowcount == 0:
+    where = "job_id = %s"
+    args = [*values, job_id]
+    if expected_phases is not None:
+        where += " AND phase = ANY(%s)"
+        args.append(list(expected_phases))
+    cur = conn.execute(f"UPDATE uws.jobs SET {sets} WHERE {where}", args)
+    if cur.rowcount == 0 and expected_phases is None:
         raise NotFoundError(f"job {job_id} not found")
+    if cur.rowcount == 0:
+        _check_owner_of(conn, job_id)  # distinguish a missing job from a lost race
+    return cur.rowcount == 1
 
 
 CANCEL_RETRIES = 5
@@ -190,9 +205,7 @@ def job_query_tag(job_id: str) -> str:
     A prefix, not a suffix like ``tag_sql``'s request id, because the
     activity view truncates long statements (track_activity_query_size)
     and the abort path must find this marker on exactly the queries big
-    enough to be worth aborting. It used to be the DECLARE'd cursor's name
-    that carried the job id here; the tag replaces it now that result
-    queries run as plain streamed statements."""
+    enough to be worth aborting."""
     return f"/* tap_job_{job_id} */ "
 
 
@@ -269,79 +282,3 @@ def _check_owner_of(conn, job_id: str) -> None:
     if row is None:
         return  # the mutator reports the missing job itself
     _check_ownership({"job_id": job_id, "owner_id": row[0]})
-
-
-# ---------------------------------------------------------------------------
-# XML rendering
-# ---------------------------------------------------------------------------
-
-
-def _el(parent, tag, text=None, nil=False, **attrs):
-    element = ET.SubElement(parent, f"{{{UWS_NS}}}{tag}", **attrs)
-    if nil:
-        element.set(f"{{{XSI_NS}}}nil", "true")
-    elif text is not None:
-        element.text = str(text)
-    return element
-
-
-def result_url(job_id: str) -> str:
-    return f"{base_url()}/async/{job_id}/results/result"
-
-
-def job_xml(job: dict) -> bytes:
-    def _nillable(tag: str, value) -> None:
-        if value is None:
-            _el(root, tag, nil=True)
-        else:
-            _el(root, tag, value)
-
-    root = ET.Element(f"{{{UWS_NS}}}job", {"version": "1.1"})
-    _el(root, "jobId", job["job_id"])
-    _nillable("runId", job["run_id"])
-    _nillable("ownerId", job["owner_id"])
-    _el(root, "phase", job["phase"])
-    _nillable("quote", iso_utc(job["quote"]))
-    _el(root, "creationTime", iso_utc(job["creation_time"]))
-    _nillable("startTime", iso_utc(job["start_time"]))
-    _nillable("endTime", iso_utc(job["end_time"]))
-    _el(root, "executionDuration", job["execution_duration"])
-    _el(root, "destruction", iso_utc(job["destruction"]))
-
-    params = _el(root, "parameters")
-    for key, value in (job["parameters"] or {}).items():
-        param = _el(params, "parameter", value)
-        param.set("id", key.lower())
-
-    results = _el(root, "results")
-    if job["phase"] == "COMPLETED":
-        result = _el(results, "result")
-        result.set("id", "result")
-        result.set(f"{{{XLINK_NS}}}href", result_url(job["job_id"]))
-        if job["result_mime"]:
-            result.set("mime-type", job["result_mime"])
-
-    if job["phase"] == "ERROR" and job["error_message"]:
-        err = _el(root, "errorSummary")
-        err.set("type", job["error_type"] or "fatal")
-        err.set("hasDetail", "true")
-        _el(err, "message", job["error_message"])
-
-    return _serialize(root)
-
-
-def joblist_xml(jobs: list[dict]) -> bytes:
-    root = ET.Element(f"{{{UWS_NS}}}jobs", {"version": "1.1"})
-    for job in jobs:
-        ref = _el(root, "jobref")
-        ref.set("id", job["job_id"])
-        ref.set(f"{{{XLINK_NS}}}href", f"{base_url()}/async/{job['job_id']}")
-        _el(ref, "phase", job["phase"])
-    return _serialize(root)
-
-
-def _serialize(root) -> bytes:
-    ET.register_namespace("uws", UWS_NS)
-    ET.register_namespace("xlink", XLINK_NS)
-    ET.register_namespace("xsi", XSI_NS)
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True)

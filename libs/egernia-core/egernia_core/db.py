@@ -31,14 +31,14 @@ def connection():
     """A pooled connection, with the wait for it measured.
 
     Prefer this to ``pool().connection()``: waiting for a connection is the
-    service's real backpressure signal, and it was invisible when a busy pool
-    took a whole worker down with it.
+    service's real backpressure signal, and it must stay visible.
 
-    Only the acquisition is timed. Timing the whole block — which is what a
-    combined ``with`` does, since the caller's work happens at the yield —
-    added query and streaming time to the wait, and a sync query holds its
-    connection for the length of the client's download. That turned the one
-    metric that reports backpressure into a slow-response metric.
+    Only the acquisition is timed, never the held time. Timing the whole
+    block — which is what a combined ``with`` does, since the caller's work
+    happens at the yield — would add query and streaming time to the wait
+    (a sync query holds its connection for the length of the client's
+    download), turning the one metric that reports backpressure into a
+    slow-response metric.
     """
     with contextlib.ExitStack() as stack:
         with pool_wait_timer():
@@ -63,13 +63,12 @@ _NO_ROW = object()
 class StreamedRows:
     """Rows from a query executed as a plain streamed statement.
 
-    The result queries used to run on named (DECLARE'd) cursors. That kept
-    memory flat, but it also decided the plan: PostgreSQL never parallelises
-    a cursor's query, and ``cursor_tuple_fraction`` biases the planner toward
-    fast-start plans on the assumption that the client will stop reading
-    early — an assumption that is always false here, because the service
-    reads every result to MAXREC + 1. On a full-table aggregate the two
-    together cost several times the aggregate itself.
+    Deliberately not a named (DECLARE'd) cursor, though one would also keep
+    memory flat: PostgreSQL never parallelises a cursor's query, and
+    ``cursor_tuple_fraction`` biases the planner toward fast-start plans on
+    the assumption that the client will stop reading early — an assumption
+    that is always false here, because the service reads every result to
+    MAXREC + 1.
 
     ``Cursor.stream()`` keeps the flat memory profile — rows arrive in
     server-side chunks and are yielded one at a time, and psycopg reads the
@@ -86,11 +85,9 @@ class StreamedRows:
     disconnected mid-download) hands back a reusable connection. Callers
     wrap it in ``contextlib.closing``.
 
-    One semantic shift from the cursor days: ``statement_timeout`` now bounds
-    the whole statement, production and delivery both, where it used to bound
-    each FETCH. For a service timeout that is the honest meaning — "the sync
-    query may take this long" — rather than a bound no one chose on the
-    per-batch fetch.
+    ``statement_timeout`` bounds the whole statement, production and delivery
+    both. For a service timeout that is the honest meaning — "the sync query
+    may take this long" — rather than a bound on each internal fetch.
     """
 
     def __init__(self, cur, sql: str, chunk_rows: int):

@@ -102,10 +102,17 @@ def _capability_elements() -> str:
     <outputFormat><mime>application/json</mime><alias>json</alias></outputFormat>
     <outputFormat><mime>application/vnd.apache.parquet</mime><alias>parquet</alias></outputFormat>
     <outputFormat><mime>application/vnd.apache.arrow.stream</mime><alias>arrow</alias></outputFormat>
+    <!-- http/https declared unconditionally: TAP 1.1 makes them mandatory
+         for a service that supports uploads at all (taplint E-CAP-MUPM).
+         The methods are implemented; TAP_UPLOAD_ALLOWED_HOSTS still decides,
+         per request, which destinations a fetch may reach — a capability is
+         not an authorisation. -->
     <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-inline"/>
     <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-http"/>
     <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-https"/>
-    <retentionPeriod><default>{settings.job_retention_s}</default></retentionPeriod>
+    <retentionPeriod>
+      <default>{settings.job_retention_s}</default>
+    </retentionPeriod>
     <executionDuration><default>{settings.default_exec_duration_s}</default></executionDuration>
     <outputLimit>
       <default unit="row">{settings.default_maxrec}</default>
@@ -128,6 +135,11 @@ def _capability_elements() -> str:
   <capability standardID="ivo://ivoa.net/std/VOSI#tables">
     <interface xsi:type="vod:ParamHTTP" role="std">
       <accessURL use="full">{base}/tables</accessURL>
+    </interface>
+  </capability>
+  <capability standardID="ivo://ivoa.net/std/DALI#examples">
+    <interface xsi:type="vod:ParamHTTP" role="std">
+      <accessURL use="full">{base}/examples</accessURL>
     </interface>
   </capability>
 """
@@ -285,10 +297,26 @@ def tables_xml() -> str:
             "SELECT table_name, column_name, datatype, arraysize, description, unit, ucd,"
             " utype, xtype FROM tap_schema.columns ORDER BY column_index"
         ).fetchall()
+        # every key this document's tables declare: a key registered in
+        # TAP_SCHEMA but absent here is the service contradicting itself
+        # (taplint E-TMC-FM21)
+        keys = conn.execute(
+            "SELECT key_id, from_table, target_table, description"
+            " FROM tap_schema.keys ORDER BY key_id"
+        ).fetchall()
+        key_columns = conn.execute(
+            "SELECT key_id, from_column, target_column FROM tap_schema.key_columns"
+        ).fetchall()
 
     cols_by_table: dict[str, list] = {}
     for col in columns:
         cols_by_table.setdefault(col[0], []).append(col)
+    key_cols_by_key: dict[str, list] = {}
+    for key_id, from_column, target_column in key_columns:
+        key_cols_by_key.setdefault(key_id, []).append((from_column, target_column))
+    keys_by_table: dict[str, list] = {}
+    for key_id, from_table, target_table, key_desc in keys:
+        keys_by_table.setdefault(from_table, []).append((key_id, target_table, key_desc))
     tables_by_schema: dict[str, list] = {}
     for tab in tables:
         tables_by_schema.setdefault(tab[0], []).append(tab)
@@ -344,6 +372,17 @@ def tables_xml() -> str:
                     f"{escape(datatype)}</dataType>"
                 )
                 parts.append("      </column>")
+            for key_id, target_table, key_desc in keys_by_table.get(table_name, []):
+                parts.append("      <foreignKey>")
+                parts.append(f"        <targetTable>{escape(target_table)}</targetTable>")
+                for from_column, target_column in key_cols_by_key.get(key_id, []):
+                    parts.append("        <fkColumn>")
+                    parts.append(f"          <fromColumn>{escape(from_column)}</fromColumn>")
+                    parts.append(f"          <targetColumn>{escape(target_column)}</targetColumn>")
+                    parts.append("        </fkColumn>")
+                if key_desc:
+                    parts.append(f"        <description>{escape(key_desc)}</description>")
+                parts.append("      </foreignKey>")
             parts.append("    </table>")
         parts.append("  </schema>")
     parts.append("</vosi:tableset>")

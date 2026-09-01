@@ -138,6 +138,25 @@ def test_software_ingest_list_fetch_amend(client, fake_db):
     assert "resources_min_memory" in rejected.json()["message"]
 
 
+def test_software_listing_is_bounded_and_cursor_paginated(client):
+    uris = ["ska:dsc-037-delay-ps:0.1.3", "ska:dsc-037-delay-ps:0.1.4"]
+    for uri in uris:
+        response = client.post("/api/v1/software", json={**SOFTWARE_PAYLOAD, "uri": uri})
+        assert response.status_code == 201, response.text
+
+    first = client.get("/api/v1/software", params={"limit": 1}).json()
+    assert [entry["uri"] for entry in first["software"]] == uris[:1]
+    assert first["next_after"] == uris[0]
+
+    second = client.get(
+        "/api/v1/software", params={"limit": 1, "after": first["next_after"]}
+    ).json()
+    assert [entry["uri"] for entry in second["software"]] == uris[1:]
+    assert second["next_after"] is None
+
+    assert client.get("/api/v1/software", params={"limit": 1001}).status_code == 422
+
+
 def test_software_validation_rejects_bad_payload(client):
     bad = dict(SOFTWARE_PAYLOAD, uri="not-a-valid-uri")
     bad_response = client.post("/api/v1/software", json=bad)
@@ -226,7 +245,7 @@ def test_legacy_tables_are_reported_until_migrated(caplog):
         def __init__(self, present):
             self._present = present
 
-        def execute(self, statement, params=None):
+        def execute(self, statement, params=()):
             assert statement == "SELECT to_regclass(%s)"
             name = params[0]
             return _Row((name,) if name in self._present else (None,))

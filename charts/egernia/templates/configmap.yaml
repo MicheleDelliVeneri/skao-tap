@@ -14,10 +14,12 @@ data:
   TAP_DEFAULT_MAXREC: {{ .Values.config.defaultMaxrec | int64 | quote }}
   TAP_HARD_MAXREC: {{ .Values.config.hardMaxrec | int64 | quote }}
   TAP_SYNC_TIMEOUT: {{ .Values.config.syncTimeoutSeconds | int64 | quote }}
+  TAP_SYNC_MAX_BYTES: {{ .Values.config.syncMaxBytes | int64 | quote }}
   TAP_ASYNC_EXEC_DURATION: {{ .Values.config.asyncExecDurationSeconds | int64 | quote }}
   TAP_JOB_RETENTION: {{ .Values.config.jobRetentionSeconds | int64 | quote }}
   TAP_WAIT_MAX: {{ .Values.config.waitMaxSeconds | int64 | quote }}
   TAP_MODEL_PLUGINS: {{ .Values.config.modelPlugins | quote }}
+  TAP_SCHEMA_BOOTSTRAP_ON_STARTUP: {{ .Values.config.schemaBootstrapOnStartup | quote }}
   TAP_OBSCORE_DID_PREFIX: {{ .Values.config.obscoreDidPrefix | quote }}
   TAP_OBSCORE_DID_COLUMNS: {{ .Values.config.obscoreDidColumns | quote }}
   TAP_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
@@ -25,6 +27,7 @@ data:
          a tapApi.port other than the image default would leave uvicorn on
          8080 while the probes and Service looked elsewhere */}}
   TAP_EXECUTOR_METRICS_PORT: {{ .Values.config.executorMetricsPort | int64 | quote }}
+  TAP_EXECUTOR_LEASE_SECONDS: {{ .Values.config.executorLeaseSeconds | int64 | quote }}
   {{- if .Values.tracing.otlpEndpoint }}
   OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.tracing.otlpEndpoint | quote }}
   OTEL_SERVICE_NAME: {{ include "egernia.fullname" . | quote }}

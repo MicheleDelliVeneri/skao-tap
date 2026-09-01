@@ -91,4 +91,5 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "egernia.fullname" . }}-results
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.tapApi.tmpSizeLimit | quote }}

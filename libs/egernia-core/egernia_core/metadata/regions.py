@@ -39,14 +39,13 @@ CIRCLE_VERTICES = 32
 # A POSITION has no extent; give it just enough that pgsphere still sees
 # eight distinct vertices. pgsphere compares coordinates with EPSILON =
 # 1e-9 rad, and the chord between adjacent vertices of the 8-gon is
-# 2*r*sin(pi/8) = 0.765*r — so the half-milliarcsecond radius this started
-# with (r = 2.4e-9 rad) produced a 1.9e-9 rad chord, only ~2x that epsilon,
-# and pgsphere could legitimately reject the spoly as degenerate. Fifty
-# milliarcseconds gives r = 2.42e-7 rad and a 1.86e-7 rad chord, ~186x the
-# epsilon. The margin is deliberately spent on precision rather than on
-# safety headroom: a point 0.1 arcsecond across stays inside SKA astrometry,
-# where a full arcsecond — a synthesised beam — would not, and 186x is
-# already far outside the range where a coordinate comparison is in doubt.
+# 2*r*sin(pi/8) = 0.765*r — a radius too close to that epsilon lets pgsphere
+# legitimately reject the spoly as degenerate. Fifty milliarcseconds gives
+# r = 2.42e-7 rad and a 1.86e-7 rad chord, ~186x the epsilon. The margin is
+# deliberately spent on precision rather than on safety headroom: a point
+# 0.1 arcsecond across stays inside SKA astrometry, where a full arcsecond —
+# a synthesised beam — would not, and 186x is already far outside the range
+# where a coordinate comparison is in doubt.
 POSITION_RADIUS_DEG = 0.05 / 3600
 
 _SHAPES = ("CIRCLE", "POLYGON", "POSITION")

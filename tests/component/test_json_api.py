@@ -3,6 +3,7 @@ validated by ska-src-mm-notification, automatic srcnet schema, JSON queries
 and the JSON job facade."""
 
 import copy
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -28,9 +29,9 @@ def test_notification_built_with_library_builder_and_queried_via_tap(tap_service
     product = DataProduct(
         product_id="builder-prod-1",
         o_ucd="phot.flux",
-        dataproduct_type="cube",
+        dataproduct_type=cast(Any, "cube"),
         calib_level=2,
-        data_product_origin="ODP",  # required since 0.1.8
+        data_product_origin=cast(Any, "ODP"),  # required since 0.1.8
         target_name="Builder Target",
         artifacts=[
             Artifact(
@@ -157,6 +158,31 @@ def test_notification_delete_cascades_through_the_hierarchy(tap_service, databas
     """DELETE removes the root row; the generated FKs clear every level below."""
     import psycopg
 
+    def hierarchy_counts(conn, project_id):
+        def scalar(query):
+            row = conn.execute(query, (project_id,)).fetchone()
+            assert row is not None
+            return row[0]
+
+        return {
+            "srcnet.projects": scalar("SELECT count(*) FROM srcnet.projects WHERE project_id = %s"),
+            "srcnet.observations": scalar(
+                "SELECT count(*) FROM srcnet.observations WHERE project_id = %s"
+            ),
+            "srcnet.scheduling_blocks": scalar(
+                "SELECT count(*) FROM srcnet.scheduling_blocks WHERE project_id = %s"
+            ),
+            "srcnet.execution_blocks": scalar(
+                "SELECT count(*) FROM srcnet.execution_blocks WHERE project_id = %s"
+            ),
+            "srcnet.data_products": scalar(
+                "SELECT count(*) FROM srcnet.data_products WHERE project_id = %s"
+            ),
+            "srcnet.artifacts": scalar(
+                "SELECT count(*) FROM srcnet.artifacts WHERE project_id = %s"
+            ),
+        }
+
     payload = copy.deepcopy(SRC_INGESTION_EXAMPLE)
     payload["project_id"] = "delete-cascade-demo"
     api = _api(tap_service)
@@ -167,12 +193,8 @@ def test_notification_delete_cascades_through_the_hierarchy(tap_service, databas
     assert len(levels) == 6
 
     with psycopg.connect(database_url) as conn:
-        before = {
-            table: conn.execute(
-                f"SELECT count(*) FROM {table} WHERE project_id = %s", (payload["project_id"],)
-            ).fetchone()[0]
-            for table in levels
-        }
+        before = hierarchy_counts(conn, payload["project_id"])
+    assert set(before) == set(levels)
     assert all(count > 0 for count in before.values()), before
 
     url = f"{api}/notifications/{payload['project_id']}"
@@ -185,12 +207,7 @@ def test_notification_delete_cascades_through_the_hierarchy(tap_service, databas
     assert deleted_again.status_code == 404
 
     with psycopg.connect(database_url) as conn:
-        after = {
-            table: conn.execute(
-                f"SELECT count(*) FROM {table} WHERE project_id = %s", (payload["project_id"],)
-            ).fetchone()[0]
-            for table in levels
-        }
+        after = hierarchy_counts(conn, payload["project_id"])
     assert after == dict.fromkeys(levels, 0)
 
 
@@ -198,13 +215,14 @@ def test_ingested_metadata_queryable_via_tap_adql(tap_service):
     """The generated srcnet tables are TAP_SCHEMA-registered: PyVO + ADQL work."""
     httpx.post(f"{_api(tap_service)}/notifications", json=SRC_INGESTION_EXAMPLE)
     svc = pyvo.dal.TAPService(tap_service)
-    table = svc.search(
+    query = (
         "SELECT p.product_id, a.artifact_id, a.access_estsize "
         "FROM srcnet.data_products AS p "
         "JOIN srcnet.artifacts AS a ON p.project_id = a.project_id "
         "AND p.eb_id = a.eb_id AND p.product_id = a.product_id "
         "WHERE p.dataproduct_type = 'cube' AND p.project_id = 'project12314'"
-    ).to_table()
+    )
+    table = svc.search(query).to_table()  # pyright: ignore[reportCallIssue]
     assert len(table) == 2
     assert "srcnet.artifacts" in set(svc.tables.keys())
 
@@ -332,7 +350,7 @@ def test_full_metadata_notification_roundtrip(tap_service):
         access_format="application/fits",
         access_estsize=4096,
         path_to_parent="obs/full",
-        semantics="science",
+        semantics=cast(Any, "science"),
         s_ra=62.3,
         s_dec=-65.5,
         s_fov=1.5,
@@ -349,12 +367,12 @@ def test_full_metadata_notification_roundtrip(tap_service):
     product = DataProduct(
         product_id="full-prod-1",
         o_ucd="phot.flux",
-        dataproduct_type="cube",
+        dataproduct_type=cast(Any, "cube"),
         calib_level=3,
-        data_product_origin="ODP",
+        data_product_origin=cast(Any, "ODP"),
         target_name="Full Target",
         is_calibrator=True,
-        calibrator_type="bandpass",
+        calibrator_type=cast(Any, "bandpass"),
         em_band="Radio",
         s_ra=62.3,
         s_dec=-65.5,
@@ -449,9 +467,11 @@ def test_schema_evolution_adds_new_model_columns_without_data_loss(tap_service, 
     httpx.post(f"{_api(tap_service)}/notifications", json=SRC_INGESTION_EXAMPLE, timeout=30)
 
     with psycopg.connect(database_url, autocommit=True) as conn:
-        before = conn.execute(
+        row = conn.execute(
             "SELECT count(*) FROM srcnet.data_products WHERE project_id = 'project12314'"
-        ).fetchone()[0]
+        ).fetchone()
+        assert row is not None
+        before = row[0]
         assert before >= 1
         # pretend this deployment predates the beam_pa field
         conn.execute("ALTER TABLE srcnet.data_products DROP COLUMN beam_pa")
