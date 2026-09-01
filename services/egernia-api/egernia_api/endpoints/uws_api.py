@@ -1,11 +1,12 @@
 """UWS 1.1 REST resources under {base}/async."""
 
+import datetime
 import shutil
 
 from egernia_core import uws, uws_xml
 from egernia_core.config import base_url, settings
 from egernia_core.db import connection as db_connection
-from egernia_core.errors import UsageError
+from egernia_core.errors import QueryParseError, TAPError, UsageError
 from egernia_core.query.upload import save_upload_sources
 from egernia_core.query.votable import error_votable
 from fastapi import APIRouter, Depends, Request
@@ -95,8 +96,23 @@ async def create_job(request: Request):
     # query cannot be missing where it is used. Not an assert: those vanish
     # under -O, which is exactly when a mistake here would matter.
     run_now = bool(phase and phase.upper() == "RUN")
-    # translated off the event loop, before the connection is held
-    prepared = await run_in_threadpool(prepare_query, params) if run_now else None
+    # Translated off the event loop, before the connection is held. A query
+    # that fails to translate does not refuse the request: UWS's contract is
+    # that creating a job answers 303 and problems with the job live *in*
+    # the job — a client that asked for PHASE=RUN learns about its bad ADQL
+    # from the ERROR phase, exactly as it would had it RUN the job itself
+    # (taplint E-QAS-DFIO). Only the caller's usage errors are stored:
+    # a service fault (database down, overload) still refuses the request,
+    # because that is not a property of the job. Parameter and upload
+    # errors also still refuse up front: those are the request's, not the
+    # query's.
+    prepared = None
+    prepare_error: TAPError | None = None
+    if run_now:
+        try:
+            prepared = await run_in_threadpool(prepare_query, params)
+        except (UsageError, QueryParseError) as exc:
+            prepare_error = exc
 
     def store_job():
         with db_connection() as conn:
@@ -105,6 +121,15 @@ async def create_job(request: Request):
                 save_upload_sources(job["job_id"], sources)
             if run_now and prepared is not None:
                 queue_job(conn, job, prepared)
+            elif prepare_error is not None:
+                uws.update_job(
+                    conn,
+                    job["job_id"],
+                    phase="ERROR",
+                    end_time=datetime.datetime.now(datetime.UTC),
+                    error_type="fatal",
+                    error_message=prepare_error.message,
+                )
             return job
 
     job = await run_in_threadpool(store_job)
@@ -215,6 +240,13 @@ def get_parameters(job_id: str):
 @router.post("/{job_id}/parameters", dependencies=[Depends(require("jobs.mutate"))])
 async def post_parameters(job_id: str, request: Request):
     params = await gather_params(request)
+    # An UPLOAD among the new parameters names files the executor will read
+    # at RUN. Resolve and validate them now — a bad reference is a 400 here
+    # rather than an ERROR job later — and persist them once the job accepts
+    # the merge, or the stored parameters would reference uploads that were
+    # never saved.
+    sources = await gather_upload_sources(request, params)
+    await run_in_threadpool(parse_uploads, sources)  # reject before mutating the job
 
     def update_parameters():
         with db_connection() as conn:
@@ -224,6 +256,8 @@ async def post_parameters(job_id: str, request: Request):
             merged = dict(job["parameters"] or {})
             merged.update(params)
             uws.update_job(conn, job_id, parameters=merged)
+            if sources:
+                save_upload_sources(job_id, sources)
             return job
 
     job = await run_in_threadpool(update_parameters)

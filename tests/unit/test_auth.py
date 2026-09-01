@@ -286,13 +286,21 @@ def permissions_calls(monkeypatch):
     calls = []
     reply = {"status": 200, "json": {"is_authorised": True}}
 
-    def fake_post(url, params=None, json=None, timeout=None):
-        calls.append({"url": url, "params": params, "body": json})
-        if isinstance(reply.get("exc"), Exception):
-            raise reply["exc"]
-        return httpx.Response(reply["status"], json=reply.get("json"))
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.closed = False
 
-    monkeypatch.setattr(httpx, "post", fake_post)
+        def post(self, url, params=None, json=None):
+            calls.append({"url": url, "params": params, "body": json})
+            if isinstance(reply.get("exc"), Exception):
+                raise reply["exc"]
+            return httpx.Response(reply["status"], json=reply.get("json"))
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
     return calls, reply
 
 
@@ -348,6 +356,29 @@ def test_permissions_api_never_calls_out_for_anonymous(permissions_calls):
     plugin = PermissionsApiPlugin(url="https://papi.example/api/v1")
     assert not plugin.authorize(Principal(), "metadata.delete", {})
     assert calls == []
+
+
+def test_permissions_api_reuses_one_bounded_client(permissions_calls):
+    """One HTTP client for the plugin's lifetime — a fresh client per
+    decision paid a TCP/TLS handshake on every authorisation."""
+    from egernia_api.auth_plugins.permissions_api import PermissionsApiPlugin
+
+    calls, _ = permissions_calls
+    plugin = PermissionsApiPlugin(url="https://papi.example/api/v1")
+    first_client = plugin._client
+    assert plugin.authorize(_principal(), "metadata.delete", {})
+    assert plugin.authorize(_principal(), "metadata.delete", {})
+    assert len(calls) == 2
+    assert plugin._client is first_client
+    assert "timeout" in first_client.kwargs and "limits" in first_client.kwargs
+
+
+def test_permissions_api_close_closes_the_client(permissions_calls):
+    from egernia_api.auth_plugins.permissions_api import PermissionsApiPlugin
+
+    plugin = PermissionsApiPlugin(url="https://papi.example/api/v1")
+    plugin.close()
+    assert plugin._client.closed
 
 
 # -- plugin selection -------------------------------------------------------

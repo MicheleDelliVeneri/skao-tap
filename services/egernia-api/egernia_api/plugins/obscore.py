@@ -76,7 +76,8 @@ OBSCORE_COLUMNS: list[ObsCoreColumn] = [
     ObsCoreColumn(
         "dataproduct_type",
         "char",
-        "meta.id",
+        # meta.code.class, not meta.id: changed by ObsCore 1.1 Erratum 1
+        "meta.code.class",
         "obscore:ObsDataset.dataProductType",
         "Data product (file content) primary type",
         "CASE p.dataproduct_type WHEN 'table' THEN 'measurements' ELSE p.dataproduct_type END",
@@ -116,7 +117,8 @@ OBSCORE_COLUMNS: list[ObsCoreColumn] = [
     ObsCoreColumn(
         "obs_publisher_did",
         "char",
-        "meta.ref.uri;meta.curation",
+        # meta.ref.ivoid, not meta.ref.uri;meta.curation: ObsCore 1.1 Erratum
+        "meta.ref.ivoid",
         "obscore:Curation.publisherDID",
         "ID for the Dataset given by the publisher",
         None,

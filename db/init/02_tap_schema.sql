@@ -79,7 +79,9 @@ INSERT INTO tap_schema.columns (table_name, column_name, datatype, arraysize, de
     ('tap_schema.columns', 'datatype',     'char', '*', 'ADQL datatype',                          0, 1, 3),
     ('tap_schema.columns', 'arraysize',    'char', '*', 'VOTable arraysize',                      0, 1, 4),
     ('tap_schema.columns', 'xtype',        'char', '*', 'extended type',                          0, 1, 5),
-    ('tap_schema.columns', 'size',         'int',  NULL, 'deprecated: use arraysize',             0, 1, 6),
+    -- delimited: SIZE is an ADQL reserved word, and TAP 1.1 requires the
+    -- name registered exactly as a query must write it
+    ('tap_schema.columns', '"size"',       'int',  NULL, 'deprecated: use arraysize',             0, 1, 6),
     ('tap_schema.columns', 'description',  'char', '*', 'brief description',                      0, 1, 7),
     ('tap_schema.columns', 'utype',        'char', '*', 'utype if column maps a model',           0, 1, 8),
     ('tap_schema.columns', 'unit',         'char', '*', 'unit (VOUnits)',                         0, 1, 9),
@@ -96,3 +98,19 @@ INSERT INTO tap_schema.columns (table_name, column_name, datatype, arraysize, de
     ('tap_schema.key_columns', 'key_id',        'char', '*', 'key this column belongs to', 1, 1, 1),
     ('tap_schema.key_columns', 'from_column',   'char', '*', 'referencing column',         0, 1, 2),
     ('tap_schema.key_columns', 'target_column', 'char', '*', 'referenced column',          0, 1, 3);
+
+-- TAP_SCHEMA describes its own relationships (TAP 1.1 sec 4; taplint TSLN):
+-- a client can join the metadata tables and deserves to be told how.
+INSERT INTO tap_schema.keys (key_id, from_table, target_table, description) VALUES
+    ('tap_schema:tables_schema',      'tap_schema.tables',      'tap_schema.schemas', 'table membership'),
+    ('tap_schema:columns_table',      'tap_schema.columns',     'tap_schema.tables',  'column membership'),
+    ('tap_schema:keys_from_table',    'tap_schema.keys',        'tap_schema.tables',  'referencing table'),
+    ('tap_schema:keys_target_table',  'tap_schema.keys',        'tap_schema.tables',  'referenced table'),
+    ('tap_schema:key_columns_key',    'tap_schema.key_columns', 'tap_schema.keys',    'key membership');
+
+INSERT INTO tap_schema.key_columns (key_id, from_column, target_column) VALUES
+    ('tap_schema:tables_schema',     'schema_name',  'schema_name'),
+    ('tap_schema:columns_table',     'table_name',   'table_name'),
+    ('tap_schema:keys_from_table',   'from_table',   'table_name'),
+    ('tap_schema:keys_target_table', 'target_table', 'table_name'),
+    ('tap_schema:key_columns_key',   'key_id',       'key_id');

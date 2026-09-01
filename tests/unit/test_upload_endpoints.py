@@ -237,19 +237,38 @@ def test_executor_missing_upload_file_marks_job_error(fake_db, results_dir):
     assert "missing" in job["error_message"]
 
 
-def test_capabilities_only_declare_enabled_upload_methods(client):
+def test_capabilities_declare_the_mandatory_upload_methods(client):
+    """TAP 1.1 makes upload-http mandatory for a service that supports
+    uploads at all (taplint E-CAP-MUPM); the allowlist stays what decides,
+    per request, which destinations a fetch may reach."""
     text = client.get("/tap/capabilities").text
     assert "ivo://ivoa.net/std/TAPRegExt#upload-inline" in text
-    assert "ivo://ivoa.net/std/TAPRegExt#upload-http" not in text
+    assert "ivo://ivoa.net/std/TAPRegExt#upload-http" in text
+    assert "ivo://ivoa.net/std/TAPRegExt#upload-https" in text
     assert "<uploadLimit>" in text
 
 
-def test_capabilities_declare_allowed_remote_upload(client, monkeypatch):
-    from egernia_api.endpoints import vosi
+def test_parameter_update_persists_new_upload_sources(client, fake_db, results_dir):
+    """POST /{job_id}/parameters with an UPLOAD must save the files it names,
+    or the stored parameters would reference uploads the executor cannot
+    load when the job runs."""
+    from egernia_core.query.upload import uploads_dir
 
-    monkeypatch.setattr(
-        vosi, "settings", replace(vosi.settings, upload_allowed_hosts="data.example.org")
+    job = fake_db.add_job(phase="PENDING", parameters={"QUERY": JOIN_QUERY})
+    response = client.post(
+        f"/tap/async/{job['job_id']}/parameters", follow_redirects=False, **_multipart()
     )
-    text = client.get("/tap/capabilities").text
-    assert "ivo://ivoa.net/std/TAPRegExt#upload-http" in text
-    assert "ivo://ivoa.net/std/TAPRegExt#upload-https" in text
+    assert response.status_code == 303
+    assert fake_db.jobs[job["job_id"]]["parameters"]["UPLOAD"] == "t1,param:t1"
+    assert os.path.exists(os.path.join(uploads_dir(job["job_id"]), "t1.vot"))
+
+
+def test_parameter_update_rejects_unresolvable_upload(client, fake_db):
+    """An UPLOAD naming a part the request did not carry is the client's
+    mistake: a 400 now, never an ERROR job later — and the job's stored
+    parameters stay untouched."""
+    job = fake_db.add_job(phase="PENDING", parameters={"QUERY": JOIN_QUERY})
+    response = client.post(f"/tap/async/{job['job_id']}/parameters", **_multipart(part="other"))
+    assert response.status_code == 400
+    assert "missing inline part" in response.text
+    assert "UPLOAD" not in fake_db.jobs[job["job_id"]]["parameters"]

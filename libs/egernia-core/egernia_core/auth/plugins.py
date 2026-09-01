@@ -134,6 +134,10 @@ class AuthPlugin(ABC):
         """One line for the startup log and the capabilities document."""
         return self.name
 
+    def close(self) -> None:  # noqa: B027 — optional hook, deliberately not abstract
+        """Release anything the plugin owns (e.g. an HTTP client), called by
+        the service at shutdown. The default owns nothing."""
+
 
 @cache
 def discovered_auth_plugins() -> dict[str, type[AuthPlugin]]:

@@ -33,8 +33,55 @@ def bootstrap(conn, plugins: list[MetadataPlugin]) -> None:
     """All the DDL the services need: the uws.jobs forward migration plus
     each plugin's generated tables and TAP_SCHEMA registration."""
     uws.ensure_job_columns(conn)
+    ensure_tap_schema_self(conn)
     for plugin in plugins:
         ingest.ensure_schema(conn, plugin)
+
+
+def ensure_tap_schema_self(conn) -> None:
+    """Forward-migrate TAP_SCHEMA's description of itself (fresh databases
+    get this from db/init/02_tap_schema.sql).
+
+    Two TAP 1.1 conformance points, both found by stilts taplint: the
+    deprecated-but-required ``"size"`` column must be registered delimited
+    (SIZE is an ADQL reserved word), and TAP_SCHEMA must declare its own
+    standard foreign keys so a client can join the metadata tables.
+    """
+    conn.execute(
+        "UPDATE tap_schema.columns SET column_name = '\"size\"'"
+        " WHERE table_name = 'tap_schema.columns' AND column_name = 'size'"
+    )
+    conn.execute(
+        """
+        INSERT INTO tap_schema.keys (key_id, from_table, target_table, description) VALUES
+            ('tap_schema:tables_schema', 'tap_schema.tables', 'tap_schema.schemas',
+             'table membership'),
+            ('tap_schema:columns_table', 'tap_schema.columns', 'tap_schema.tables',
+             'column membership'),
+            ('tap_schema:keys_from_table', 'tap_schema.keys', 'tap_schema.tables',
+             'referencing table'),
+            ('tap_schema:keys_target_table', 'tap_schema.keys', 'tap_schema.tables',
+             'referenced table'),
+            ('tap_schema:key_columns_key', 'tap_schema.key_columns', 'tap_schema.keys',
+             'key membership')
+        ON CONFLICT (key_id) DO NOTHING
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO tap_schema.key_columns (key_id, from_column, target_column)
+        SELECT v.key_id, v.from_column, v.target_column FROM (VALUES
+            ('tap_schema:tables_schema', 'schema_name', 'schema_name'),
+            ('tap_schema:columns_table', 'table_name', 'table_name'),
+            ('tap_schema:keys_from_table', 'from_table', 'table_name'),
+            ('tap_schema:keys_target_table', 'target_table', 'table_name'),
+            ('tap_schema:key_columns_key', 'key_id', 'key_id')
+        ) AS v(key_id, from_column, target_column)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM tap_schema.key_columns k WHERE k.key_id = v.key_id
+        )
+        """
+    )
 
 
 def check_ready(conn, plugins: list[MetadataPlugin]) -> None:

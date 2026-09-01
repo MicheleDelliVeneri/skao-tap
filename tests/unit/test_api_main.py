@@ -112,6 +112,26 @@ def test_bootstrap_fails_after_attempts(fake_db, monkeypatch):
         main._bootstrap_metadata(attempts=2)
 
 
+def test_lifespan_closes_the_auth_plugin(fake_db, results_dir, monkeypatch):
+    """Shutdown releases what the plugin owns (the permissions-api plugin
+    holds a pooled HTTP client for its lifetime)."""
+    from egernia_api import main
+    from fastapi.testclient import TestClient
+
+    class Dummy:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    dummy = Dummy()
+    monkeypatch.setattr(main.auth, "plugin", lambda: dummy)
+    monkeypatch.setattr(main, "verifier", lambda: None)
+    with TestClient(main.app):
+        pass
+    assert dummy.closed
+
+
 def test_pool_exhaustion_answers_503_with_retry_after(client, monkeypatch):
     """A full pool is a capacity condition, not a fault.
 
@@ -211,3 +231,10 @@ def test_availability_is_still_the_vosi_resource(client):
     response = client.get("/tap/availability")
     assert response.status_code == 200
     assert "<vosi:available>true</vosi:available>" in response.text
+
+
+def test_capabilities_declare_examples_endpoint(client):
+    """/tap/examples exists, so DALI requires the capability to say so
+    (taplint E-EXA-EXDH)."""
+    text = client.get("/tap/capabilities").text
+    assert "ivo://ivoa.net/std/DALI#examples" in text
