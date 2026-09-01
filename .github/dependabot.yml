@@ -11,6 +11,9 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    groups:
+      codeql:
+        patterns: ["github/codeql-action*"]
   - package-ecosystem: docker
     directories:
       - "/services/egernia-api"
