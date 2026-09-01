@@ -1,4 +1,4 @@
-FROM python:3.14-slim@sha256:cae66f2ef0ec51a9891263eeee7f987dacf0a9879e8aa9353d5606e0530619a5 AS builder
+FROM python:3.14-slim@sha256:656d12e70054d5fda18a045e2494c96701e9792dd1445f95b3d038df954f57e9 AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.9@sha256:538e0b39736e7feae937a65983e49d2ab75e1559d35041f9878b7b7e51de91e4 /uv /usr/local/bin/uv
 # git fetches ska-src-logging from GitLab (pinned to a commit until the
 # package is published to a public index), like tap-api does for ska-src-sdm.
@@ -15,7 +15,7 @@ COPY services/egernia-executor ./services/egernia-executor
 COPY services/egernia-api/pyproject.toml ./services/egernia-api/pyproject.toml
 RUN uv sync --frozen --no-dev --no-editable --package egernia-executor
 
-FROM python:3.14-slim@sha256:cae66f2ef0ec51a9891263eeee7f987dacf0a9879e8aa9353d5606e0530619a5
+FROM python:3.14-slim@sha256:656d12e70054d5fda18a045e2494c96701e9792dd1445f95b3d038df954f57e9
 RUN groupadd -g 10001 tap && useradd -m -u 10001 -g tap tap \
     && mkdir -p /results && chown tap:tap /results
 COPY --from=builder /srv/.venv /srv/.venv
