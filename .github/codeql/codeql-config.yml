@@ -1,0 +1,11 @@
+name: egernia CodeQL config
+
+# The ADQL parser is generated from the .g4 grammars by ANTLR (see
+# libs/egernia-core/egernia_core/query/_adql/README.md), and its style is the
+# generator's, not ours: it accounted for 179 of 218 open alerts, all of them
+# unnecessary-pass and multiple-definition. Editing generated output to satisfy
+# a linter would be undone by the next regeneration, so the files are excluded
+# rather than fixed. translator.py and __init__.py in the same directory are
+# hand-written and stay in scope.
+paths-ignore:
+  - libs/egernia-core/egernia_core/query/_adql/ADQL*.py
