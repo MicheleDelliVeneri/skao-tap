@@ -7,8 +7,9 @@ references are rewritten to it. Shared by the sync path (tap-api) and the
 async executor, which re-creates the tables from the VOTables persisted
 with the job.
 
-Only the TABLEDATA VOTable serialization is accepted; BINARY/BINARY2 and
-FITS uploads are rejected with a UsageError.
+The TABLEDATA and BINARY VOTable serializations are accepted (with
+``<VALUES null=...>`` sentinels honoured); BINARY2 and FITS uploads are
+rejected with a UsageError.
 """
 
 import os
@@ -124,8 +125,23 @@ def _convert(text: str | None, pg_type: str):
     return text
 
 
+def _null_sentinel(field: ET.Element) -> str | None:
+    """The FIELD's declared null value (``<VALUES null="...">``), if any.
+
+    VOTable integers have no NaN, so a writer that has to express NULL in
+    TABLEDATA or BINARY declares a magic value and writes it in the cell.
+    A reader that ignores the declaration resurrects the magic value as
+    data — which is exactly how a NULL uploaded by taplint came back as
+    -32768.
+    """
+    for child in field:
+        if _local(child.tag) == "VALUES" and child.get("null") is not None:
+            return child.get("null", "").strip()
+    return None
+
+
 def parse_votable(name: str, data: bytes, max_rows: int, max_bytes: int) -> UploadedTable:
-    """Parse an uploaded VOTable (TABLEDATA serialization) into an
+    """Parse an uploaded VOTable (TABLEDATA or BINARY serialization) into an
     UploadedTable, enforcing the configured size limits."""
     if len(data) > max_bytes:
         raise UsageError(f"upload {name} exceeds the {max_bytes} byte limit")
@@ -140,15 +156,16 @@ def parse_votable(name: str, data: bytes, max_rows: int, max_bytes: int) -> Uplo
     if table is None:
         raise UsageError(f"upload {name} contains no TABLE")
     for el in table.iter():
-        if _local(el.tag) in ("BINARY", "BINARY2", "FITS"):
+        if _local(el.tag) in ("BINARY2", "FITS"):
             raise UsageError(
-                f"upload {name}: only the TABLEDATA VOTable serialization is supported"
+                f"upload {name}: only the TABLEDATA and BINARY VOTable serializations are supported"
             )
 
     fields = [el for el in table if _local(el.tag) == "FIELD"]
     if not fields:
         raise UsageError(f"upload {name} declares no FIELDs")
     columns: list[tuple[str, str]] = []
+    sentinels: list[str | None] = []
     seen: set[str] = set()
     for field in fields:
         col = (field.get("name") or "").strip().lower()
@@ -158,6 +175,12 @@ def parse_votable(name: str, data: bytes, max_rows: int, max_bytes: int) -> Uplo
             raise UsageError(f"upload {name}: duplicate column name {col}")
         seen.add(col)
         columns.append((col, _pg_type(field)))
+        sentinels.append(_null_sentinel(field))
+
+    binary = next((el for el in table.iter() if _local(el.tag) == "BINARY"), None)
+    if binary is not None:
+        rows = _binary_rows(binary, fields, columns, sentinels, name, max_rows)
+        return UploadedTable(name=name, columns=columns, rows=rows)
 
     tabledata = next((el for el in table.iter() if _local(el.tag) == "TABLEDATA"), None)
     rows: list[tuple] = []
@@ -172,8 +195,117 @@ def parse_votable(name: str, data: bytes, max_rows: int, max_bytes: int) -> Uplo
             )
         if len(rows) >= max_rows:
             raise UsageError(f"upload {name} exceeds the {max_rows} row limit")
-        rows.append(tuple(_convert(td.text, pg[1]) for td, pg in zip(cells, columns, strict=True)))
+        row = []
+        for td, (_, pg_type), sentinel in zip(cells, columns, sentinels, strict=True):
+            if sentinel is not None and (td.text or "").strip() == sentinel:
+                row.append(None)
+            else:
+                row.append(_convert(td.text, pg_type))
+        rows.append(tuple(row))
     return UploadedTable(name=name, columns=columns, rows=rows)
+
+
+# fixed-width VOTable BINARY primitives: struct format and byte width
+_BINARY_SCALARS = {
+    "short": (">h", 2),
+    "int": (">i", 4),
+    "long": (">q", 8),
+    "float": (">f", 4),
+    "double": (">d", 8),
+    "unsignedByte": (">B", 1),
+}
+
+
+def _binary_rows(
+    binary: ET.Element,
+    fields: list[ET.Element],
+    columns: list[tuple[str, str]],
+    sentinels: list[str | None],
+    name: str,
+    max_rows: int,
+) -> list[tuple]:
+    """Rows out of a BINARY STREAM: big-endian primitives, 4-byte counts on
+    variable-length arrays, NULLs only via each FIELD's declared sentinel
+    (BINARY, unlike BINARY2, has no null mask)."""
+    import base64
+    import math
+    import struct
+
+    stream = next((el for el in binary if _local(el.tag) == "STREAM"), None)
+    if stream is None or (stream.get("encoding") or "base64") != "base64":
+        raise UsageError(f"upload {name}: BINARY upload needs an inline base64 STREAM")
+    try:
+        buf = base64.b64decode("".join((stream.text or "").split()), validate=True)
+    except Exception:
+        raise UsageError(f"upload {name}: BINARY stream is not valid base64") from None
+
+    readers = []
+    for field, (col, _) in zip(fields, columns, strict=True):
+        datatype = field.get("datatype", "char")
+        arraysize = (field.get("arraysize") or "").strip()
+        variable = arraysize.endswith("*")
+        if datatype in ("char", "unicodeChar"):
+            width = 1 if datatype == "char" else 2
+            encoding = "ascii" if datatype == "char" else "utf-16-be"
+            fixed = 0 if variable or not arraysize else int(arraysize)
+
+            # variable: 4-byte element count first; fixed: arraysize chars;
+            # bare: one char
+            def reader(buf, off, *, width=width, encoding=encoding, fixed=fixed, var=variable):
+                if var:
+                    (count,) = struct.unpack_from(">i", buf, off)
+                    off += 4
+                else:
+                    count = fixed or 1
+                raw = buf[off : off + count * width]
+                off += count * width
+                text = raw.decode(encoding, "replace").rstrip("\x00")
+                return text, off
+
+        elif datatype == "boolean" and not arraysize:
+
+            def reader(buf, off):
+                byte = buf[off : off + 1]
+                off += 1
+                if byte in (b"T", b"t", b"1"):
+                    return True, off
+                if byte in (b"F", b"f", b"0"):
+                    return False, off
+                return None, off  # '?' or ' ': unknown
+
+        elif datatype in _BINARY_SCALARS and not arraysize:
+            fmt, width = _BINARY_SCALARS[datatype]
+
+            def reader(buf, off, *, fmt=fmt, width=width):
+                (value,) = struct.unpack_from(fmt, buf, off)
+                return value, off + width
+
+        else:
+            raise UsageError(
+                f"upload {name}: column {col}: BINARY upload does not support"
+                f" datatype {datatype!r} with arraysize {arraysize!r}"
+            )
+        readers.append(reader)
+
+    rows: list[tuple] = []
+    offset = 0
+    try:
+        while offset < len(buf):
+            if len(rows) >= max_rows:
+                raise UsageError(f"upload {name} exceeds the {max_rows} row limit")
+            row = []
+            for reader, (_, pg_type), sentinel in zip(readers, columns, sentinels, strict=True):
+                value, offset = reader(buf, offset)
+                is_nan = isinstance(value, float) and math.isnan(value)
+                if (sentinel is not None and str(value) == sentinel) or is_nan:
+                    value = None
+                elif isinstance(value, str):
+                    value = _convert(value, pg_type)
+                row.append(value)
+            rows.append(tuple(row))
+    except struct.error:
+        raise UsageError(f"upload {name}: BINARY stream ends mid-row") from None
+    return rows
 
 
 _INSERT_BATCH = 500

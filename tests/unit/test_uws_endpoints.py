@@ -70,6 +70,25 @@ def test_run_rejected_unless_pending_or_held(client, fake_db):
     assert "cannot start job in phase EXECUTING" in response.text
 
 
+def test_abort_wins_race_with_run(client, fake_db, monkeypatch):
+    from egernia_core import uws
+
+    job_id = _create_job(client)
+    update_job = uws.update_job
+
+    def abort_before_update(conn, target, expected_phases=None, **fields):
+        if expected_phases is not None:
+            fake_db.jobs[target]["phase"] = "ABORTED"
+        return update_job(conn, target, expected_phases=expected_phases, **fields)
+
+    monkeypatch.setattr(uws, "update_job", abort_before_update)
+    response = client.post(f"/tap/async/{job_id}/phase", data={"PHASE": "RUN"})
+
+    assert response.status_code == 400
+    assert "cannot start job in phase ABORTED" in response.text
+    assert fake_db.jobs[job_id]["phase"] == "ABORTED"
+
+
 def test_execution_duration_roundtrip(client, fake_db):
     job_id = _create_job(client)
     assert client.get(f"/tap/async/{job_id}/executionduration").text == "600"
@@ -161,3 +180,46 @@ def test_delete_job_via_action_and_method(client, fake_db):
 
 def test_unknown_job_is_404(client):
     assert client.get("/tap/async/0123456789abcdef").status_code == 404
+
+
+def test_run_now_with_bad_adql_creates_an_error_job(client, fake_db):
+    """UWS: creating a job answers 303 and problems with the job live in the
+    job. A PHASE=RUN request with unparseable ADQL used to answer 400, which
+    taplint (E-QAS-DFIO) rightly rejects — the client should find its bad
+    query in the ERROR phase, exactly as if it had RUN the job itself."""
+    response = client.post(
+        "/tap/async",
+        data={"LANG": "ADQL", "QUERY": "SELECT FROM WHERE", "PHASE": "RUN"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    job_id = response.headers["location"].rsplit("/", 1)[-1]
+    job = fake_db.jobs[job_id]
+    assert job["phase"] == "ERROR"
+    assert job["error_message"]
+    assert job["end_time"] is not None
+
+
+def test_run_now_with_unknown_language_creates_an_error_job(client, fake_db):
+    response = client.post(
+        "/tap/async",
+        data={"LANG": "KLINGON", "QUERY": "SELECT 1", "PHASE": "RUN"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    job_id = response.headers["location"].rsplit("/", 1)[-1]
+    assert fake_db.jobs[job_id]["phase"] == "ERROR"
+
+
+def test_phase_run_with_bad_adql_moves_the_job_to_error(client, fake_db):
+    """taplint's DFIO pattern: create PENDING, then POST PHASE=RUN. The RUN
+    must answer 303 and the bad query must surface in the job's ERROR phase,
+    not as an HTTP 400."""
+    job = fake_db.add_job(phase="PENDING", parameters={"QUERY": "This is not ADQL"})
+    response = client.post(
+        f"/tap/async/{job['job_id']}/phase", data={"PHASE": "RUN"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    stored = fake_db.jobs[job["job_id"]]
+    assert stored["phase"] == "ERROR"
+    assert stored["error_message"]

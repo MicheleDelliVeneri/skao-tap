@@ -4,12 +4,12 @@ Implements the TAP 1.1 endpoint set: /sync, /async (UWS 1.1), and the VOSI
 resources /capabilities, /availability, /tables, plus DALI /examples.
 """
 
+import importlib.metadata
 import socket
-import time
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
-from egernia_core import uws
+from egernia_core import bootstrap
 from egernia_core.auth import invalid_token_challenge, verifier
 from egernia_core.config import base_url, request_origin, settings, trusted_hosts
 from egernia_core.db import close_pool, pool
@@ -47,7 +47,7 @@ from .endpoints.json_api import metadata_routers
 from .endpoints.json_api import router as json_router
 from .endpoints.uws_api import router as uws_router
 from .queries.params import gather_params
-from .queries.query import forget_published_tables, prepare_query, run_sync
+from .queries.query import forget_published_tables, prepare_query, run_sync_for_request
 from .queries.uploads import gather_upload_sources, parse_uploads
 
 # Structured records with SRCNet's shared fields, JSON in a container and
@@ -58,7 +58,8 @@ setup_uvicorn_logging("tap-api")
 
 
 def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
-    """Create/refresh the tables generated from the active metadata plugins."""
+    """Create/refresh (or verify, see TAP_SCHEMA_BOOTSTRAP_ON_STARTUP) the
+    uws.jobs columns and the tables generated from the active plugins."""
     plugins = active_plugins()
     log.info("active metadata plugins: %s", ", ".join(p.name for p in plugins) or "none")
     # Resolve the policy and build the token verifier now, so a bad auth
@@ -68,42 +69,28 @@ def _bootstrap_metadata(attempts: int = 5, delay_s: float = 2.0) -> None:
     # IAM is briefly unavailable.
     if auth.plugin() is not None:
         verifier()
-    for attempt in range(1, attempts + 1):
-        try:
-            with db_connection() as conn, conn.transaction():
-                # forward-migrate deployments whose uws.jobs predates ABORT
-                # support (the columns are in db/init for fresh databases).
-                # query_tables is ensured here as well as in the executor:
-                # the API writes it at queue time, and in a rolling upgrade a
-                # new API can queue a job before any new executor has started.
-                uws.ensure_job_columns(conn)
-                for plugin in plugins:
-                    ingest.ensure_schema(conn, plugin)
-                # Last, so it sees the finished schema. Reported rather than
-                # enforced: a divergence usually means this service shares a
-                # database with something that owns some of those relations,
-                # which is legitimate — but a client cannot tell, and finds
-                # out as a 500 on a query our own metadata recommended.
-                ingest.warn_tap_schema_divergence(conn)
-            return
-        except Exception as exc:
-            if attempt == attempts:
-                # Fail fast: a half-initialized service would only surface
-                # confusing errors later on the metadata endpoints and
-                # generated-schema queries; the orchestrator should restart us.
-                raise RuntimeError(f"metadata bootstrap failed after {attempts} attempts") from exc
-            log.warning("metadata bootstrap attempt %d failed (%s), retrying", attempt, exc)
-            time.sleep(delay_s)
+    bootstrap.startup(plugins, attempts=attempts, delay_s=delay_s)
+    # After the schema settles, so it sees the finished state. Reported
+    # rather than enforced: a divergence usually means this service shares a
+    # database with something that owns some of those relations, which is
+    # legitimate — but a client cannot tell, and finds out as a 500 on a
+    # query our own metadata recommended.
+    with db_connection() as conn:
+        ingest.warn_tap_schema_divergence(conn)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _bootstrap_metadata()
+    await run_in_threadpool(_bootstrap_metadata)
     # bootstrap is the one path where this service publishes tables itself;
     # anything published out of band is picked up by the cache's own expiry
     forget_published_tables()
     yield
-    close_pool()
+    active_plugin = auth.plugin()
+    if active_plugin is not None:
+        # e.g. the permissions-api plugin's pooled HTTP client
+        active_plugin.close()
+    await run_in_threadpool(close_pool)
 
 
 # Which pod answered. Kubernetes sets the hostname to the pod name, so this
@@ -115,7 +102,9 @@ SERVED_BY = socket.gethostname()
 
 app = FastAPI(
     title="egernia TAP service",
-    version="0.1.0",
+    # the installed package's own version, so the OpenAPI document cannot
+    # drift from the code serving it
+    version=importlib.metadata.version("egernia-api"),
     lifespan=lifespan,
     # verify any bearer token on any route; the per-operation gates below
     # decide what a verified principal is then allowed to do
@@ -159,12 +148,14 @@ async def correlate(request: Request, call_next):
     # in a header, written into a SQL comment and logged, so anything else
     # gets replaced rather than escaped
     rid = safe_request_id(request.headers.get(REQUEST_ID_HEADER)) or new_request_id()
+    response = None
     with (
         request_context(rid),
         request_origin(client_origin(request)),
         LogContext(request_id=rid, path=request.url.path),
     ):
         response = await call_next(request)
+    assert response is not None
     response.headers[REQUEST_ID_HEADER] = rid
     response.headers[SERVED_BY_HEADER] = SERVED_BY
     return response
@@ -172,14 +163,12 @@ async def correlate(request: Request, call_next):
 
 # Probes.
 #
-# Deliberately not /tap/availability, which is what they used to be pointed at
-# and which is a VOSI resource that reports on the *database*. Under load the
-# connection pool saturates, that endpoint queues for a connection, the probe's
-# one-second default timeout expires, and Kubernetes kills a process that is
-# busy rather than broken — turning an overload into an outage, and dropping
-# every in-flight request with it. Measured: at an offered rate well inside the
-# service's own closed-loop capacity, the API was SIGKILLed twice by its
-# liveness probe.
+# Deliberately not /tap/availability, which is a VOSI resource that reports
+# on the *database*. Under load the connection pool saturates, that endpoint
+# queues for a connection, the probe's one-second default timeout expires, and
+# Kubernetes kills a process that is busy rather than broken — turning an
+# overload into an outage, and dropping every in-flight request with it
+# (observed under load; see docs/python-performance.md).
 #
 # So the two questions are asked separately, because their remedies differ.
 # Liveness asks "is this process wedged?", whose remedy is a restart, and it
@@ -339,7 +328,7 @@ async def registry():
 
 
 @app.get("/tap/availability")
-async def availability():
+def availability():
     return Response(vosi.availability_xml(), media_type="application/xml")
 
 
@@ -349,7 +338,7 @@ async def capabilities():
 
 
 @app.get("/tap/tables")
-async def tables():
+def tables():
     return Response(vosi.tables_xml(), media_type="application/xml")
 
 
@@ -362,16 +351,14 @@ async def sync(request: Request):
     params = await gather_params(request)
     if params.get("REQUEST") == "getCapabilities":  # TAP 1.0 compatibility
         return RedirectResponse(f"{base_url()}/capabilities", status_code=303)
-    uploads = parse_uploads(await gather_upload_sources(request, params))
+    upload_sources = await gather_upload_sources(request, params)
+    uploads = await run_in_threadpool(parse_uploads, upload_sources)
     # ADQL translation is tens of milliseconds of pure-Python ANTLR work; on
-    # the event loop it stalls every other request for that long, which is why
-    # throughput stopped rising with concurrency
+    # the event loop it would stall every other request for that long
     prepared = await run_in_threadpool(prepare_query, params)
-    # run_sync takes a pool connection and produces the first chunk, and the
-    # iterator does blocking reads for the rest. On the event loop that means
-    # one slow query — or one wait for a busy pool — stalls every other
-    # request in this worker, including ones ready to send.
-    chunks, mime = await run_in_threadpool(run_sync, prepared, uploads)
+    # Spooling uses blocking PostgreSQL and file I/O, so it stays in the
+    # threadpool; the request helper cancels that work if the client leaves.
+    chunks, mime = await run_sync_for_request(request, prepared, uploads)
     return StreamingResponse(iterate_in_threadpool(chunks), media_type=mime)
 
 

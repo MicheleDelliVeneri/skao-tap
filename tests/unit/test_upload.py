@@ -73,7 +73,12 @@ def test_parse_votable_limits():
         (
             b'<VOTABLE><RESOURCE><TABLE><FIELD name="a" datatype="int"/>'
             b"<DATA><BINARY/></DATA></TABLE></RESOURCE></VOTABLE>",
-            "TABLEDATA",
+            "base64 STREAM",
+        ),
+        (
+            b'<VOTABLE><RESOURCE><TABLE><FIELD name="a" datatype="int"/>'
+            b"<DATA><BINARY2/></DATA></TABLE></RESOURCE></VOTABLE>",
+            "TABLEDATA and BINARY",
         ),
         (
             b"<VOTABLE><RESOURCE><TABLE><DATA><TABLEDATA/></DATA></TABLE></RESOURCE></VOTABLE>",
@@ -137,3 +142,70 @@ def test_create_upload_tables_batches_inserts(fake_db):
     assert creates == ["CREATE TEMP TABLE tap_upload_t1 (id bigint) ON COMMIT DROP"]
     assert grants == ["GRANT SELECT ON pg_temp.tap_upload_t1 TO tap_reader"]
     assert len(inserts) == 3  # 500 + 500 + 201
+
+
+def test_declared_null_sentinel_reads_as_null_in_tabledata():
+    """VOTable integers have no NaN: writers declare a magic value and write
+    it in the cell. Ignoring the declaration resurrects the magic value as
+    data — how taplint's uploaded NULL came back as -32768."""
+    from egernia_core.query.upload import parse_votable
+
+    doc = (
+        b"<VOTABLE><RESOURCE><TABLE>"
+        b'<FIELD name="a" datatype="short"><VALUES null="-32768"/></FIELD>'
+        b'<FIELD name="b" datatype="long"><VALUES null="-9223372036854775808"/></FIELD>'
+        b"<DATA><TABLEDATA>"
+        b"<TR><TD>7</TD><TD>8</TD></TR>"
+        b"<TR><TD>-32768</TD><TD>-9223372036854775808</TD></TR>"
+        b"</TABLEDATA></DATA></TABLE></RESOURCE></VOTABLE>"
+    )
+    table = parse_votable("t1", doc, max_rows=10, max_bytes=4096)
+    assert table.rows == [(7, 8), (None, None)]
+
+
+def test_binary_serialization_parses_scalars_strings_and_sentinels():
+    """taplint's second upload pass sends BINARY: big-endian primitives,
+    4-byte counts on variable-length strings, nulls via declared sentinels."""
+    import base64
+    import struct
+
+    from egernia_core.query.upload import parse_votable
+
+    def row(short, longv, text):
+        encoded = text.encode()
+        return (
+            struct.pack(">h", short)
+            + struct.pack(">q", longv)
+            + struct.pack(">i", len(encoded))
+            + encoded
+        )
+
+    stream = base64.b64encode(row(7, 8, "seven") + row(-32768, -(2**63), "")).decode()
+    doc = (
+        "<VOTABLE><RESOURCE><TABLE>"
+        '<FIELD name="a" datatype="short"><VALUES null="-32768"/></FIELD>'
+        '<FIELD name="b" datatype="long"><VALUES null="-9223372036854775808"/></FIELD>'
+        '<FIELD name="c" datatype="char" arraysize="*"/>'
+        f'<DATA><BINARY><STREAM encoding="base64">{stream}</STREAM></BINARY></DATA>'
+        "</TABLE></RESOURCE></VOTABLE>"
+    ).encode()
+    table = parse_votable("t1", doc, max_rows=10, max_bytes=4096)
+    assert table.columns == [("a", "smallint"), ("b", "bigint"), ("c", "text")]
+    assert table.rows == [(7, 8, "seven"), (None, None, "")]
+
+
+def test_binary_truncated_stream_is_a_usage_error():
+    import base64
+
+    import pytest
+    from egernia_core.errors import UsageError
+    from egernia_core.query.upload import parse_votable
+
+    stream = base64.b64encode(b"\x00").decode()
+    doc = (
+        '<VOTABLE><RESOURCE><TABLE><FIELD name="a" datatype="int"/>'
+        f'<DATA><BINARY><STREAM encoding="base64">{stream}</STREAM></BINARY></DATA>'
+        "</TABLE></RESOURCE></VOTABLE>"
+    ).encode()
+    with pytest.raises(UsageError, match="mid-row"):
+        parse_votable("t1", doc, max_rows=10, max_bytes=4096)

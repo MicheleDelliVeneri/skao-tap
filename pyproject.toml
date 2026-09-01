@@ -72,6 +72,17 @@ dataset = [
 microbenchmark = [
     "pytest-benchmark>=5.0",
 ]
+# benchmarks/tap-compare: the comparative TAP-server harness. httpx and
+# pyarrow ride along with egernia-core; named here so the harness runs even
+# in an environment synced without the services.
+tap-compare = [
+    "httpx>=0.27",
+    "pyarrow>=17.0",
+    "numpy>=2.0",
+    "psutil>=6.0",
+    "pyyaml>=6.0",
+    "pytest>=8.0",
+]
 
 [tool.ruff]
 line-length = 100

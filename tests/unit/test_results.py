@@ -308,3 +308,19 @@ def test_json_batches_do_not_change_the_document():
     payload = json.loads(body.decode())
     assert payload["data"] == [[i] for i in range(1201)]
     assert payload["status"] == "OK"
+
+
+def test_dali_timestamps_carry_no_zone_offset():
+    """DALI 3.3.3: timestamp text is YYYY-MM-DDThh:mm:ss[.f...] with no
+    offset; an aware timestamptz is converted to UTC and the offset dropped
+    (taplint E-QGE/QPO/QAS-YTSR)."""
+    import datetime
+
+    from egernia_core.query.results import _isoformat
+
+    aware = datetime.datetime(
+        2024, 3, 27, 1, 30, tzinfo=datetime.timezone(datetime.timedelta(hours=2))
+    )
+    assert _isoformat(aware) == "2024-03-26T23:30:00"
+    naive = datetime.datetime(2024, 3, 27)
+    assert _isoformat(naive) == "2024-03-27T00:00:00"

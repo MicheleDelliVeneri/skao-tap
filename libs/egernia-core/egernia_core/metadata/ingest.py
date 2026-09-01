@@ -30,6 +30,8 @@ from .schema_gen import TableSpec, ddl_statements, registration_statements
 # by SQL type (see ColumnSpec.derived_from in schema_gen). A conversion
 # error is the caller's mistake, so it surfaces as UsageError.
 DERIVATIONS = {"spoly": regions.stcs_to_spoly}
+DEFAULT_LIST_LIMIT = 100
+MAX_LIST_LIMIT = 1000
 
 
 def _derive(col, source_value):
@@ -97,7 +99,7 @@ def tap_schema_divergence(conn) -> tuple[list[str], list[str]]:
     ``column "s_region_geom" does not exist``.
 
     Reported, never repaired. The rows may describe a relation this service
-    does not own — the benchmark suite replaces ``ivoa.obscore`` with its own
+    does not own — a test harness may replace ``ivoa.obscore`` with its own
     table, and a deployment may publish tables the chart never created — and
     deleting somebody else's metadata to tidy our own view of it is worse
     than naming the problem.
@@ -115,12 +117,15 @@ def tap_schema_divergence(conn) -> tuple[list[str], list[str]]:
     missing_columns = [
         f"{row[0]}.{row[1]}"
         for row in conn.execute(
+            # trim ADQL delimiters when matching: a reserved-word column is
+            # registered as '"size"' (TAP requires the name as a query must
+            # write it) while information_schema knows it as 'size'
             "SELECT c.table_name, c.column_name FROM tap_schema.columns c"
             " WHERE to_regclass(c.table_name) IS NOT NULL"
             "   AND NOT EXISTS ("
             "       SELECT 1 FROM information_schema.columns i"
             "        WHERE format('%s.%s', i.table_schema, i.table_name) = c.table_name"
-            "          AND i.column_name = c.column_name)"
+            "          AND i.column_name = trim(both '\"' from c.column_name))"
             " ORDER BY c.table_name, c.column_name"
         ).fetchall()
     ]
@@ -187,7 +192,7 @@ def _resolve_path(instance: BaseModel, path: tuple[str, ...]):
     return value
 
 
-def _upsert(conn, table: TableSpec, row: dict) -> None:
+def _upsert_sql(table: TableSpec) -> str:
     columns = [c.name for c in table.columns]
     placeholders = ", ".join(["%s"] * len(columns))
     non_pk = [c for c in columns if c not in table.pk_columns]
@@ -196,24 +201,27 @@ def _upsert(conn, table: TableSpec, row: dict) -> None:
         if non_pk
         else "DO NOTHING"
     )
-    conn.execute(
+    return (
         f"INSERT INTO {table.qualified} ({', '.join(columns)}) VALUES ({placeholders})"
-        f" ON CONFLICT ({', '.join(table.pk_columns)}) {conflict}",
-        tuple(_column_value(row.get(c)) for c in columns),
+        f" ON CONFLICT ({', '.join(table.pk_columns)}) {conflict}"
     )
 
 
 def ingest_document(conn, plugin: MetadataPlugin, document: BaseModel) -> dict[str, int]:
     """Flatten a validated model instance into the generated tables (upsert).
 
+    The whole document is flattened first, then written one executemany per
+    table — parents before children, which the plugin's table order already
+    guarantees — so a document with hundreds of rows costs one round trip
+    per table rather than one per row.
+
     Returns per-table row counts for the response body.
     """
     tables = plugin.tables
-    counts: dict[str, int] = {}
+    rows: dict[str, list[tuple]] = {t.qualified: [] for t in tables}
 
-    def store(table: TableSpec, instance: BaseModel, key_chain: dict) -> None:
+    def flatten(table: TableSpec, instance: BaseModel, key_chain: dict) -> None:
         row = dict(key_chain)
-        children: list[tuple[TableSpec, list[BaseModel]]] = []
         for col in table.columns:
             if col.name in row:
                 continue
@@ -228,18 +236,23 @@ def ingest_document(conn, plugin: MetadataPlugin, document: BaseModel) -> dict[s
                 row[col.name] = _derive(col, row[col.derived_from])
                 continue
             row[col.name] = _resolve_path(instance, col.path)
-        for child in tables:
-            if child.parent is table:
-                children.append((child, getattr(instance, child.field_name, []) or []))
-        _upsert(conn, table, row)
-        counts[table.qualified] = counts.get(table.qualified, 0) + 1
+        rows[table.qualified].append(tuple(_column_value(row.get(c.name)) for c in table.columns))
         next_chain = dict(key_chain)
         next_chain[table.id_column] = getattr(instance, table.id_column)
-        for child, items in children:
-            for item in items:
-                store(child, item, next_chain)
+        for child in tables:
+            if child.parent is table:
+                for item in getattr(instance, child.field_name, []) or []:
+                    flatten(child, item, next_chain)
 
-    store(tables[0], document, {})
+    flatten(tables[0], document, {})
+    counts: dict[str, int] = {}
+    for table in tables:
+        batch = rows[table.qualified]
+        if not batch:
+            continue
+        with conn.cursor() as cur:
+            cur.executemany(_upsert_sql(table), batch)
+        counts[table.qualified] = len(batch)
     return counts
 
 
@@ -389,8 +402,13 @@ def delete_document(conn, plugin: MetadataPlugin, root_id: str, actor: str | Non
     return deleted
 
 
-def list_documents(conn, plugin: MetadataPlugin) -> list[dict]:
-    """Root-level summary: every root row plus per-descendant-table counts."""
+def list_documents(
+    conn,
+    plugin: MetadataPlugin,
+    limit: int = DEFAULT_LIST_LIMIT,
+    after: str | None = None,
+) -> list[dict]:
+    """Bounded root summaries, ordered after an optional root-id cursor."""
     tables = plugin.tables
     root = tables[0]
     descendants = [t for t in tables if t.parent is not None]
@@ -398,8 +416,13 @@ def list_documents(conn, plugin: MetadataPlugin) -> list[dict]:
         f", (SELECT count(*) FROM {t.qualified} c WHERE c.{root.id_column} = p.{root.id_column})"
         for t in descendants
     )
+    where = f" WHERE p.{root.id_column} > %s" if after is not None else ""
+    args: list[object] = [after] if after is not None else []
+    args.append(min(max(1, limit), MAX_LIST_LIMIT + 1))
     rows = conn.execute(
-        f"SELECT to_jsonb(p){count_selects} FROM {root.qualified} p ORDER BY p.{root.id_column}"
+        f"SELECT to_jsonb(p){count_selects} FROM {root.qualified} p{where}"
+        f" ORDER BY p.{root.id_column} LIMIT %s",
+        args,
     ).fetchall()
     root_derived = {c.name for c in root.columns if c.derived_from}
     summaries = []

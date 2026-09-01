@@ -12,12 +12,15 @@ integration suite and the CPU microbenchmarks (see
 records; the `make benchmark-*` targets and `egernia_bench` commands the pages
 reference no longer exist, and the harness itself is in the git history.
 
-Each run below is published in full: the graphs, the per-measurement CSV,
-and the provenance needed to know whether two runs are comparable at all
-(commit, image ids, seed, corpus hash, chart values hash). Runs
-accumulate rather than replace, so a regression has somewhere to show up.
+Each cluster run below is published in full: the graphs, per-measurement CSV,
+and provenance needed to know whether two runs are comparable at all. Focused
+capacity checks record smaller local experiments separately.
 
-## Latest
+## Focused capacity checks
+
+- [20260831T141551Z-a042537-slow-readers-listings](20260831T141551Z-a042537-slow-readers-listings/index.md) — two-slot slow-reader retention and 100k-row collection listings
+
+## Latest cluster run
 
 [20260825T180219Z-f8b21fc4-worker-sweep](20260825T180219Z-f8b21fc4-worker-sweep/index.md) · [CSV](20260825T180219Z-f8b21fc4-worker-sweep/summary.csv)
 

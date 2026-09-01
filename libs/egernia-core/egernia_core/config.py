@@ -4,6 +4,7 @@ import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from typing import Optional
 from urllib.parse import urlsplit
 
 TRUE_VALUES = ("1", "true", "yes", "on")
@@ -71,6 +72,7 @@ class Settings:
     default_maxrec: int = _int("TAP_DEFAULT_MAXREC", "10000")
     hard_maxrec: int = _int("TAP_HARD_MAXREC", "1000000")
     sync_timeout_s: int = _int("TAP_SYNC_TIMEOUT", "30")
+    sync_max_bytes: int = _int("TAP_SYNC_MAX_BYTES", str(64 * 1024 * 1024))
     # The kill switch for the server-side DSV path (see query/copy_dsv.py).
     # Off, every DSV result is written by the Python writer again -- which is
     # both the way back out if the bytes are ever found to differ in the
@@ -81,14 +83,27 @@ class Settings:
     # import: lru_cache fixes its size at decoration. 0 disables the cache
     # without a rebuild -- every call becomes a miss and nothing is stored,
     # which is the way back out and the way to measure the cache on one host.
-    # 512 entries with their keys measured ~473 KiB per worker.
+    # Memory sizing per worker: docs/python-performance.md.
     translation_cache_size: int = _int("TAP_TRANSLATION_CACHE_SIZE", "512")
     default_exec_duration_s: int = _int("TAP_ASYNC_EXEC_DURATION", "600")
     job_retention_s: int = _int("TAP_JOB_RETENTION", str(7 * 24 * 3600))
     upload_max_rows: int = _int("TAP_UPLOAD_MAX_ROWS", "100000")
     upload_max_bytes: int = _int("TAP_UPLOAD_MAX_BYTES", str(32 * 1024 * 1024))
+    # Bound the whole request as well as each source. Keeping the aggregate
+    # default equal to the per-source limit prevents a caller multiplying the
+    # memory budget by submitting many individually valid parts.
+    upload_max_total_bytes: int = _int("TAP_UPLOAD_MAX_TOTAL_BYTES", str(32 * 1024 * 1024))
+    upload_max_sources: int = _int("TAP_UPLOAD_MAX_SOURCES", "8")
+    # Remote UPLOAD is an SSRF boundary. Empty is deliberately deny-all;
+    # deployments opt in exact destination hostnames, comma-separated.
+    upload_allowed_hosts: str = _env("TAP_UPLOAD_ALLOWED_HOSTS", "")
     wait_max_s: int = _int("TAP_WAIT_MAX", "60")
     model_plugins: str = _env("TAP_MODEL_PLUGINS", "all")
+    # Whether the services run schema DDL at startup (the default, which is
+    # what a rolling upgrade relies on), or only verify that an explicit
+    # pre-deploy `python -m egernia_core.bootstrap` already did. Off, the
+    # runtime database credentials never need to own schema changes.
+    schema_bootstrap_on_startup: bool = _bool("TAP_SCHEMA_BOOTSTRAP_ON_STARTUP", True)
     # Prefix of every obs_publisher_did the ivoa.obscore view constructs. A
     # PublisherDID is a permanent promise: in a real deployment the authority
     # must match the registry's authorityId, so this is configuration, not a
@@ -112,6 +127,10 @@ class Settings:
     # Port the executor serves its metrics on; the API serves them on its own
     # port at /metrics, but a worker loop has no listener of its own.
     executor_metrics_port: int = _int("TAP_EXECUTOR_METRICS_PORT", "9100")
+    # Long enough to tolerate a brief database stall; workers renew at one
+    # third of this interval. Tune above the longest expected control-plane
+    # outage before enabling more aggressive crash recovery.
+    executor_lease_s: int = _int("TAP_EXECUTOR_LEASE_SECONDS", "30")
 
     # -- database connection pool ------------------------------------------
     # The pool bounds how many queries a process can have in flight, so it is
@@ -191,7 +210,9 @@ settings = Settings()
 # one request. A ContextVar rather than a parameter because the URL builders
 # are spread across the UWS store, the VOSI documents and both APIs, and the
 # executor calls some of them with no request at all.
-_origin: ContextVar[str | None] = ContextVar("tap_request_origin", default=None)
+_origin: ContextVar[Optional[str]] = ContextVar(  # noqa: UP045
+    "tap_request_origin", default=None
+)
 
 
 def trusted_hosts() -> frozenset[str]:
@@ -200,7 +221,7 @@ def trusted_hosts() -> frozenset[str]:
 
 
 @contextmanager
-def request_origin(origin: str | None):
+def request_origin(origin: Optional[str]):  # noqa: UP045
     """Bind the client's origin for one request. None keeps the configured URL."""
     token = _origin.set(origin)
     try:

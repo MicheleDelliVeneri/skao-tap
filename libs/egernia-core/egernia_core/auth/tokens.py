@@ -13,6 +13,7 @@ import time
 import httpx
 import jwt
 from jwt import PyJWKClient
+from jwt.types import Options
 
 from ..config import settings
 from ..errors import AuthenticationError, ServiceError
@@ -105,6 +106,9 @@ class IAMTokenVerifier:
         self._jwks_client: PyJWKClient | None = None
         self._jwks_uri: str | None = None
         self._discovered_at = 0.0
+        self._jwks_loaded = False
+        self._jwks_refreshed_at = 0.0
+        self._negative_cache_s = min(30, max(1, jwks_cache_s))
 
     # -- discovery ----------------------------------------------------------
 
@@ -136,20 +140,45 @@ class IAMTokenVerifier:
                     jwks_uri, cache_keys=True, lifespan=self.jwks_cache_s
                 )
                 self._jwks_uri = jwks_uri
+                self._jwks_loaded = False
+                self._jwks_refreshed_at = 0.0
             self._discovered_at = time.monotonic()
             return jwks_uri
 
     def _signing_key(self, token: str):
-        self._discover()
-        assert self._jwks_client is not None  # set by _discover
         try:
-            return self._jwks_client.get_signing_key_from_jwt(token).key
-        except jwt.PyJWKClientError as exc:
-            # unknown kid: the IAM may have rotated. _discover's cache window
-            # rate-limits how often a bogus token can force a refetch.
-            raise AuthenticationError("token is not signed by a known IAM key") from exc
+            kid = jwt.get_unverified_header(token).get("kid")
         except jwt.DecodeError as exc:
             raise AuthenticationError("bearer token is not a well-formed JWT") from exc
+        if not isinstance(kid, str) or not kid:
+            raise AuthenticationError("token has no signing key id")
+
+        self._discover()
+        assert self._jwks_client is not None  # set by _discover
+        with self._lock:
+            now = time.monotonic()
+            try:
+                keys = self._jwks_client.get_signing_keys()
+                already_loaded = self._jwks_loaded
+                self._jwks_loaded = True
+                key = self._jwks_client.match_kid(keys, kid)
+                if key is not None:
+                    return key.key
+
+                # One caller refreshes after a miss; followers reuse that
+                # fresh negative result instead of stampeding the IAM.
+                if not already_loaded:
+                    self._jwks_refreshed_at = now
+                elif now - self._jwks_refreshed_at >= self._negative_cache_s:
+                    self._jwks_refreshed_at = now
+                    keys = self._jwks_client.get_signing_keys(refresh=True)
+                    key = self._jwks_client.match_kid(keys, kid)
+                    if key is not None:
+                        return key.key
+            except jwt.PyJWKClientError as exc:
+                raise AuthenticationError("IAM published no usable signing keys") from exc
+
+            raise AuthenticationError("token is not signed by a known IAM key")
 
     # -- verification -------------------------------------------------------
 
@@ -165,7 +194,7 @@ class IAMTokenVerifier:
         # slash — so handing the stripped form to PyJWT rejected every token
         # from a correctly configured deployment, with an error naming two
         # strings that look identical. `require` still keeps `iss` mandatory.
-        options = {
+        options: Options = {
             "require": ["exp", "iss", "sub"],
             "verify_aud": self.audience is not None,
             "verify_iss": False,

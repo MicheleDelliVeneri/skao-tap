@@ -1,4 +1,4 @@
-FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4 AS builder
+FROM python:3.14-slim@sha256:cae66f2ef0ec51a9891263eeee7f987dacf0a9879e8aa9353d5606e0530619a5 AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.9@sha256:538e0b39736e7feae937a65983e49d2ab75e1559d35041f9878b7b7e51de91e4 /uv /usr/local/bin/uv
 # git fetches the ska-src-sdm dependency from GitLab (pinned to a commit
 # until the package is published to a public index)
@@ -8,12 +8,12 @@ WORKDIR /srv
 COPY pyproject.toml uv.lock ./
 COPY libs/egernia-core ./libs/egernia-core
 COPY services/egernia-api ./services/egernia-api
+# the sibling's manifest only: uv sync --frozen validates every workspace
+# member's pyproject, even ones outside the installed package's closure
 COPY services/egernia-executor/pyproject.toml ./services/egernia-executor/pyproject.toml
-RUN mkdir -p services/egernia-executor/egernia_executor \
-    && touch services/egernia-executor/egernia_executor/__init__.py \
-    && uv sync --frozen --no-dev --no-editable --package egernia-api
+RUN uv sync --frozen --no-dev --no-editable --package egernia-api
 
-FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4
+FROM python:3.14-slim@sha256:cae66f2ef0ec51a9891263eeee7f987dacf0a9879e8aa9353d5606e0530619a5
 RUN groupadd -g 10001 tap && useradd -m -u 10001 -g tap tap \
     && mkdir -p /results && chown tap:tap /results
 COPY --from=builder /srv/.venv /srv/.venv

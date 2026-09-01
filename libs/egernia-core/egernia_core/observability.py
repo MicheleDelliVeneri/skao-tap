@@ -3,12 +3,8 @@
 Built on SRCNet's `ska-src-logging`, so records carry the same fields and JSON
 shape as the rest of SRCNet rather than this service's own format.
 
-The metrics here are chosen from what recent performance work actually needed
-and did not have. Diagnosing a total collapse above eight concurrent queries
-took a local reproduction and a sampling profiler, because nothing in a
-deployment could have shown it: the signal was time spent waiting for a
-database connection, and that is now ``tap_db_pool_wait_seconds``. The rest
-follow the same rule — a number nobody would have to reproduce locally to see.
+Each metric earns its place by one rule: it is a number nobody should have to
+reproduce locally with a profiler to see — a deployment reports it itself.
 """
 
 import contextlib
@@ -41,9 +37,8 @@ def _pool_wait_buckets() -> tuple[float, ...]:
 
     A timed-out acquire waits fractionally *longer* than the timeout, so
     without an edge there it lands in whatever wide bucket contains the
-    timeout and quantile interpolation reads it as the bucket's middle: a
-    5 s timeout was reported as a 9.7 s p95, an impossible wait that then
-    outranked every other bottleneck verdict. The edge pair (t, 1.2t]
+    timeout and quantile interpolation reads it as the bucket's middle —
+    reporting waits longer than the timeout allows. The edge pair (t, 1.2t]
     pins those observations to within 20% of the truth whatever the
     configured timeout is.
     """
@@ -97,8 +92,8 @@ OLDEST_QUEUED_JOB = Gauge(
     "Age of the oldest QUEUED job — how long the head of the queue has"
     " waited. A latency figure for dashboards and alerts, not a scaling"
     " signal: under steady drain it tops out near one job's service time"
-    " however deep the queue behind it is (measured: 1,713 jobs queued,"
-    ' oldest 54 s). Scale on tap_jobs{phase="QUEUED"} instead.',
+    " however deep the queue behind it is."
+    ' Scale on tap_jobs{phase="QUEUED"} instead.',
     registry=REGISTRY,
 )
 
@@ -118,9 +113,7 @@ ADQL_TRANSLATION_HITS = Counter(
 ADQL_TRANSLATION_MISSES = Counter(
     "tap_adql_translation_cache_misses_total",
     "ADQL translations that had to parse. With the hits above this is the"
-    " cache's hit rate, which is the number nobody had when the cache was"
-    " built — no environment in reach carried real client traffic, so the"
-    " deployment reports it rather than a benchmark predicting it. It is also"
+    " cache's hit rate under this deployment's real traffic. It is also"
     " the denominator tap_adql_slow_parses_total needs: a hit does not parse,"
     " so slow parses are per miss, not per request.",
     registry=REGISTRY,
@@ -129,10 +122,9 @@ ADQL_TRANSLATION_MISSES = Counter(
 ADQL_SLOW_PARSES = Counter(
     "tap_adql_slow_parses_total",
     "ADQL translations that parsed successfully only after falling back to"
-    " full context. Translation is most of a request's CPU and the fast path"
-    " is 35x cheaper, so this rising means the service has quietly returned to"
-    " its old ceiling. A query that is simply invalid does not count here — it"
-    " is a 4xx, not a regression.",
+    " full context. Translation is most of a request's CPU, so this rising"
+    " means the fast parse path has quietly degraded. A query that is simply"
+    " invalid does not count here — it is a 4xx, not a regression.",
     registry=REGISTRY,
 )
 

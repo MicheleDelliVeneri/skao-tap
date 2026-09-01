@@ -1,10 +1,13 @@
 """Shared query preparation and synchronous (streaming) execution."""
 
+import asyncio
+import contextlib
 import functools
-import itertools
+import tempfile
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from typing import Any, cast
 
 from egernia_core.config import settings
 from egernia_core.db import connection as db_connection
@@ -21,10 +24,14 @@ from egernia_core.query.upload import (
     rewrite_upload_refs,
 )
 from egernia_core.query.votable import normalize_format
+from starlette.concurrency import run_in_threadpool
+from starlette.requests import ClientDisconnect
 
 from .params import require
 
 STREAM_CHUNK_ROWS = 2000
+SPOOL_MEMORY_BYTES = 1 << 20
+SPOOL_READ_BYTES = 64 << 10
 
 
 def prepare_query(params: dict[str, str]) -> dict:
@@ -113,8 +120,8 @@ def _first_unpublished(
 
 
 # TAP_SCHEMA's table list changes when a deployment gains a metadata domain or
-# an operator publishes a table — rarely, and never per request, which is how
-# often this used to be read. Cached with a short life so a table published
+# an operator publishes a table — rarely, and never per request.
+# Cached with a short life so a table published
 # out of band still appears without a restart, and invalidated outright when
 # this service is the one that changed it.
 _PUBLISHED_TTL_S = 30.0
@@ -242,7 +249,19 @@ def forget_published_tables() -> None:
     _column_is_geometry.cache_clear()
 
 
-def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[bytes]:
+def _cancel_connection(cancelled: threading.Event, done: threading.Event, conn) -> None:
+    while not done.wait(0.1):
+        if cancelled.is_set():
+            with contextlib.suppress(Exception):
+                conn.cancel()
+            return
+
+
+def _result_chunks(
+    prepared: dict,
+    uploads: list[UploadedTable],
+    cancelled: threading.Event | None = None,
+) -> Generator[bytes]:
     """Execute the prepared query as a streamed statement and yield the
     serialized result chunk by chunk; the connection stays checked out
     until the stream is exhausted."""
@@ -253,6 +272,8 @@ def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[byt
     # server log, then names the request it came from
     sql = tag_sql(sql)
     with db_connection() as conn, conn.transaction():
+        done = threading.Event()
+        watcher = None
         tap_meta = tap_schema_metadata(conn, prepared["tables"])
         if uploads:
             create_upload_tables(conn, uploads, settings.query_role)
@@ -261,7 +282,7 @@ def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[byt
             (str(settings.sync_timeout_s * 1000),),
         )
         conn.execute("SET LOCAL jit = off")  # uninterruptible compile stalls
-        conn.execute(f"SET LOCAL ROLE {settings.query_role}")
+        conn.execute("SELECT set_config('role', %s, true)", (settings.query_role,))
         # A plain streamed statement, not a DECLARE'd cursor: the planner may
         # use parallel workers and plans for the whole result, which a cursor
         # forbids — on a full-table aggregate that is most of the query's
@@ -271,40 +292,78 @@ def _result_chunks(prepared: dict, uploads: list[UploadedTable]) -> Iterator[byt
         # the Python writer otherwise; every other format is the writer's.
         # Either way what comes back is chunks plus the row accounting, so
         # this does not care which path it got.
-        with (
-            conn.cursor() as cur,
-            result_stream(
-                cur, sql, tap_meta, prepared["fmt_key"], prepared["maxrec"], STREAM_CHUNK_ROWS
-            ) as (chunks, _rows),
-        ):
-            yield from chunks
+        if cancelled is not None:
+            watcher = threading.Thread(
+                target=_cancel_connection, args=(cancelled, done, conn), daemon=True
+            )
+            watcher.start()
+        try:
+            with (
+                conn.cursor() as cur,
+                result_stream(
+                    cur, sql, tap_meta, prepared["fmt_key"], prepared["maxrec"], STREAM_CHUNK_ROWS
+                ) as (chunks, _rows),
+            ):
+                for chunk in chunks:
+                    if cancelled is not None and cancelled.is_set():
+                        raise ClientDisconnect
+                    yield chunk
+        finally:
+            done.set()
+            if watcher is not None:
+                watcher.join(timeout=0.2)
+
+
+def _spooled_chunks(spool) -> Iterator[bytes]:
+    try:
+        while chunk := spool.read(SPOOL_READ_BYTES):
+            yield chunk
+    finally:
+        spool.close()
 
 
 def run_sync(
-    prepared: dict, uploads: list[UploadedTable] | None = None
+    prepared: dict,
+    uploads: list[UploadedTable] | None = None,
+    cancelled: threading.Event | None = None,
 ) -> tuple[Iterator[bytes], str]:
-    """Start the query and return (chunk iterator, mime type).
+    """Execute and spool a sync query before returning its response body.
 
-    The first chunk is produced eagerly so translation/permission errors
-    still surface as proper DALI/JSON error responses instead of dying
-    mid-stream.
+    This releases the database connection before socket delivery, so a slow
+    or disconnected reader cannot occupy the pool for the life of the body.
     """
     started = time.perf_counter()
-    chunks = _result_chunks(prepared, uploads or [])
-    first = next(chunks, b"")
-    return _timed(itertools.chain([first], chunks), started), prepared["mime"]
-
-
-def _timed(chunks: Iterator[bytes], started: float) -> Iterator[bytes]:
-    """Record the query's duration when its stream ends.
-
-    Observed at the end, not after the first chunk: the metric says "to the
-    last row", and stopping at the first would have made it time-to-first-byte
-    and under-reported exactly the long streams worth knowing about. Recorded
-    in a finally, so a client that disconnects halfway is still measured
-    rather than silently dropped.
-    """
+    # Ownership passes to _spooled_chunks, which closes on EOF or disconnect.
+    spool = tempfile.SpooledTemporaryFile(max_size=SPOOL_MEMORY_BYTES)  # noqa: SIM115
     try:
-        yield from chunks
+        size = 0
+        max_bytes = cast(Any, settings).sync_max_bytes
+        with contextlib.closing(_result_chunks(prepared, uploads or [], cancelled)) as chunks:
+            for chunk in chunks:
+                size += len(chunk)
+                if size > max_bytes:
+                    raise UsageError(f"synchronous result exceeds {max_bytes} bytes; use async")
+                spool.write(chunk)
+        spool.seek(0)
+    except Exception:
+        spool.close()
+        raise
     finally:
         QUERY_DURATION.labels(kind="sync").observe(time.perf_counter() - started)
+    return _spooled_chunks(spool), prepared["mime"]
+
+
+async def run_sync_for_request(request, prepared: dict, uploads=None):
+    """Spool in a worker while cancelling PostgreSQL if the client leaves."""
+    cancelled = threading.Event()
+    task = asyncio.create_task(
+        run_in_threadpool(run_sync, prepared, uploads, cancelled), name="spool-sync-query"
+    )
+    try:
+        while not task.done():
+            if await request.is_disconnected():
+                cancelled.set()
+            await asyncio.wait({task}, timeout=0.1)
+        return task.result()
+    finally:
+        cancelled.set()
