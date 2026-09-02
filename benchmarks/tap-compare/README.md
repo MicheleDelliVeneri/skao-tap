@@ -46,7 +46,9 @@ comparison. Comparative cells carry 95% confidence intervals and the
 pre-registered tie rule: overlapping intervals, or under 10% apart in
 throughput, is a tie.
 
-Results land in `benchmarks/tap-compare/results/<UTCstamp>-<sha>-<scenario>-<target>/`:
+Results land in `benchmarks/tap-compare/results/<UTCstamp>-<sha>-<label>/`
+(the label is `<scenario>-<target>` for single-target `run`s and
+`tap-compare` for multi-target `compare` runs):
 per-rung Parquet samples (every request, with TTFB), per-rung JSON summaries
 with bootstrap confidence intervals, `corpus.json`, and `environment.json`
 provenance. Runs never overwrite and are resumable (`--resume <run-name>`).

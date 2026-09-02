@@ -97,17 +97,24 @@ def _record_provenance(
 
     A resumed run keeps the provenance it started with: overwriting it would
     silently re-describe rungs that were measured under the original record.
-    Resuming with a different corpus is refused — those cells would not be
-    comparable with the ones already on disk.
+    Resuming with a different corpus, scenario or target set is refused —
+    those cells would not be comparable with the ones already on disk.
     """
     env_path = run.path / "environment.json"
     if env_path.exists():
-        recorded = json.loads(env_path.read_text())["corpus_sha256"]
-        if recorded != corpus_sha:
-            raise SystemExit(
-                f"cannot resume {run.path.name}: it recorded corpus "
-                f"{recorded[:12]}… but the current corpus is {corpus_sha[:12]}…"
+        recorded = json.loads(env_path.read_text())
+        mismatches = []
+        if recorded["corpus_sha256"] != corpus_sha:
+            mismatches.append(f"corpus {recorded['corpus_sha256'][:12]}… is now {corpus_sha[:12]}…")
+        if recorded["scenario"] != {scenario_name: scenario}:
+            mismatches.append(
+                f"scenario {'/'.join(recorded['scenario'])} is now {scenario_name}"
+                " (or its configuration changed)"
             )
+        if recorded["target"] != target:
+            mismatches.append("the target descriptors changed")
+        if mismatches:
+            raise SystemExit(f"cannot resume {run.path.name}: " + "; ".join(mismatches))
         return
     run.write_json(
         "environment.json",

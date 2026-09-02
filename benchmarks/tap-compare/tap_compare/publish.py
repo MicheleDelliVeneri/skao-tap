@@ -19,8 +19,9 @@ from . import stats
 #: the pre-registered tie rule: a comparison is a tie when the 95% intervals
 #: overlap, or the throughput means are under this fraction apart
 RPS_FLOOR = 0.10
-#: no winner may be declared from a cell with more than this fraction of
-#: errored requests, or one where the generator CPU guard tripped
+#: a target erroring beyond this fraction of requests cannot win a cell
+#: (its error responses inflate its throughput); both targets erroring, or
+#: a tripped generator guard, voids the cell's verdict entirely
 ERROR_CEILING = 0.01
 
 CSV_COLUMNS = [
@@ -88,7 +89,7 @@ def _overlap(a: dict, b: dict) -> bool:
 
 
 def verdict(cells: dict, key_a: tuple, key_b: tuple) -> str:
-    """ "tie", "invalid", or the winning target's name, by the pre-registered rule.
+    """Return "tie", "invalid", or the winning target's name, by the pre-registered rule.
 
     A tripped generator guard invalidates the cell: the harness measured
     itself. A target whose requests errored beyond the ceiling cannot *win* —
@@ -151,9 +152,10 @@ def render(run_dir: pathlib.Path, out_dir: pathlib.Path) -> pathlib.Path:
         "server deployed per its own documentation, one target stack running",
         "at a time, the identical seeded query stream, MAXREC pinned on every",
         "request. Every target stack is pinned to the same 8 CPU / 8 GiB",
-        "budget: DaCHS in `docker-compose.dachs.yml` (`cpus: 8`,",
-        "`mem_limit: 8g`), egernia in `docker-compose.egernia-pins.yml`",
-        "(shared `cpuset` of 8 cores; 8 GiB split 4 db / 2 api / 2 executor).",
+        "budget: DaCHS in `benchmarks/tap-compare/docker-compose.dachs.yml`",
+        "(`cpus: 8`, `mem_limit: 8g`), egernia in",
+        "`benchmarks/tap-compare/docker-compose.egernia-pins.yml` (shared",
+        "`cpuset` of 8 cores; 8 GiB split 4 db / 2 api / 2 executor).",
         "See `benchmarks/tap-compare/README.md` for the protocol.",
         "",
         "## Gates",

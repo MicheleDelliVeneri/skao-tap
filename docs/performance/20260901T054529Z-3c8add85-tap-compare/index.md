@@ -4,9 +4,10 @@ Same-hardware TAP-server comparison: identical logical corpus, each
 server deployed per its own documentation, one target stack running
 at a time, the identical seeded query stream, MAXREC pinned on every
 request. Every target stack is pinned to the same 8 CPU / 8 GiB
-budget: DaCHS in `docker-compose.dachs.yml` (`cpus: 8`,
-`mem_limit: 8g`), egernia in `docker-compose.egernia-pins.yml`
-(shared `cpuset` of 8 cores; 8 GiB split 4 db / 2 api / 2 executor).
+budget: DaCHS in `benchmarks/tap-compare/docker-compose.dachs.yml`
+(`cpus: 8`, `mem_limit: 8g`), egernia in
+`benchmarks/tap-compare/docker-compose.egernia-pins.yml` (shared
+`cpuset` of 8 cores; 8 GiB split 4 db / 2 api / 2 executor).
 See `benchmarks/tap-compare/README.md` for the protocol.
 
 ## Gates
