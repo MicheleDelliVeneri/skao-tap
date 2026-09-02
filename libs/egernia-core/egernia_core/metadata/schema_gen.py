@@ -363,6 +363,32 @@ def ddl_statements(tables: list[TableSpec], query_role: str) -> list[str]:
             )
         body = ",\n".join(lines)
         statements.append(f"CREATE TABLE IF NOT EXISTS {table.qualified} (\n{body}\n)")
+        # A key to every ancestor beyond the parent, too. Integrity does not
+        # need them — the chain of parent keys already implies each one — but
+        # the planner does: a join is estimated from the foreign keys between
+        # the two relations being joined, and without one a skip-level join
+        # (data_products to observations: the ivoa.obscore view, or any ADQL
+        # that joins a product to its observation directly) falls back to
+        # per-column statistics, which multiply the selectivities of key
+        # columns that are in fact perfectly correlated and land orders of
+        # magnitude low — low enough to sort-and-group where a hash would do,
+        # and to drive a nested loop from the wrong side. Added rather than
+        # declared in the CREATE TABLE so a deployment created without them
+        # gains them at its next bootstrap; that one validation scans the
+        # table once.
+        ancestor = table.parent.parent if table.parent is not None else None
+        while ancestor is not None:
+            pk = ", ".join(ancestor.pk_columns)
+            constraint = f"{table.name}_{ancestor.name}_fkey"
+            statements.append(
+                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint"
+                f" WHERE conrelid = '{table.qualified}'::regclass"
+                f" AND conname = '{constraint}') THEN"
+                f" ALTER TABLE {table.qualified} ADD CONSTRAINT {constraint}"
+                f" FOREIGN KEY ({pk}) REFERENCES {ancestor.qualified} ({pk})"
+                " ON DELETE CASCADE; END IF; END $$"
+            )
+            ancestor = ancestor.parent
         statements.extend(
             f"ALTER TABLE {table.qualified} ADD COLUMN IF NOT EXISTS {col.name} {col.sql_type}"
             for col in table.columns
@@ -393,8 +419,8 @@ def ddl_statements(tables: list[TableSpec], query_role: str) -> list[str]:
         # estimates over the chain. What they do *not* do is fix join
         # selectivity — the planner estimates `child.key = parent.key` from
         # per-column statistics on the two relations and never consults
-        # extended statistics for it, so join misestimates over the hierarchy
-        # need a different lever (evidence: docs/postgres-performance.md).
+        # extended statistics for it; the lever for that is the foreign
+        # keys declared above, parent and ancestors alike.
         #
         # The name is schema-qualified where the CREATE INDEX above is not,
         # and the asymmetry is real: an index is always created in its

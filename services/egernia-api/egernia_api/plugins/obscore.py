@@ -24,11 +24,17 @@ Mapping decisions (each visible in the SQL below):
 - ``obs_publisher_did`` is a configurable prefix (``TAP_OBSCORE_DID_PREFIX``)
   plus the primary-key chain — a DID must be permanent, so its shape is the
   hierarchy's identity and nothing derived — with each key component
-  percent-encoded (see ``_did_component``).
+  percent-encoded (see ``_did_component``). The same expression is indexed
+  on ``srcnet.data_products`` with pg_trgm, so a lookup by DID — equality,
+  a prefix, or a ``LIKE '%<project>/%'`` — is an index scan and not an
+  evaluation of the expression over every product.
 - ``calib_level`` is passed through untranslated; srcnet's declared meaning
   and ObsCore 1.1's disagree at level 1 (see ``docs/obscore.md``).
-- ``access_*`` come from one representative science artifact per product
-  (`LEFT JOIN LATERAL ... LIMIT 1`); a NULL ``access_url`` is spec-legal.
+- ``access_*`` come from one representative science artifact per product:
+  the first by ``artifact_id``, picked by an aggregate rather than ``ORDER
+  BY ... LIMIT 1`` so the planner can prove the join yields one row and
+  drop it from queries that never read the access columns (see
+  ``view_sql``); a NULL ``access_url`` is spec-legal.
 - ``access_estsize`` converts the model's bytes to the REC's kbyte.
 - ``s_resolution`` is the synthesized beam size (already arcseconds).
 - ``t_resolution`` and ``em_res_power`` are NULL: the model does not carry
@@ -411,33 +417,83 @@ def did_key_columns() -> tuple[str, ...]:
     return columns
 
 
-def _did_component(column: str) -> str:
-    """SQL for one percent-encoded component of the DID path.
+# The percent-encoder lives in a function of its own rather than inline in
+# the view. Inline it was a correlated subquery, and a subquery in the DID
+# expression cost three things at once: an index expression may not contain
+# one, so no lookup by DID could ever use an index; a correlated SubPlan is
+# parallel-restricted, so a filter on the DID kept every scan of the view on
+# one core; and the planner has no statistics for such an expression, so it
+# estimated one row and drove the join from the wrong side. As a function
+# the expression is a plain call: indexable, parallel safe, and never
+# evaluated for the common row at all (see ``_did_component``).
+DID_ENCODE_FUNCTION = "ivoa.did_encode"
+
+# The trigram index over the DID expression (pg_trgm). Trigrams serve every
+# lookup shape a DID gets — equality, a prefix, a component in the middle
+# (``LIKE '%<project>/%'``) — where a btree would serve only the first two.
+DID_INDEX = "data_products_obscore_did_trgm"
+
+
+def did_encode_sql() -> str:
+    """DDL for the percent-encoder of one DID component.
 
     ``regexp_replace`` cannot compute a per-match replacement, so the
     encoding is a fold over the characters: unreserved ones survive,
     everything else becomes ``%XX`` per UTF-8 byte (upper-case hex, as RFC
     3986 recommends). ``convert_to``, ``encode`` and the ``regexp_*``
-    functions are all IMMUTABLE, so this is legal in a view definition.
-
-    The guard in front is not decoration: the fold splits the string into
-    one row per character, and this view is meant to be scanned whole.
-    Real identifiers are already clean, so the common row pays one anchored
-    regexp match and nothing else.
+    functions are all IMMUTABLE and PARALLEL SAFE, so the function is too,
+    and that is what lets it appear in an index expression and in a
+    parallel worker. STRICT: a NULL component is a NULL DID, as ``||`` would
+    make it anyway.
     """
     return (
-        f"CASE WHEN {column} ~ '^[{DID_SAFE_CLASS}]*$' THEN {column} ELSE ("
-        f"SELECT string_agg(CASE WHEN ch ~ '^[{DID_SAFE_CLASS}]$' THEN ch"
+        f"CREATE OR REPLACE FUNCTION {DID_ENCODE_FUNCTION}(component text) RETURNS text\n"
+        "LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT\n"
+        "RETURN (SELECT string_agg("
+        f"CASE WHEN ch ~ '^[{DID_SAFE_CLASS}]$' THEN ch"
         " ELSE regexp_replace(upper(encode(convert_to(ch, 'UTF8'), 'hex')),"
         " '(..)', '%\\1', 'g') END, '' ORDER BY n)"
-        f" FROM regexp_split_to_table({column}, '') WITH ORDINALITY AS c(ch, n)) END"
+        " FROM regexp_split_to_table(component, '') WITH ORDINALITY AS c(ch, n))"
+    )
+
+
+def _did_component(column: str) -> str:
+    """SQL for one percent-encoded component of the DID path.
+
+    The guard in front is not decoration: the encoder splits the string
+    into one row per character, and this view is meant to be scanned whole.
+    Real identifiers are already clean, so the common row pays one anchored
+    regexp match and never calls the function.
+    """
+    return (
+        f"CASE WHEN {column} ~ '^[{DID_SAFE_CLASS}]*$' THEN {column}"
+        f" ELSE {DID_ENCODE_FUNCTION}({column}) END"
+    )
+
+
+def did_sql(alias: str = "") -> str:
+    """The obs_publisher_did expression over the data_products key columns,
+    qualified with ``alias`` when given.
+
+    One builder for the view and the index, because the planner uses an
+    expression index only for an expression that is structurally identical
+    to the one in the query — and the view's is what every query carries.
+    """
+    prefix = f"{alias}." if alias else ""
+    return f"'{did_prefix()}' || " + " || '/' || ".join(
+        _did_component(f"{prefix}{column}") for column in did_key_columns()
+    )
+
+
+def did_index_sql() -> str:
+    return (
+        f"CREATE INDEX IF NOT EXISTS {DID_INDEX} ON srcnet.data_products"
+        f" USING gin (({did_sql()}) gin_trgm_ops)"
     )
 
 
 def view_sql(or_replace: bool = False) -> str:
-    did = f"'{did_prefix()}' || " + " || '/' || ".join(
-        _did_component(f"p.{column}") for column in did_key_columns()
-    )
+    did = did_sql("p")
     selects = ",\n    ".join(
         f"{column.expression if column.expression is not None else did} AS {column.name}"
         for column in OBSCORE_COLUMNS
@@ -449,14 +505,23 @@ def view_sql(or_replace: bool = False) -> str:
         "FROM srcnet.data_products AS p\n"
         "JOIN srcnet.observations AS o\n"
         "  ON o.project_id = p.project_id AND o.obs_id = p.obs_id\n"
+        # The first science artifact by id, as an aggregate rather than
+        # ``ORDER BY artifact_id LIMIT 1``: the rows are the same, but an
+        # aggregate without GROUP BY is provably one row, and a LEFT JOIN
+        # to a provably-one-row subquery whose columns nobody reads is one
+        # the planner removes. With LIMIT it could not, and a query over the
+        # view that never touched access_* — a GROUP BY over the collection,
+        # say — still probed artifacts once per matching product.
         "LEFT JOIN LATERAL (\n"
-        "    SELECT art.access_url, art.access_format, art.access_estsize\n"
+        "    SELECT (array_agg(art.access_url ORDER BY art.artifact_id))[1] AS access_url,\n"
+        "           (array_agg(art.access_format ORDER BY art.artifact_id))[1]"
+        " AS access_format,\n"
+        "           (array_agg(art.access_estsize ORDER BY art.artifact_id))[1]"
+        " AS access_estsize\n"
         "    FROM srcnet.artifacts AS art\n"
         "    WHERE art.project_id = p.project_id AND art.obs_id = p.obs_id\n"
         "      AND art.sbd_id = p.sbd_id AND art.eb_id = p.eb_id\n"
         "      AND art.product_id = p.product_id AND art.semantics = 'science'\n"
-        "    ORDER BY art.artifact_id\n"
-        "    LIMIT 1\n"
         ") AS a ON true"
     )
 
@@ -466,14 +531,18 @@ def view_sql(or_replace: bool = False) -> str:
 _VIEW_SHAPE_CHANGED = "42P16"
 
 
-def definition_comment(sql: str) -> str:
+def definition_comment() -> str:
     """The view's comment, carrying a fingerprint of its own definition.
 
     Postgres normalises a stored view definition, so ``pg_get_viewdef``
     never compares equal to the SQL written here — a fingerprint of our own
-    is the only way to recognise "nothing changed" without issuing DDL.
+    is the only way to recognise "nothing changed" without issuing DDL. The
+    encoder and the index are fingerprinted with the view: all three are
+    built from the same DID expression, and a stale index is a wrong index
+    the planner would keep using.
     """
-    digest = hashlib.sha256(sql.encode()).hexdigest()[:16]
+    definition = "\n".join((view_sql(), did_encode_sql(), did_index_sql()))
+    digest = hashlib.sha256(definition.encode()).hexdigest()[:16]
     return f"ObsCore 1.1 over the ODP metadata (definition {digest})"
 
 
@@ -503,9 +572,14 @@ def _replace_view(conn, current_comment: str | None) -> None:
     through egernia_core's connection.
     """
     sql = view_sql()
-    comment = definition_comment(sql)
+    comment = definition_comment()
     if current_comment == comment:
         return
+    # the view calls the encoder, so the encoder comes first; the index is
+    # over the same expression, so a changed definition drops it here and
+    # _ensure_did_index rebuilds it
+    conn.execute(did_encode_sql())
+    conn.execute(f"DROP INDEX IF EXISTS srcnet.{DID_INDEX}")
     conn.execute("SAVEPOINT obscore_view")
     try:
         conn.execute(view_sql(or_replace=True))
@@ -523,6 +597,37 @@ def _replace_view(conn, current_comment: str | None) -> None:
     # left to the server so the escaping matches whatever the comment holds.
     literal = conn.execute("SELECT quote_literal(%s)", (comment,)).fetchone()[0]
     conn.execute(f"COMMENT ON VIEW ivoa.obscore IS {literal}")
+
+
+def _ensure_did_index(conn) -> None:
+    """Build the DID index when it is missing, and only then.
+
+    Checked in the catalogue rather than left to IF NOT EXISTS: CREATE INDEX
+    locks the table before it discovers the index is already there, and
+    this runs on every pod start. pg_trgm is a trusted extension, so the
+    database owner can install it without being superuser; a role that
+    cannot leaves the view without its index rather than the service
+    without its view, and says so.
+    """
+    if conn.execute("SELECT to_regclass(%s)", (f"srcnet.{DID_INDEX}",)).fetchone()[0]:
+        return
+    conn.execute("SAVEPOINT obscore_did_index")
+    try:
+        conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        conn.execute(did_index_sql())
+        # an expression index carries its own statistics, and nothing else
+        # collects them until autovacuum sees enough churn; a lookup planned
+        # before then is planned against a default selectivity
+        conn.execute("ANALYZE srcnet.data_products")
+    except Exception as exc:
+        conn.execute("ROLLBACK TO SAVEPOINT obscore_did_index")
+        log.warning(
+            "ivoa.obscore publisher-DID index not created (%s); lookups by"
+            " obs_publisher_did will evaluate the DID for every product",
+            exc,
+        )
+    else:
+        conn.execute("RELEASE SAVEPOINT obscore_did_index")
 
 
 def ensure_obscore(conn) -> None:
@@ -551,6 +656,7 @@ def ensure_obscore(conn) -> None:
         return
     conn.execute("CREATE SCHEMA IF NOT EXISTS ivoa")
     _replace_view(conn, existing[1] if existing else None)
+    _ensure_did_index(conn)
     conn.execute(f"GRANT USAGE ON SCHEMA ivoa TO {settings.query_role}")
     conn.execute(f"GRANT SELECT ON ivoa.obscore TO {settings.query_role}")
     conn.execute(
