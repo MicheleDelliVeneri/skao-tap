@@ -116,11 +116,63 @@ def test_the_did_percent_encodes_every_key_component():
     # the separators stay literal; the components do not
     assert did.count(" || '/' || ") == 4
     for column in obscore.did_key_columns():
-        assert f"regexp_split_to_table(p.{column}, '')" in did, column
+        assert f"ELSE ivoa.did_encode(p.{column}) END" in did, column
         assert f"CASE WHEN p.{column} ~ '^[{obscore.DID_SAFE_CLASS}]*$'" in did, column
-    # unreserved characters survive; anything else becomes %XX per UTF-8 byte
-    assert did.count("upper(encode(convert_to(ch, 'UTF8'), 'hex'))") == 5
     assert "p.project_id ||" not in did  # never interpolated raw
+    # the encoder: unreserved characters survive; anything else becomes %XX
+    # per UTF-8 byte. IMMUTABLE and PARALLEL SAFE are what let it sit in an
+    # index expression and run in a parallel worker.
+    encoder = obscore.did_encode_sql()
+    assert encoder.startswith("CREATE OR REPLACE FUNCTION ivoa.did_encode(component text)")
+    assert "IMMUTABLE PARALLEL SAFE STRICT" in encoder
+    assert "upper(encode(convert_to(ch, 'UTF8'), 'hex'))" in encoder
+    assert f"CASE WHEN ch ~ '^[{obscore.DID_SAFE_CLASS}]$' THEN ch" in encoder
+    assert "regexp_split_to_table(component, '') WITH ORDINALITY" in encoder
+
+
+def test_the_did_has_no_subquery_so_it_can_be_indexed_and_run_in_parallel():
+    """A correlated subquery in the DID expression made every lookup by
+    obs_publisher_did evaluate the whole expression for every product, on
+    one core, with no index possible: an index expression may not contain a
+    subquery and a SubPlan is parallel-restricted. The encoder is a function
+    call now, and the view's DID must stay free of SELECTs."""
+    did = next(
+        line for line in obscore.view_sql().splitlines() if line.endswith(" AS obs_publisher_did,")
+    )
+    assert "SELECT" not in did
+    assert did.count("ivoa.did_encode(") == len(obscore.did_key_columns())
+
+
+def test_the_did_index_is_over_exactly_the_views_expression():
+    """The planner uses an expression index only for an expression that is
+    structurally the one in the query, and the view's is what every query
+    carries — so the index must be built from the same text, alias aside."""
+    index = obscore.did_index_sql()
+    assert index.startswith(
+        f"CREATE INDEX IF NOT EXISTS {obscore.DID_INDEX} ON srcnet.data_products USING gin (("
+    )
+    assert index.endswith(") gin_trgm_ops)")
+    expression = index.split("USING gin ((", 1)[1].removesuffix(") gin_trgm_ops)")
+    assert expression == obscore.did_sql()
+    assert obscore.did_sql("p") == expression.replace("CASE WHEN ", "CASE WHEN p.").replace(
+        " THEN ", " THEN p."
+    ).replace("did_encode(", "did_encode(p.")
+    # it names the view's DID expression, not a stored column
+    assert obscore.did_sql("p") in obscore.view_sql()
+
+
+def test_the_access_join_is_one_the_planner_can_remove():
+    """A query over the view that never reads access_* must not probe
+    srcnet.artifacts once per product. PostgreSQL removes a LEFT JOIN to a
+    subquery it can prove yields at most one row; an aggregate without GROUP
+    BY is such a subquery, `ORDER BY ... LIMIT 1` is not."""
+    sql = obscore.view_sql()
+    lateral = sql.split("LEFT JOIN LATERAL (", 1)[1]
+    assert "LIMIT" not in lateral
+    assert "GROUP BY" not in lateral
+    for column in ("access_url", "access_format", "access_estsize"):
+        # the same artifact as before: the first science one by artifact_id
+        assert f"(array_agg(art.{column} ORDER BY art.artifact_id))[1] AS {column}" in lateral
 
 
 def test_did_prefix_outside_the_identifier_alphabet_is_refused(auth_settings):
@@ -175,10 +227,17 @@ class _RecordingConn:
     plans no parameters for DDL, so a statement's *bindability* is part of
     what these tests have to be able to see."""
 
-    def __init__(self, relkind: str | None, comment: str | None = None, refuse_replace=False):
+    def __init__(
+        self,
+        relkind: str | None,
+        comment: str | None = None,
+        refuse_replace=False,
+        index_exists=True,
+    ):
         self._relkind = relkind
         self._comment = comment
         self._refuse_replace = refuse_replace
+        self._index_exists = index_exists
         self.statements: list[str] = []
         self.calls: list[tuple[str, tuple | None]] = []
 
@@ -187,12 +246,17 @@ class _RecordingConn:
         self.calls.append((sql, params))
         if self._refuse_replace and sql.startswith("CREATE OR REPLACE VIEW"):
             raise _ViewShapeChanged("cannot change name of view column")
+        if sql.startswith("DROP INDEX"):
+            self._index_exists = False
         relkind, comment = self._relkind, self._comment
+        index_exists = self._index_exists
 
         class Result:
             def fetchone(self):
                 if "pg_class" in sql:
                     return (relkind, comment) if relkind else None
+                if "to_regclass" in sql:
+                    return (12345 if index_exists else None,)
                 if "quote_literal" in sql:
                     return ("'" + str(params[0]).replace("'", "''") + "'",)
                 return None
@@ -225,10 +289,49 @@ def test_a_view_whose_definition_did_not_change_is_not_touched():
     view for the rest of the bootstrap transaction, and the bootstrap runs on
     every pod start — so the unchanged case must issue no view DDL at all,
     only the lock-free registration."""
-    conn = _RecordingConn("v", comment=obscore.definition_comment(obscore.view_sql()))
+    conn = _RecordingConn("v", comment=obscore.definition_comment())
     obscore.ensure_obscore(conn)
     assert not any("VIEW" in s for s in conn.statements)
+    # the index likewise: CREATE INDEX IF NOT EXISTS locks the table before
+    # it notices the index exists, so an existing one is found in the
+    # catalogue and left alone
+    assert not any("INDEX" in s or "FUNCTION" in s for s in conn.statements)
     assert any("tap_schema.columns" in s for s in conn.statements)
+
+
+def test_a_missing_did_index_is_built_even_when_the_view_is_current():
+    """The extension may have been unavailable at an earlier bootstrap."""
+    conn = _RecordingConn("v", comment=obscore.definition_comment(), index_exists=False)
+    obscore.ensure_obscore(conn)
+    assert not any("VIEW" in s for s in conn.statements)
+    order = [s.split(" ON ")[0] for s in conn.statements]
+    assert order.index("CREATE EXTENSION IF NOT EXISTS pg_trgm") < order.index(
+        f"CREATE INDEX IF NOT EXISTS {obscore.DID_INDEX}"
+    )
+    assert order.index(f"CREATE INDEX IF NOT EXISTS {obscore.DID_INDEX}") < order.index(
+        "ANALYZE srcnet.data_products"
+    )
+    assert "RELEASE SAVEPOINT obscore_did_index" in conn.statements
+
+
+def test_an_unavailable_pg_trgm_costs_the_index_not_the_bootstrap(caplog):
+    """A role without CREATE on the database cannot install the extension;
+    the view still has to exist, and the failed statement has aborted the
+    transaction, so the index DDL runs under its own savepoint."""
+
+    class _NoExtension(_RecordingConn):
+        def execute(self, sql, params=None):
+            if sql.startswith("CREATE EXTENSION"):
+                self.statements.append(sql)
+                raise RuntimeError("permission denied to create extension")
+            return super().execute(sql, params)
+
+    conn = _NoExtension("v", comment=obscore.definition_comment(), index_exists=False)
+    obscore.ensure_obscore(conn)
+    assert "ROLLBACK TO SAVEPOINT obscore_did_index" in conn.statements
+    assert not any(s.startswith("CREATE INDEX") for s in conn.statements)
+    assert any("tap_schema.columns" in s for s in conn.statements)  # bootstrap went on
+    assert "publisher-DID index not created" in caplog.text
 
 
 def test_a_stale_view_is_replaced_in_place():
@@ -236,9 +339,16 @@ def test_a_stale_view_is_replaced_in_place():
     obscore.ensure_obscore(conn)
     assert any(s.startswith("CREATE OR REPLACE VIEW ivoa.obscore") for s in conn.statements)
     assert not any("DROP VIEW" in s for s in conn.statements)
-    assert conn.statements.count("SAVEPOINT obscore_view") == 1
-    assert "RELEASE SAVEPOINT obscore_view" in conn.statements
-    assert any(s.startswith("COMMENT ON VIEW ivoa.obscore") for s in conn.statements)
+    # the view calls the encoder, so the encoder is (re)defined first; the
+    # index is over the same expression, so it is dropped with the stale
+    # view and rebuilt after the new one
+    order = [s.split("\n")[0].split(" ON ")[0] for s in conn.statements]
+    assert (
+        order.index("CREATE OR REPLACE FUNCTION ivoa.did_encode(component text) RETURNS text")
+        < order.index(f"DROP INDEX IF EXISTS srcnet.{obscore.DID_INDEX}")
+        < order.index("CREATE OR REPLACE VIEW ivoa.obscore AS")
+        < order.index(f"CREATE INDEX IF NOT EXISTS {obscore.DID_INDEX}")
+    )
 
 
 def test_the_view_comment_is_quoted_into_the_ddl_not_bound_as_a_parameter():
@@ -252,7 +362,7 @@ def test_the_view_comment_is_quoted_into_the_ddl_not_bound_as_a_parameter():
     ddl = [(s, p) for s, p in conn.calls if s.startswith(ddl_keywords)]
     assert all(p is None for _, p in ddl), [s for s, p in ddl if p is not None]
     comment_ddl = next(s for s, _ in ddl if s.startswith("COMMENT ON VIEW ivoa.obscore"))
-    assert obscore.definition_comment(obscore.view_sql()) in comment_ddl
+    assert obscore.definition_comment() in comment_ddl
     assert "%s" not in comment_ddl
 
 
@@ -298,7 +408,7 @@ def test_the_did_chain_is_configurable_from_the_model_hierarchy(auth_settings):
     assert "p.sbd_id" not in did and "p.eb_id" not in did
     for column in ("project_id", "obs_id", "product_id"):
         # each component still percent-encoded, not interpolated raw
-        assert f"regexp_split_to_table(p.{column}, '')" in did
+        assert f"ivoa.did_encode(p.{column})" in did
 
 
 def test_the_default_chain_is_the_data_products_primary_key():

@@ -32,7 +32,10 @@ automatically generated column reference is available on the
 
 - **Relational tables** — every `list[Model]` level becomes a child table
   with a composite primary key following the identity chain and a
-  cascading foreign key; singular nested models are flattened into
+  cascading foreign key to its parent and to every ancestor (the ancestor
+  keys are redundant for integrity, but they are what lets the planner
+  estimate a skip-level join such as data products to observations);
+  singular nested models are flattened into
   prefixed columns (`resources.min_memory` → `resources_min_memory`);
   pydantic constraints and enums become `CHECK` constraints.
 - **TAP_SCHEMA registration** — tables, columns and keys, so ingested

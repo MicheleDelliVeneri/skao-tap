@@ -170,6 +170,33 @@ def test_position_pairs_get_the_expression_cone_index():
     assert any("artifacts_spoint_gist" in s for s in spatial)
 
 
+def test_every_ancestor_gets_a_foreign_key_not_only_the_parent():
+    """The planner estimates a join from the foreign keys between the two
+    relations joined. The ivoa.obscore view joins data_products straight to
+    observations, two levels up, and without a key between those two the
+    estimate multiplies the per-column selectivities of perfectly correlated
+    key columns — four orders of magnitude low, and a sort-based plan where a
+    hash one belongs. Idempotent, so an existing deployment gains them."""
+    ddl = ddl_statements(TABLES, "tap_reader")
+    ancestors = [s for s in ddl if "ADD CONSTRAINT" in s]
+    for statement in ancestors:
+        assert statement.startswith("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint")
+        assert "ON DELETE CASCADE" in statement
+    assert any(
+        "ALTER TABLE srcnet.data_products ADD CONSTRAINT data_products_observations_fkey"
+        " FOREIGN KEY (project_id, obs_id) REFERENCES srcnet.observations (project_id, obs_id)" in s
+        for s in ancestors
+    )
+    assert any(
+        "ALTER TABLE srcnet.artifacts ADD CONSTRAINT artifacts_projects_fkey"
+        " FOREIGN KEY (project_id) REFERENCES srcnet.projects (project_id)" in s
+        for s in ancestors
+    )
+    # the parent's key is already in the CREATE TABLE; a root has no ancestors
+    assert not any("ALTER TABLE srcnet.observations ADD" in s for s in ancestors)
+    assert not any("ALTER TABLE srcnet.projects ADD" in s for s in ancestors)
+
+
 def test_key_chains_get_extended_statistics():
     ddl = ddl_statements(TABLES, "tap_reader")
     stx = [s for s in ddl if s.startswith("CREATE STATISTICS")]

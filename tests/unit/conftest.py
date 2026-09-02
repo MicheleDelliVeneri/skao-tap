@@ -244,6 +244,8 @@ class FakeDB:
         if head.startswith("SELECT PG_BACKEND_PID"):
             return FakeResult([(4242,)])
 
+        if head.startswith("SELECT TO_REGCLASS"):
+            return FakeResult([(None,)])  # a fresh database has no such index yet
         if head.startswith("SELECT QUOTE_LITERAL"):
             # the obscore bootstrap quotes its view fingerprint server-side
             value = str(params[0]).replace("'", "''")

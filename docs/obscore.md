@@ -27,7 +27,7 @@ present with their standard units, UCDs and utypes.
 | `obs_collection` | `observations.collection`, `'unclassified'` when absent (the REC requires a value) |
 | `obs_id` | `data_products.obs_id` |
 | `obs_publisher_did` | constructed — see below |
-| `access_url`, `access_format`, `access_estsize` | one representative artifact per product: the first `science`-semantics artifact by id. `access_estsize` converts the model's bytes to the REC's kbyte. A product with no science artifact has NULL access columns, which the spec permits |
+| `access_url`, `access_format`, `access_estsize` | one representative artifact per product: the first `science`-semantics artifact by id, picked by an aggregate so the planner can drop the join from queries that read none of the three. `access_estsize` converts the model's bytes to the REC's kbyte. A product with no science artifact has NULL access columns, which the spec permits |
 | `target_name`, `s_ra`, `s_dec`, `s_fov`, `s_region`, `s_xel1`, `s_xel2`, `t_min`, `t_max`, `t_exptime`, `t_xel`, `em_min`, `em_max`, `em_xel`, `o_ucd`, `pol_states`, `pol_xel` | the identically-named `data_products` columns |
 | `s_resolution` | `data_products.beam_size` (already arcseconds) |
 | `t_resolution`, `em_res_power` | NULL — the model does not carry them, and NULL is permitted |
@@ -58,6 +58,19 @@ set (`A-Za-z0-9._~-`) becomes `%XX` per UTF-8 byte. A `product_id` of
 `cube 3/a` therefore appears as `cube%203%2Fa` rather than forging a sixth
 path segment, and two products can never collide on one identifier. The
 `/` separators between components are the only unencoded ones.
+
+The encoder is the SQL function `ivoa.did_encode(text)`, `IMMUTABLE` and
+`PARALLEL SAFE`, and a component that is already clean never calls it. That
+keeps the DID expression free of subqueries, which is what lets the
+bootstrap index it: `data_products_obscore_did_trgm` is a pg_trgm GIN index
+on `srcnet.data_products` over exactly the view's expression, so a lookup
+by DID — equality, a prefix, or a component in the middle such as
+`obs_publisher_did LIKE '%<project_id>/%'` — is an index scan rather than
+an evaluation of the expression over every product. `pg_trgm` is a trusted
+extension, so the database owner can install it without being superuser; a
+bootstrap role that cannot logs a warning and leaves the view without its
+index. The function, the view and the index are fingerprinted together, so
+a changed prefix or chain rebuilds all three at the next bootstrap.
 
 ### Choosing the chain
 
