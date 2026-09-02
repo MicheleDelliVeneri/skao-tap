@@ -32,10 +32,12 @@ capacity checks record smaller local experiments separately.
 | `fixed-scaling` | [20260824T014320Z-a5058118-fixed-scaling](20260824T014320Z-a5058118-fixed-scaling/index.md) | D2 |
 | `keda` | [20260824T140134Z-bf7e4b24-keda](20260824T140134Z-bf7e4b24-keda/index.md) | D1 |
 | `profile` | [20260825T163627Z-034d69ba-profile](20260825T163627Z-034d69ba-profile/index.md) | D1 |
+| `tap-compare` | [20260901T054529Z-3c8add85-tap-compare](20260901T054529Z-3c8add85-tap-compare/index.md) | D1 |
 | `worker-sweep` | [20260825T180219Z-f8b21fc4-worker-sweep](20260825T180219Z-f8b21fc4-worker-sweep/index.md) | D1 |
 
 ## All runs
 
+- [20260901T054529Z-3c8add85-tap-compare](20260901T054529Z-3c8add85-tap-compare/index.md)
 - [20260825T180219Z-f8b21fc4-worker-sweep](20260825T180219Z-f8b21fc4-worker-sweep/index.md)
 - [20260825T163627Z-034d69ba-profile](20260825T163627Z-034d69ba-profile/index.md)
 - [20260825T005436Z-b450b0a9-db-scaling](20260825T005436Z-b450b0a9-db-scaling/index.md)

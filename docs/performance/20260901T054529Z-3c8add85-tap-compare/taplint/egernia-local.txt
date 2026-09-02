@@ -1,0 +1,199 @@
+This is STILTS taplint, 3.5-6/6df87fe94 (2026-08-21)
+Timestamp: 2026-09-01 05:45:29 UTC
+Static report types: ERROR(173), WARNING(77), INFO(32), SUMMARY(13), FAILURE(25)
+
+Section TMV: Validate table metadata against XML schema
+I-TMV-VURL-1 Validating http://localhost:8080/tap/tables as tableset (http://www.ivoa.net/xml/VODataService/v1.1)
+S-TMV-VALI-1 SAX report: warnings 0, errors 0, fatal 0
+
+Section TME: Check content of tables metadata from /tables
+I-TME-CURL-1 Reading capability metadata from http://localhost:8080/tap/capabilities
+I-TME-TURL-1 Reading table metadata from http://localhost:8080/tap/tables
+S-TME-SUMM-1 Schemas: 4, Tables: 15, Columns: 181, Foreign Keys: 11
+S-TME-FLGS-1 Standard column flags: indexed: 0, primary: 0, nullable: 0
+S-TME-FLGO-1 Other column flags: none
+
+Section TMS: Check content of tables metadata from TAP_SCHEMA
+I-TMS-TAPV-1 Validating for TAP version V1.1
+I-TMS-QSUB-1 Submitting query: SELECT COUNT(*) AS nr FROM TAP_SCHEMA.schemas
+I-TMS-QGET-1 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+COUNT%28*%29+AS+nr+FROM+TAP_SCHEMA.schemas
+I-TMS-QSUB-2 Submitting query: SELECT COUNT(*) AS nr FROM TAP_SCHEMA.tables
+I-TMS-QGET-2 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+COUNT%28*%29+AS+nr+FROM+TAP_SCHEMA.tables
+I-TMS-QSUB-3 Submitting query: SELECT COUNT(*) AS nr FROM TAP_SCHEMA.columns
+I-TMS-QGET-3 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+COUNT%28*%29+AS+nr+FROM+TAP_SCHEMA.columns
+I-TMS-QSUB-4 Submitting query: SELECT COUNT(*) AS nr FROM TAP_SCHEMA.keys
+I-TMS-QGET-4 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+COUNT%28*%29+AS+nr+FROM+TAP_SCHEMA.keys
+I-TMS-QSUB-5 Submitting query: SELECT COUNT(*) AS nr FROM TAP_SCHEMA.key_columns
+I-TMS-QGET-5 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+COUNT%28*%29+AS+nr+FROM+TAP_SCHEMA.key_columns
+I-TMS-QSUB-6 Submitting query: SELECT principal, indexed, std, "size" FROM TAP_SCHEMA.columns
+I-TMS-QGET-6 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+principal%2C+indexed%2C+std%2C+%22size%22+FROM+TAP_SCHEMA.columns&MAXREC=191
+I-TMS-QSUB-7 Submitting query: SELECT TOP 1 * FROM TAP_SCHEMA.columns
+I-TMS-QGET-7 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+*+FROM+TAP_SCHEMA.columns&MAXREC=1
+I-TMS-QSUB-8 Submitting query: SELECT table_name, column_name, datatype, arraysize, xtype, description, utype, unit, ucd, indexed, principal, std, column_index FROM TAP_SCHEMA.columns
+I-TMS-QGET-8 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+table_name%2C+column_name%2C+datatype%2C+arraysize%2C+xtype%2C+description%2C+utype%2C+unit%2C+ucd%2C+indexed%2C+principal%2C+std%2C+column_index+FROM+TAP_SCHEMA.columns&MAXREC=191
+I-TMS-QSUB-9 Submitting query: SELECT from_column, target_column, key_id FROM TAP_SCHEMA.key_columns
+I-TMS-QGET-9 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+from_column%2C+target_column%2C+key_id+FROM+TAP_SCHEMA.key_columns&MAXREC=191
+S-TMS-SUMM-1 Schemas: 4, Tables: 15, Columns: 181, Foreign Keys: 11
+S-TMS-FLGS-1 Standard column flags: indexed: 27, principal: 78, std: 62
+S-TMS-QNUM-1 Successful/submitted TAP queries: 31/31
+S-TMS-QTIM-1 Average successful query time: 0.014s
+I-TMS-QSUB-x (22 more)
+I-TMS-QGET-x (22 more)
+
+Section TMC: Compare table metadata from /tables and TAP_SCHEMA
+W-TMC-CIDX-1 IsIndexed mismatch for Column ska.continuum_sources:source_id; false != true
+W-TMC-CIDX-2 IsIndexed mismatch for Column ska.continuum_sources:ra; false != true
+W-TMC-CIDX-3 IsIndexed mismatch for Column ska.continuum_sources:dec; false != true
+W-TMC-CIDX-4 IsIndexed mismatch for Column srcnet.projects:project_id; false != true
+W-TMC-CIDX-5 IsIndexed mismatch for Column srcnet.software:uri; false != true
+W-TMC-CIDX-6 IsIndexed mismatch for Column srcnet.software_artifacts:uri; false != true
+W-TMC-CIDX-7 IsIndexed mismatch for Column srcnet.software_artifacts:location; false != true
+W-TMC-CIDX-8 IsIndexed mismatch for Column srcnet.observations:project_id; false != true
+W-TMC-CIDX-9 IsIndexed mismatch for Column srcnet.observations:obs_id; false != true
+W-TMC-CIDX-x (18 more)
+
+Section UUC: Check column units and UCDs are legal
+I-UUC-UCDV-1 UCD validation details: Ucidy version 1.2, UCD words version EN-UCD1+-1.4, UCD deprecated words version EN-UCD1+-1.4
+
+Section CPV: Validate capabilities against XML schema
+I-CPV-VURL-1 Validating http://localhost:8080/tap/capabilities as capabilities (http://www.ivoa.net/xml/VOSICapabilities/v1.0)
+S-CPV-VALI-1 SAX report: warnings 0, errors 0, fatal 0
+
+Section CAP: Check TAP and TAPRegExt content of capabilities document
+I-CAP-SVRI-1 HTTP server header "Server: uvicorn"
+
+Section AVV: Validate availability against XML schema
+I-AVV-VURL-1 Validating http://localhost:8080/tap/availability as availability (http://www.ivoa.net/xml/VOSIAvailability/v1.0)
+S-AVV-VALI-1 SAX report: warnings 0, errors 0, fatal 0
+
+Section QGE: Make ADQL queries in sync GET mode
+I-QGE-SCHM-1 Using standard TAP_SCHEMA tables for metadata
+I-QGE-QSUB-1 Submitting query: SELECT TOP 10 source_id FROM ska.continuum_sources
+I-QGE-QGET-1 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+10+source_id+FROM+ska.continuum_sources
+I-QGE-QSUB-2 Submitting query: SELECT source_id FROM ska.continuum_sources
+I-QGE-QGET-2 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+source_id+FROM+ska.continuum_sources&MAXREC=7
+I-QGE-QSUB-3 Submitting query: SELECT TOP 10 source_id FROM ska.continuum_sources
+I-QGE-QGET-3 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+10+source_id+FROM+ska.continuum_sources&DUMMY=ignore-me
+I-QGE-QSUB-4 Submitting query: SELECT TOP 1 source_id FROM ska.continuum_sources
+I-QGE-QGET-4 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL-2.0&QUERY=SELECT+TOP+1+source_id+FROM+ska.continuum_sources
+I-QGE-QSUB-5 Submitting query: SELECT TOP 1 source_id FROM ska.continuum_sources
+I-QGE-QGET-5 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL-2.1&QUERY=SELECT+TOP+1+source_id+FROM+ska.continuum_sources
+I-QGE-QSUB-6 Submitting query: SELECT TOP 1 source_id FROM ska.continuum_sources
+I-QGE-QGET-6 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+source_id+FROM+ska.continuum_sources
+I-QGE-QSUB-7 Submitting query: SELECT TOP 8 provenance_registration_date, provenance_registered_by AS taplint_c_2, s.provenance_repository_url, resources_recommended_memory AS taplint_c_4, resources_min_memory, s.resources_requires_gpu AS taplint_c_6, data_compatibility_data_output_type, data_compatibility_data_input_type AS taplint_c_8, s.discovery_tools_included, discovery_science_working_group AS taplint_c_10, discovery_function_category, s.discovery_science_category AS taplint_c_12, status, changelog AS taplint_c_14, s.release_date, description AS taplint_c_16, uri FROM srcnet.software AS s
+I-QGE-QGET-7 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+8+provenance_registration_date%2C+provenance_registered_by+AS+taplint_c_2%2C+s.provenance_repository_url%2C+resources_recommended_memory+AS+taplint_c_4%2C+resources_min_memory%2C+s.resources_requires_gpu+AS+taplint_c_6%2C+data_compatibility_data_output_type%2C+data_compatibility_data_input_type+AS+taplint_c_8%2C+s.discovery_tools_included%2C+discovery_science_working_group+AS+taplint_c_10%2C+discovery_function_category%2C+s.discovery_science_category+AS+taplint_c_12%2C+status%2C+changelog+AS+taplint_c_14%2C+s.release_date%2C+description+AS+tapli...
+I-QGE-QSUB-8 Submitting query: SELECT project_id FROM srcnet.artifacts
+I-QGE-QGET-8 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+project_id+FROM+srcnet.artifacts&MAXREC=0
+I-QGE-DUFF-1 Submitting query expected to fail (bad ADQL): DUFF QUERY
+I-QGE-QGET-9 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=DUFF+QUERY
+I-QGE-DUFF-2 Submitting query expected to fail (unknown query language): SELECT TOP 1 * FROM TAP_SCHEMA.tables
+S-QGE-QNUM-1 Successful/submitted TAP queries: 8/8
+S-QGE-QTIM-1 Average successful query time: 0.013s
+I-QGE-QGET-x (1 more)
+
+Section QPO: Make ADQL queries in sync POST mode
+I-QPO-QSUB-1 Submitting query: SELECT TOP 10 source_id FROM ska.continuum_sources
+I-QPO-QSUB-2 Submitting query: SELECT source_id FROM ska.continuum_sources
+I-QPO-QSUB-3 Submitting query: SELECT TOP 10 source_id FROM ska.continuum_sources
+I-QPO-QSUB-4 Submitting query: SELECT TOP 8 provenance_registration_date, provenance_registered_by AS taplint_c_2, s.provenance_repository_url, resources_recommended_memory AS taplint_c_4, resources_min_memory, s.resources_requires_gpu AS taplint_c_6, data_compatibility_data_output_type, data_compatibility_data_input_type AS taplint_c_8, s.discovery_tools_included, discovery_science_working_group AS taplint_c_10, discovery_function_category, s.discovery_science_category AS taplint_c_12, status, changelog AS taplint_c_14, s.release_date, description AS taplint_c_16, uri FROM srcnet.software AS s
+I-QPO-QSUB-5 Submitting query: SELECT project_id FROM srcnet.artifacts
+I-QPO-DUFF-1 Submitting query expected to fail (bad ADQL): DUFF QUERY
+I-QPO-DUFF-2 Submitting query expected to fail (unknown query language): SELECT TOP 1 * FROM TAP_SCHEMA.tables
+S-QPO-QNUM-1 Successful/submitted TAP queries: 5/5
+S-QPO-QTIM-1 Average successful query time: 0.013s
+
+Section QAS: Make ADQL queries in async mode
+I-QAS-QSUB-1 Submitting query: SELECT TOP 10 source_id FROM ska.continuum_sources
+I-QAS-QJOB-1 Submitted query at http://localhost:8080/tap/async/8d8dd2072835de74
+I-QAS-QSUB-2 Submitting query: SELECT source_id FROM ska.continuum_sources
+I-QAS-QJOB-2 Submitted query at http://localhost:8080/tap/async/40a0ac7930941e28
+I-QAS-QSUB-3 Submitting query: SELECT TOP 10 source_id FROM ska.continuum_sources
+I-QAS-QJOB-3 Submitted query at http://localhost:8080/tap/async/090f780646977916
+I-QAS-QSUB-4 Submitting query: SELECT TOP 8 provenance_registration_date, provenance_registered_by AS taplint_c_2, s.provenance_repository_url, resources_recommended_memory AS taplint_c_4, resources_min_memory, s.resources_requires_gpu AS taplint_c_6, data_compatibility_data_output_type, data_compatibility_data_input_type AS taplint_c_8, s.discovery_tools_included, discovery_science_working_group AS taplint_c_10, discovery_function_category, s.discovery_science_category AS taplint_c_12, status, changelog AS taplint_c_14, s.release_date, description AS taplint_c_16, uri FROM srcnet.software AS s
+I-QAS-QJOB-4 Submitted query at http://localhost:8080/tap/async/c059f950cf01f3a0
+I-QAS-QSUB-5 Submitting query: SELECT project_id FROM srcnet.artifacts
+I-QAS-QJOB-5 Submitted query at http://localhost:8080/tap/async/8545e7f6eb825613
+I-QAS-DUFF-1 Submitting query expected to fail (bad ADQL): DUFF QUERY
+I-QAS-QJOB-6 Submitted query at http://localhost:8080/tap/async/999b8c83252180bd
+I-QAS-DUFF-2 Submitting query expected to fail (unknown query language): SELECT TOP 1 * FROM TAP_SCHEMA.tables
+I-QAS-QJOB-7 Submitted query at http://localhost:8080/tap/async/764c5d803c78112f
+S-QAS-QNUM-1 Successful/submitted TAP queries: 5/5
+S-QAS-QTIM-1 Average successful query time: 1.0s
+
+Section UWS: Test asynchronous UWS/TAP behaviour
+I-UWS-CJOB-1 Created new job http://localhost:8080/tap/async/b4d613e91a1ce0b2
+I-UWS-POPA-1 POSTed runId=TAPLINT-002 to http://localhost:8080/tap/async/b4d613e91a1ce0b2/parameters (303)
+I-UWS-POPA-2 POSTed PHASE=ABORT to http://localhost:8080/tap/async/b4d613e91a1ce0b2/phase (303)
+I-UWS-POPA-3 POSTed ACTION=DELETE to http://localhost:8080/tap/async/b4d613e91a1ce0b2 (303)
+I-UWS-CJOB-2 Created new job http://localhost:8080/tap/async/a537c65adf1c255e
+I-UWS-CJOB-3 Created new job http://localhost:8080/tap/async/43462923cb2e10f8
+I-UWS-VUWS-1 UWS job document explicitly V1.1
+I-UWS-POPA-4 POSTed PHASE=RUN to http://localhost:8080/tap/async/43462923cb2e10f8/phase (303)
+
+Section MDQ: Check table query result columns against declared metadata
+I-MDQ-TMAX-1 Testing only 5/15 tables
+I-MDQ-QSUB-1 Submitting query: SELECT TOP 1 * FROM ivoa.obscore
+W-MDQ-DRUT-1 Declared/result UType mismatch for column dataproduct_type in table ivoa.obscore (obscore:ObsDataset.dataProductType != null)
+W-MDQ-DRUT-2 Declared/result UType mismatch for column calib_level in table ivoa.obscore (obscore:ObsDataset.calibLevel != null)
+W-MDQ-DRUT-3 Declared/result UType mismatch for column obs_collection in table ivoa.obscore (obscore:DataID.collection != null)
+W-MDQ-DRUT-4 Declared/result UType mismatch for column obs_id in table ivoa.obscore (obscore:DataID.observationID != null)
+W-MDQ-DRUT-5 Declared/result UType mismatch for column obs_publisher_did in table ivoa.obscore (obscore:Curation.publisherDID != null)
+W-MDQ-DRUT-6 Declared/result UType mismatch for column access_url in table ivoa.obscore (obscore:Access.reference != null)
+W-MDQ-DRUT-7 Declared/result UType mismatch for column access_format in table ivoa.obscore (obscore:Access.format != null)
+W-MDQ-DRUT-8 Declared/result UType mismatch for column access_estsize in table ivoa.obscore (obscore:Access.size != null)
+W-MDQ-DRUT-9 Declared/result UType mismatch for column target_name in table ivoa.obscore (obscore:Target.name != null)
+W-MDQ-DRXT-1 Declared/result XType mismatch for column s_region in table ivoa.obscore (adql:REGION != null)
+I-MDQ-QSUB-2 Submitting query: SELECT TOP 1 * FROM ska.continuum_sources
+I-MDQ-QSUB-3 Submitting query: SELECT TOP 1 * FROM srcnet.artifacts
+I-MDQ-QSUB-4 Submitting query: SELECT TOP 1 * FROM srcnet.data_products
+I-MDQ-QSUB-5 Submitting query: SELECT TOP 1 * FROM srcnet.execution_blocks
+S-MDQ-QNUM-1 Successful/submitted TAP queries: 5/5
+S-MDQ-QTIM-1 Average successful query time: 0.007s
+W-MDQ-DRUT-x (21 more)
+
+Section OBS: Test implementation of ObsCore Data Model
+I-OBS-DMID-1 Checking against ObsCore DM 1.1
+I-OBS-QSUB-1 Submitting query: SELECT DISTINCT TOP 4 dataproduct_type FROM ivoa.ObsCore WHERE dataproduct_type NOT IN ('image', 'cube', 'spectrum', 'sed', 'timeseries', 'visibility', 'event', 'measurements') AND dataproduct_type IS NOT NULL
+I-OBS-QGET-1 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+DISTINCT+TOP+4+dataproduct_type+FROM+ivoa.ObsCore+WHERE+dataproduct_type+NOT+IN+%28%27image%27%2C+%27cube%27%2C+%27spectrum%27%2C+%27sed%27%2C+%27timeseries%27%2C+%27visibility%27%2C+%27event%27%2C+%27measurements%27%29+AND+dataproduct_type+IS+NOT+NULL
+I-OBS-QSUB-2 Submitting query: SELECT TOP 1 calib_level FROM ivoa.ObsCore WHERE calib_level IS NULL
+I-OBS-QGET-2 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+calib_level+FROM+ivoa.ObsCore+WHERE+calib_level+IS+NULL
+I-OBS-QSUB-3 Submitting query: SELECT TOP 1 calib_level FROM ivoa.ObsCore WHERE calib_level NOT BETWEEN 0 AND 4
+I-OBS-QGET-3 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+calib_level+FROM+ivoa.ObsCore+WHERE+calib_level+NOT+BETWEEN+0+AND+4
+I-OBS-QSUB-4 Submitting query: SELECT TOP 1 obs_collection FROM ivoa.ObsCore WHERE obs_collection IS NULL
+I-OBS-QGET-4 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+obs_collection+FROM+ivoa.ObsCore+WHERE+obs_collection+IS+NULL
+I-OBS-QSUB-5 Submitting query: SELECT TOP 1 obs_id FROM ivoa.ObsCore WHERE obs_id IS NULL
+I-OBS-QGET-5 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+obs_id+FROM+ivoa.ObsCore+WHERE+obs_id+IS+NULL
+I-OBS-QSUB-6 Submitting query: SELECT TOP 1 obs_publisher_did FROM ivoa.ObsCore WHERE obs_publisher_did IS NULL
+I-OBS-QGET-6 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+obs_publisher_did+FROM+ivoa.ObsCore+WHERE+obs_publisher_did+IS+NULL
+S-OBS-COLS-1 ivoa.ObsCore columns: 30/30 required, 0/30 optional, 1 custom
+S-OBS-QNUM-1 Successful/submitted TAP queries: 6/6
+S-OBS-QTIM-1 Average successful query time: 0.4s
+
+Section LOC: Test implementation of ObsLocTAP Data Model
+
+Section UPL: Make queries with table uploads
+I-UPL-QSUB-1 Submitting query: SELECT * FROM TAP_UPLOAD.t1 ORDER BY d_int ASC
+I-UPL-QJOB-1 Submitted query at http://localhost:8080/tap/async/12fe98b0b4c6fe3b
+I-UPL-QSUB-2 Submitting query: SELECT * FROM TAP_UPLOAD.t1 ORDER BY d_int ASC
+I-UPL-QJOB-2 Submitted query at http://localhost:8080/tap/async/83bf5de8e69f9e29
+
+Section EXA: Check content of examples document
+I-EXA-EURL-1 Reading examples document from http://localhost:8080/tap/examples
+I-EXA-EXVT-1 Examples document vocab attribute "http://www.ivoa.net/rdf/examples#" is correct according to DALI 1.1, but won't work with some old TOPCAT versions (v4.3-4.4 required "ivo://ivoa.net/std/DALI-examples#", later versions don't care)
+I-EXA-EXMP-1 Examining example #1: obscore-cone
+I-EXA-QSUB-1 Submitting query: SELECT obs_publisher_did, dataproduct_type, access_url FROM ivoa.obscore WHERE 1 = INTERSECTS(s_region_geom, CIRCLE('ICRS', 150.0, -30.0, 0.5))
+I-EXA-QGET-1 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=%0ASELECT+obs_publisher_did%2C+dataproduct_type%2C+access_url%0AFROM+ivoa.obscore%0AWHERE+1+%3D+INTERSECTS%28s_region_geom%2C+CIRCLE%28%27ICRS%27%2C+150.0%2C+-30.0%2C+0.5%29%29%0A++&MAXREC=10
+I-EXA-EXMP-2 Examining example #2: cone
+I-EXA-QSUB-2 Submitting query: SELECT source_id, source_name, ra, dec, flux_int FROM ska.continuum_sources WHERE 1 = CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', 62.3, -65.5, 1.0))
+I-EXA-QGET-2 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=%0ASELECT+source_id%2C+source_name%2C+ra%2C+dec%2C+flux_int%0AFROM+ska.continuum_sources%0AWHERE+1+%3D+CONTAINS%28POINT%28%27ICRS%27%2C+ra%2C+dec%29%2C+CIRCLE%28%27ICRS%27%2C+62.3%2C+-65.5%2C+1.0%29%29%0A++&MAXREC=10
+I-EXA-EXMP-3 Examining example #3: brightest
+I-EXA-QSUB-3 Submitting query: SELECT TOP 5 source_name, flux_int FROM ska.continuum_sources ORDER BY flux_int DESC
+I-EXA-QGET-3 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=%0ASELECT+TOP+5+source_name%2C+flux_int+FROM+ska.continuum_sources+ORDER+BY+flux_int+DESC%0A++&MAXREC=10
+I-EXA-EXMP-4 Examining example #4: metadata
+I-EXA-QSUB-4 Submitting query: SELECT table_name, description FROM tap_schema.tables
+I-EXA-QGET-4 Query GET URL: http://localhost:8080/tap/sync?LANG=ADQL&QUERY=SELECT+table_name%2C+description+FROM+tap_schema.tables&MAXREC=10
+S-EXA-XNUM-1 Found 4 examples in 1 document
+S-EXA-XVAL-1 Syntax validity success/attempt: 4/4, Symbol validity success/attempt: 4/4, Execution success/attempt: 4/4
+
+Totals: Errors: 0; Warnings: 58; Infos: 157; Summaries: 23
+
