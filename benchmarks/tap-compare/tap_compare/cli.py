@@ -19,6 +19,7 @@ import json
 import logging
 import pathlib
 import sys
+import time
 
 import yaml
 
@@ -98,7 +99,10 @@ def _record_provenance(
     A resumed run keeps the provenance it started with: overwriting it would
     silently re-describe rungs that were measured under the original record.
     Resuming with a different corpus, scenario or target set is refused —
-    those cells would not be comparable with the ones already on disk.
+    those cells would not be comparable with the ones already on disk. A
+    resume from a different git state is recorded (appended, never rewriting
+    the original) rather than refused: refusing would discard a day-long run
+    over a harness fix, but the record must say the code changed mid-run.
     """
     env_path = run.path / "environment.json"
     if env_path.exists():
@@ -115,6 +119,16 @@ def _record_provenance(
             mismatches.append("the target descriptors changed")
         if mismatches:
             raise SystemExit(f"cannot resume {run.path.name}: " + "; ".join(mismatches))
+        current = {"sha": runs.git_sha(), "dirty": runs.git_dirty()}
+        last = (recorded.get("resumed") or [recorded["git"]])[-1]
+        if {"sha": last.get("sha"), "dirty": last.get("dirty")} != current:
+            recorded.setdefault("resumed", []).append({"at": time.time(), **current})
+            run.write_json("environment.json", recorded)
+            log.warning(
+                "resuming under different code (git %s, dirty=%s); recorded in environment.json",
+                current["sha"][:8],
+                current["dirty"],
+            )
         return
     run.write_json(
         "environment.json",

@@ -62,7 +62,8 @@ operates**. Every target is deployed locally by the operator, and:
   sha256-pinned), loaded through each server's own documented ingest path —
   each server keeps its native physical layout and indexes, because a server
   *is* its recommended layout;
-- identical container CPU/memory limits, one target stack running at a time;
+- identical container CPU/memory limits, one target under load at a time
+  (every target stack stays up so repetitions can interleave A,B,A,B);
 - TLS off, auth off, HTTP/1.1 keep-alive on, the same client harness for all;
 - `RESPONSEFORMAT` pinned to VOTable and CSV for cross-server rungs
   (egernia's parquet/arrow are an egernia-only appendix, never compared);

@@ -48,6 +48,19 @@ def test_resume_with_a_different_scenario_is_refused(tmp_path):
         _record(run, "aaa111", scenario={"ladder": [1, 4]})
 
 
+def test_resume_under_different_code_is_recorded_not_refused(tmp_path):
+    run = runs.Run(path=tmp_path, scenario="compare")
+    _record(run, "aaa111")
+    env_path = tmp_path / "environment.json"
+    recorded = json.loads(env_path.read_text())
+    recorded["git"]["sha"] = "somethingelse"  # the run started from other code
+    env_path.write_text(json.dumps(recorded))
+    _record(run, "aaa111")
+    after = json.loads(env_path.read_text())
+    assert after["git"]["sha"] == "somethingelse"  # the original record stands
+    assert after["resumed"][-1]["sha"] == runs.git_sha()
+
+
 def test_resume_with_different_targets_is_refused(tmp_path):
     run = runs.Run(path=tmp_path, scenario="compare")
     _record(run, "aaa111")
