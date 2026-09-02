@@ -23,7 +23,13 @@ import tracemalloc
 
 import psycopg
 import pytest
-from egernia_core.query.copy_dsv import COPY_DSV_FALLBACKS, COPY_DSV_RESULTS, result_stream
+from egernia_core.query.copy_dsv import (
+    COPY_DSV_FALLBACKS,
+    COPY_DSV_RESULTS,
+    COPY_VOTABLE_FALLBACKS,
+    COPY_VOTABLE_RESULTS,
+    result_stream,
+)
 from egernia_core.query.results import RowLimiter, columns_from_cursor, stream_dsv
 
 pytestmark = pytest.mark.component
@@ -109,17 +115,51 @@ def test_dsv_takes_the_server_side_path(conn, fmt_key):
     assert _counter(COPY_DSV_RESULTS) == before + 1
 
 
-@pytest.mark.parametrize("fmt_key", ["votable", "json"])
-def test_other_formats_are_untouched(conn, fmt_key):
-    """This package is DSV only. A VOTable request must not even be considered
-    for COPY, and so must not be counted as a fallback either."""
-    before = _counter(COPY_DSV_RESULTS), _counter(COPY_DSV_FALLBACKS, reason="unknown_type")
-    body, rows = _served(conn, ROWS_SQL % 3, fmt_key, 100)
+def test_votable_takes_its_own_server_side_path(conn):
+    """VOTable is served by COPY too, and counted under its own name -- not
+    under DSV's, whose counters a dashboard reads as DSV."""
+    before = _counter(COPY_DSV_RESULTS), _counter(COPY_VOTABLE_RESULTS)
+    body, rows = _served(conn, ROWS_SQL % 3, "votable", 100)
+    assert rows.count == 3
+    assert body.count(b"<TR>") == 3
+    assert (_counter(COPY_DSV_RESULTS), _counter(COPY_VOTABLE_RESULTS)) == (
+        before[0],
+        before[1] + 1,
+    )
+
+
+def test_other_formats_are_untouched(conn):
+    """JSON, Parquet and Arrow stay with the Python writers. A JSON request
+    must not even be considered for COPY, and so must not be counted as a
+    fallback either."""
+    counters = (COPY_DSV_RESULTS, COPY_VOTABLE_RESULTS)
+    before = [_counter(c) for c in counters] + [
+        _counter(COPY_DSV_FALLBACKS, reason="unknown_type"),
+        _counter(COPY_VOTABLE_FALLBACKS, reason="unknown_type"),
+    ]
+    body, rows = _served(conn, ROWS_SQL % 3, "json", 100)
     assert rows.count == 3
     assert body
-    assert (
-        _counter(COPY_DSV_RESULTS),
+    assert [_counter(c) for c in counters] + [
         _counter(COPY_DSV_FALLBACKS, reason="unknown_type"),
+        _counter(COPY_VOTABLE_FALLBACKS, reason="unknown_type"),
+    ] == before
+
+
+def test_the_switch_puts_votable_back_on_the_writer(conn):
+    """`TAP_COPY_VOTABLE=false`: same bytes, other path, nothing counted."""
+    from egernia_core.config import settings
+
+    before = _counter(COPY_VOTABLE_RESULTS), _counter(COPY_VOTABLE_FALLBACKS, reason="unknown_type")
+    object.__setattr__(settings, "copy_votable", False)  # frozen dataclass
+    try:
+        body, rows = _served(conn, ROWS_SQL % 3, "votable", 100)
+    finally:
+        object.__setattr__(settings, "copy_votable", True)
+    assert rows.count == 3 and body.count(b"<TR>") == 3
+    assert (
+        _counter(COPY_VOTABLE_RESULTS),
+        _counter(COPY_VOTABLE_FALLBACKS, reason="unknown_type"),
     ) == before
 
 
@@ -135,6 +175,14 @@ def test_an_undecidable_result_falls_back_and_is_counted(conn):
     assert rows.count == 1
     # and it is the writer's bytes, hex-encoded the way `_plain` does it
     assert body.splitlines()[1] == b"1,0001"
+
+
+def test_an_undecidable_votable_falls_back_and_is_counted(conn):
+    before = _counter(COPY_VOTABLE_FALLBACKS, reason="unknown_type")
+    body, rows = _served(conn, "SELECT 1::int4 AS n, '\\x0001'::bytea AS b", "votable", 100)
+    assert _counter(COPY_VOTABLE_FALLBACKS, reason="unknown_type") == before + 1
+    assert rows.count == 1
+    assert b"<TR><TD>1</TD><TD>0001</TD></TR>" in body
 
 
 # --- streaming and backpressure --------------------------------------------

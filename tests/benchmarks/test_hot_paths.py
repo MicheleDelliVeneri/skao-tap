@@ -21,13 +21,16 @@ pytest.importorskip("pytest_benchmark", reason="benchmarks need pytest-benchmark
 
 from egernia_core import db as db_mod
 from egernia_core.query.adql import adql_to_postgresql, touched_tables, translate
-from egernia_core.query.copy_dsv import CopiedRows, header
+from egernia_core.query.copy_dsv import CopiedRows, header, unescape
 from egernia_core.query.results import (
     ColumnMeta,
     RowLimiter,
     columns_from_cursor,
     stream,
     stream_dsv,
+    stream_votable,
+    votable_head,
+    votable_tail,
 )
 from queryparser.adql import ADQLQueryTranslator
 
@@ -132,8 +135,27 @@ def test_benchmark_adql_translation_single_pass(benchmark):
 
 
 def test_benchmark_votable_serialization(benchmark):
+    """The VOTable writer: the "before" of the server-side VOTable path."""
     body = benchmark(_serialize, "votable")
     assert body.startswith(b"<?xml")
+    assert body.count(b"<TR>") == len(ROWS)
+
+
+def _collect_copied_votable() -> bytes:
+    """The app-side half of the VOTable COPY path: envelope, blocks, un-escape."""
+    rows = CopiedRows(len(ROWS))
+    return (
+        votable_head(COLUMNS)
+        + b"".join(unescape(chunk) for chunk in rows.chunks(iter(_VOTABLE_BLOCKS)))
+        + votable_tail(rows.overflowed)
+    )
+
+
+def test_benchmark_votable_serialization_by_the_server(benchmark):
+    """As `test_benchmark_dsv_serialization_by_the_server`, for VOTable: the
+    cost of receiving COPY's `<TR>` rows, counting them, and un-escaping the
+    text format's escapes -- which this corpus, like ObsCore, has none of."""
+    body = benchmark(_collect_copied_votable)
     assert body.count(b"<TR>") == len(ROWS)
 
 
@@ -391,6 +413,19 @@ def _copy_blocks(columns, rows) -> tuple[bytes, ...]:
 # The microbenchmark corpus as COPY would deliver it, rendered once at import
 # so that the benchmark times receiving the bytes rather than producing them.
 _SERIALIZE_BLOCKS = _copy_blocks(COLUMNS, ROWS)
+
+
+def _votable_blocks(columns, rows) -> tuple[bytes, ...]:
+    """`rows` as `COPY ... FORMAT text` would deliver the `<TR>` rows: one block
+    per row, `stream_votable`'s bytes, which on this corpus need no escaping."""
+    blocks = []
+    for row in rows:
+        body = b"".join(stream_votable(columns, RowLimiter(iter([row]), 1)))
+        blocks.append(body.split(b"<TABLEDATA>\n", 1)[1].split(b"</TABLEDATA>", 1)[0])
+    return tuple(blocks)
+
+
+_VOTABLE_BLOCKS = _votable_blocks(COLUMNS, ROWS)
 
 
 _DESCRIPTIONS = {

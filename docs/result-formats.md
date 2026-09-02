@@ -70,10 +70,10 @@ times the cheapest, and that is the cost of rendering numbers as decimal
 digits — unavoidable in a text format, and the reason a bulk transfer should
 not be one.
 
-That table prices the **Python writers**, which is still what serves VOTable,
-JSON, Parquet and Arrow. It is no longer what serves csv and tsv: see below.
+That table prices the **Python writers**, which is still what serves JSON,
+Parquet and Arrow. It is no longer what serves csv, tsv or votable: see below.
 
-### csv and tsv are written by PostgreSQL
+### csv, tsv and votable rows are written by PostgreSQL
 
 DSV responses are produced by `COPY (<query>) TO STDOUT WITH (FORMAT csv)` and
 handed to the socket as the server wrote them, so for those two formats neither
@@ -100,21 +100,34 @@ Two consequences worth knowing:
   Nothing else changes: the bytes are the same either way, which is the property
   `tests/component/test_copy_dsv_differential.py` exists to hold.
 
-None of this changes the advice above. csv and tsv are cheaper to *serve* than
-they were; they are still the widest bytes on the wire, and a bulk transfer
-should still be Parquet or Arrow.
+**VOTable takes the same route.** It is TAP's default format, and its writer
+was the most expensive of the text formats: 4.79 ms per 1,000 rows of the
+microbenchmark corpus, against 3.75 ms for csv. The projection folds every row
+into one text column holding `<TR><TD>…</TD></TR>` — cells rendered by the
+same per-type expressions as DSV, `&`/`<`/`>` escaped in the writer's order,
+NULL as `<TD/>` — and `COPY … TO STDOUT WITH (FORMAT text)` streams it. The
+envelope (FIELDs before the rows, the OVERFLOW INFO after them) stays in
+Python, one call per response. Text format is the one COPY output that never
+quotes, but it escapes backslash, tab, CR and LF; each received chunk is
+un-escaped by a C-level scan that does nothing when the chunk has no backslash,
+which ObsCore text never does. Receiving a VOTable body this way costs the API
+0.20 ms per 1,000 rows instead of 4.79 (24×); on one host with both sides
+charged, 20,000 ObsCore rows go from 28.81 to 17.66 µs/row (1.63×). End to
+end, on a 10,000-row ObsCore result (tap-compare's Q11 shape) with API,
+database and generator sharing eight cores, VOTable at eight concurrent
+clients goes from 5.59 to 7.99 requests/s (1.43×, p50 1431 → 1006 ms) and
+lands within 6% of csv; at one client the request is bound by the query and
+nothing changes.
+`tap_copy_votable_results_total` and `tap_copy_votable_fallbacks_total` are its
+counters, `TAP_COPY_VOTABLE=false` its switch, and
+`tests/component/test_copy_votable_differential.py` holds its bytes to
+`stream_votable`'s. Neither DSV decline applies to it: a lone NULL is
+`<TR><TD/></TR>` on both paths, and repeated column names render positionally
+under FIELDs taken from the same cursor description.
 
-**Which mix this was chosen against**, since that decides what it is worth: the
-profile that identified the writers as 37.7% of a request was a CSV profile,
-because the load generator that produced it sent CSV. That generator has since
-been removed, and no measurement of real traffic exists in this repository — so
-the honest statement is that the *deployed* format mix is unknown, and VOTable
-is the TAP default that most VO clients receive. This change is scoped so that
-does not matter: it touches csv and tsv only, and a VOTable-heavy deployment
-simply never reaches it. If VOTable turns out to dominate, the same cost is
-still there and still worth taking, but by a different route — a `COPY` of the
-row tuples wrapped in TABLEDATA, or an Arrow-backed writer — and that is a
-separate argument, not an extension of this one.
+None of this changes the advice above. csv, tsv and votable are cheaper to
+*serve* than they were; they are still the widest bytes on the wire, and a bulk
+transfer should still be Parquet or Arrow.
 
 The `make benchmark-serialize` and `make benchmark-result-formats` harnesses
 that produced these figures have been removed with the rest of the cluster

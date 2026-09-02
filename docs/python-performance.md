@@ -109,6 +109,15 @@ around commit `29b8aa6` (2026-08) unless a run directory says otherwise.
   On a corpus of integral floats the advantage grows to 3.02x. Receiving the
   COPY bytes costs the API 0.134 µs/row (`tests/benchmarks/test_hot_paths.py`);
   the raw divergence count between the two writers was eleven, four in float8.
+- **COPY VOTable** (same module, `votable_projection`; same reproduction):
+  Python writer 28.81 µs/row, `COPY` + folded projection 17.66 µs/row (1.63x)
+  on 20,000 seeded ObsCore rows, 12 columns. App-side, receiving and
+  un-escaping the `<TR>` rows costs 0.20 ms per 1,000 rows against the writer's
+  4.79 ms (`tests/benchmarks/test_hot_paths.py`). Two pre-existing DSV
+  divergences were found by the VOTable probes and fixed for both formats:
+  `time` values with trailing-zero fractions ('03:04:05.5' vs Python's
+  '03:04:05.500000') and all-blank `char(n)` values, which `nullif(col, '')`
+  turned into NULL because `''::bpchar` compares equal to blanks.
 - **Probes** (`egernia_api/main.py`): with liveness pointed at
   `/tap/availability`, the API was SIGKILLed twice by its own liveness probe
   at an offered rate well inside its closed-loop capacity.

@@ -445,5 +445,10 @@ def test_the_copy_dsv_counters_reach_the_served_registry():
     from prometheus_client import generate_latest
 
     body = generate_latest(REGISTRY).decode()
-    for name in ("tap_copy_dsv_results_total", "tap_copy_dsv_fallbacks_total"):
+    for name in (
+        "tap_copy_dsv_results_total",
+        "tap_copy_dsv_fallbacks_total",
+        "tap_copy_votable_results_total",
+        "tap_copy_votable_fallbacks_total",
+    ):
         assert name in body, f"{name} is absent from what /metrics renders"

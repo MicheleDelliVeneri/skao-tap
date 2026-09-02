@@ -141,3 +141,98 @@ def test_the_header_is_the_writers_header():
 
     assert header(columns, ",") == b'plain,"has,comma","has""quote"\n'
     assert header(columns, "\t") == b'plain\thas,comma\t"has""quote"\n'
+
+
+# --- the VOTable path -------------------------------------------------------
+
+
+def test_the_votable_projection_is_one_row_per_output_column():
+    from egernia_core.query.copy_dsv import votable_projection
+
+    sql = votable_projection(_description(23, 25), "SELECT 1, 'x'")
+
+    assert sql.startswith("SELECT '<TR>' || ")
+    assert sql.count("coalesce('<TD>' || ") == 2, "one guarded cell per column"
+    assert "'<TD/>'" in sql, "NULL has to spell itself the writer's way"
+    assert sql.rstrip().endswith("AS src(c0, c1)")
+
+
+def test_the_votable_projection_declines_unknown_types_like_dsv():
+    from egernia_core.query.copy_dsv import votable_projection
+
+    with pytest.raises(Undecidable) as raised:
+        votable_projection(_description(25, 17), "SELECT 1")
+    assert raised.value.reason == "unknown_type"
+
+
+@pytest.mark.parametrize(
+    ("escaped", "raw"),
+    [
+        (b"<TR><TD>plain</TD></TR>\n", b"<TR><TD>plain</TD></TR>\n"),
+        (b"a\\\\b", b"a\\b"),
+        (b"a\\tb\\nc\\rd", b"a\tb\nc\rd"),
+        (b"\\b\\f\\v", b"\x08\x0c\x0b"),
+        (b"\\\\n", b"\\n"),  # an escaped backslash followed by a literal n
+    ],
+)
+def test_unescape_undoes_copy_text_escaping(escaped, raw):
+    from egernia_core.query.copy_dsv import unescape
+
+    assert unescape(escaped) == raw
+
+
+def test_unescape_returns_a_chunk_with_no_escape_untouched():
+    """The common ObsCore chunk: the cost has to be a memchr, not a copy."""
+    from egernia_core.query.copy_dsv import unescape
+
+    chunk = b"<TR><TD>ivo://skao.int/obs</TD><TD>1.5</TD></TR>\n" * 1000
+    assert unescape(chunk) is chunk
+
+
+def test_a_leading_job_tag_leads_the_copy_statement_too():
+    """The executor's `/* tap_job_<id> */` prefix is what the abort watchdog
+    looks for in `pg_stat_activity.query`, which is truncated at 1 KiB. Buried
+    after the projection's float CASEs it would be cut off, so it is lifted
+    to the front of the statement that runs -- for both formats, and for the
+    LIMIT 0 probe."""
+    from egernia_core.query.copy_dsv import _split_tag, stream_copy_dsv, stream_copy_votable
+
+    assert _split_tag("/* tap_job_x */ SELECT 1") == ("/* tap_job_x */ ", "SELECT 1")
+    assert _split_tag("SELECT 1 /* rid=abc */") == ("", "SELECT 1 /* rid=abc */")
+
+    statements = []
+
+    class _Cursor:
+        def copy(self, statement):
+            statements.append(statement)
+            return _NoRows()
+
+    columns = [ColumnMeta("a", kind="float64"), ColumnMeta("b", kind="str")]
+    for start in (
+        lambda: stream_copy_votable(
+            _Cursor(), "/* tap_job_x */ SELECT 1", columns, _description(701, 25), 10
+        ),
+        lambda: stream_copy_dsv(
+            _Cursor(), "/* tap_job_x */ SELECT 1", columns, _description(701, 25), ",", 10
+        ),
+    ):
+        chunks, _rows = start()
+        b"".join(chunks)
+    assert [s.split("(", 1)[0] for s in statements] == [
+        "/* tap_job_x */ COPY ",
+        "/* tap_job_x */ COPY ",
+    ]
+    assert all("/* tap_job_x */ SELECT" not in s for s in statements), (
+        "the tag was copied, not moved"
+    )
+
+
+class _NoRows:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __iter__(self):
+        return iter(())

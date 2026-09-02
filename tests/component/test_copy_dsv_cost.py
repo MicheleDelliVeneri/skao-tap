@@ -30,8 +30,21 @@ import time
 
 import psycopg
 import pytest
-from egernia_core.query.copy_dsv import CopiedRows, header, projection
-from egernia_core.query.results import RowLimiter, columns_from_cursor, stream_dsv
+from egernia_core.query.copy_dsv import (
+    CopiedRows,
+    header,
+    projection,
+    unescape,
+    votable_projection,
+)
+from egernia_core.query.results import (
+    RowLimiter,
+    columns_from_cursor,
+    stream_dsv,
+    stream_votable,
+    votable_head,
+    votable_tail,
+)
 
 pytestmark = pytest.mark.component
 
@@ -56,7 +69,12 @@ COLUMNS = [
 
 
 def _sql(limit: int) -> str:
-    return f"SELECT {', '.join(COLUMNS)} FROM ivoa.obscore LIMIT {limit}"
+    # From the sample `row_count` materialised, in a fixed order: the two paths
+    # are compared byte for byte, so they have to see the same rows in the
+    # same order, which `LIMIT` over the ObsCore view's joins does not promise
+    # -- the plan differs between a SELECT and the same query under COPY. A
+    # 20,000-row sort costs both paths the same few milliseconds.
+    return f"SELECT {', '.join(COLUMNS)} FROM cost_sample ORDER BY obs_publisher_did LIMIT {limit}"
 
 
 def _time_writer(conn, sql: str) -> tuple[float, bytes]:
@@ -83,6 +101,34 @@ def _time_copy(conn, sql: str, *, project: bool) -> tuple[float, bytes]:
         cur.copy(f"COPY ({statement}) TO STDOUT WITH (FORMAT csv, DELIMITER ',')") as copy,
     ):
         body = header(columns, ",") + b"".join(rows.chunks(copy))
+    return time.perf_counter() - started, body
+
+
+def _time_votable_writer(conn, sql: str) -> tuple[float, bytes]:
+    """psycopg row conversion plus `stream_votable` — VOTable's old path."""
+    started = time.perf_counter()
+    with conn.cursor() as cur:
+        cur.execute(sql)
+        columns = columns_from_cursor(cur.description, {})
+        rows = RowLimiter(cur.fetchall(), maxrec=10_000_000)
+        body = b"".join(stream_votable(columns, rows))
+    return time.perf_counter() - started, body
+
+
+def _time_votable_copy(conn, sql: str) -> tuple[float, bytes]:
+    """The server path for VOTable: envelope here, `<TR>` rows by COPY."""
+    started = time.perf_counter()
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM ({sql}) AS probe LIMIT 0")
+        columns = columns_from_cursor(cur.description, {})
+        statement = votable_projection(cur.description, sql)
+    rows = CopiedRows(10_000_000)
+    with conn.cursor() as cur, cur.copy(f"COPY ({statement}) TO STDOUT WITH (FORMAT text)") as copy:
+        body = (
+            votable_head(columns)
+            + b"".join(unescape(chunk) for chunk in rows.chunks(copy))
+            + votable_tail(rows.overflowed)
+        )
     return time.perf_counter() - started, body
 
 
@@ -132,7 +178,12 @@ def row_count(conn):
             f"ivoa.obscore holds {n} rows: too few to price a per-row cost. "
             "Seed it first (python -m egernia_dataset.seed)."
         )
-    return min(n, 20_000)
+    n = min(n, 20_000)
+    conn.execute(
+        f"CREATE TEMP TABLE cost_sample AS SELECT obs_publisher_did, {', '.join(COLUMNS)}"
+        f" FROM ivoa.obscore LIMIT {n}"
+    )
+    return n
 
 
 def test_price_the_paths(conn, row_count):
@@ -208,4 +259,25 @@ def test_price_the_worst_case_corpus(conn):
     assert projected_body == writer_body, (
         "the projection does not reproduce the writer's bytes on an "
         "integral-heavy corpus, so its cost here is not comparable"
+    )
+
+
+def test_price_the_votable_paths(conn, row_count):
+    """VOTable, the TAP default: `stream_votable` against the folded projection."""
+    sql = _sql(row_count)
+
+    writer_s, writer_body = _best_of(_time_votable_writer, conn, sql)
+    copied_s, copied_body = _best_of(_time_votable_copy, conn, sql)
+
+    _report(
+        "SEEDED OBSCORE, VOTABLE",
+        row_count,
+        [("python writer (before)", writer_s), ("COPY + projection (after)", copied_s)],
+    )
+    print(f"\nrows: {row_count}, columns: {len(COLUMNS)}")
+    print(f"body bytes: writer {len(writer_body)}, projected {len(copied_body)}")
+
+    assert copied_body == writer_body, (
+        "the VOTable projection does not reproduce the writer's bytes here, so the "
+        "timings above compare a fast path against a wrong one"
     )

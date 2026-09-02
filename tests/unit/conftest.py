@@ -75,25 +75,28 @@ class FakeStreamCursor:
         yield from list(self._db.result_rows)
 
     def copy(self, statement):
-        """psycopg's `Copy`, enough of it for the server-side DSV path.
+        """psycopg's `Copy`, enough of it for the server-side result paths.
 
         One block per row, because that is what libpq does and what the row
-        accounting counts. Rendering with `csv.writer` is the faithful stand-in
-        rather than a shortcut: the COPY projection exists precisely to make
-        PostgreSQL emit what `csv.writer` emits, so a fake that agrees with the
-        writer is a fake that agrees with a correct server. Whether the real
-        server actually obliges is not a question a fake can answer, and
-        `tests/component/test_copy_dsv_differential.py` is where it is asked.
+        accounting counts. Rendering with the Python writers is the faithful
+        stand-in rather than a shortcut: the COPY projections exist precisely
+        to make PostgreSQL emit what `csv.writer` and `stream_votable` emit, so
+        a fake that agrees with the writer is a fake that agrees with a correct
+        server. Whether the real server actually obliges is not a question a
+        fake can answer, and `tests/component/test_copy_*_differential.py` is
+        where it is asked.
         """
         self._db.statements.append(statement.strip())
         if self._db.result_error is not None:
             raise self._db.result_error
-        return _FakeCopy(self._db.result_rows)
+        return _FakeCopy(self._db.result_rows, self._db.result_description, statement)
 
 
 class _FakeCopy:
-    def __init__(self, rows):
+    def __init__(self, rows, description, statement):
         self._rows = list(rows)
+        self._description = description
+        self._votable = "FORMAT text" in statement
 
     def __enter__(self):
         return self
@@ -102,6 +105,16 @@ class _FakeCopy:
         return False
 
     def __iter__(self):
+        from egernia_core.query.results import RowLimiter, columns_from_cursor, stream_votable
+
+        if self._votable:
+            # the `<TR>` rows, escaped the way COPY's text format escapes them
+            columns = columns_from_cursor(self._description or (), {})
+            for row in self._rows:
+                body = b"".join(stream_votable(columns, RowLimiter([row], 1)))
+                tr = body.split(b"<TABLEDATA>\n", 1)[1].split(b"</TABLEDATA>", 1)[0]
+                yield tr[:-1].replace(b"\\", b"\\\\").replace(b"\n", b"\\n") + b"\n"
+            return
         for row in self._rows:
             out = io.StringIO()
             csv.writer(out, lineterminator="\n").writerow(row)

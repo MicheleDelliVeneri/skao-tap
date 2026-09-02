@@ -1,4 +1,4 @@
-"""DSV written by PostgreSQL instead of by CPython.
+"""DSV and VOTable rows written by PostgreSQL instead of by CPython.
 
 `stream_dsv` is the single busiest frame in the service: `_csv.writer`'s
 quoting, plus psycopg materialising every row as a tuple of Python objects to
@@ -24,6 +24,17 @@ repeated column name, a single-column result — declines the whole result and t
 caller falls back to `stream_dsv`. `COPY_DSV_FALLBACKS` counts that with the
 reason, so a deployment can tell whether the fast path is the one it is actually
 taking, and `TAP_COPY_DSV=false` turns the path off if it ever needs to be.
+
+VOTable, TAP's default format, takes the same route: the projection folds each
+row into one text column holding `<TR><TD>…</TD></TR>`, and `COPY ... FORMAT
+text` streams it. The envelope — FIELDs before, the OVERFLOW INFO after — stays
+in Python, where it costs one call per response rather than one per row. Text
+format is the one COPY output that never quotes, but it does escape backslash,
+tab, CR, LF and the three other C escapes, so each received chunk is passed
+through `unescape` — a C-level scan that does nothing on the common chunk with
+no backslash in it. `TAP_COPY_VOTABLE=false` and `COPY_VOTABLE_FALLBACKS` are
+that path's switch and counter; `tests/component/test_copy_votable_differential.py`
+holds its bytes to `stream_votable`'s.
 """
 
 from __future__ import annotations
@@ -31,6 +42,7 @@ from __future__ import annotations
 import contextlib
 import csv
 import io
+import re
 from collections.abc import Iterator
 
 from prometheus_client import Counter
@@ -38,7 +50,7 @@ from prometheus_client import Counter
 from ..config import settings
 from ..db import StreamedRows
 from ..observability import REGISTRY
-from .results import RowLimiter, columns_from_cursor, stream
+from .results import RowLimiter, columns_from_cursor, stream, votable_head, votable_tail
 
 COPY_DSV_FALLBACKS = Counter(
     "tap_copy_dsv_fallbacks_total",
@@ -51,6 +63,17 @@ COPY_DSV_RESULTS = Counter(
     "DSV results served by the server-side COPY path",
     registry=REGISTRY,
 )
+COPY_VOTABLE_FALLBACKS = Counter(
+    "tap_copy_votable_fallbacks_total",
+    "VOTable results served by the Python writer because the COPY path declined them",
+    ["reason"],
+    registry=REGISTRY,
+)
+COPY_VOTABLE_RESULTS = Counter(
+    "tap_copy_votable_results_total",
+    "VOTable results served by the server-side COPY path",
+    registry=REGISTRY,
+)
 
 
 # --- the projection ---------------------------------------------------------
@@ -60,8 +83,8 @@ COPY_DSV_RESULTS = Counter(
 # that is merely probably right is worse than the writer, because its bytes
 # reach clients unchecked.
 #
-# Text, the integers, `date` and `time` need no expression at all — `COPY`
-# already agrees with them byte for byte, and the cheapest formatting is none.
+# The integers and `date` need no expression at all — `COPY` already agrees
+# with them byte for byte, and the cheapest formatting is none.
 
 _PASSTHROUGH = frozenset(
     {
@@ -69,14 +92,29 @@ _PASSTHROUGH = frozenset(
         21,  # int2
         23,  # int4
         1082,  # date
-        1083,  # time
     }
 )
 
-_TEXT = (18, 19, 25, 1042, 1043)  # char, name, text, bpchar, varchar
+_TEXT = (18, 19, 25, 1043)  # char, name, text, varchar
 
 
-def _text(col: str) -> str:
+def _bpchar(text_expression):
+    """char(n) through its output function, so the padding survives.
+
+    psycopg hands the writer the padded value ('bp  ' for `'bp'::char(4)`),
+    and COPY's own output of a bpchar keeps it too — but any text function
+    or cast applied to a bpchar strips the trailing blanks first, and
+    `''::bpchar` compares equal to blanks. `format('%s')` renders through the
+    output function, and the text expression then sees what psycopg saw. It
+    renders NULL as '' too, hence the guard: a NULL cell is `<TD/>`, not
+    `<TD></TD>`.
+    """
+    return lambda col: text_expression(
+        f"(CASE WHEN {col} IS NULL THEN NULL ELSE format('%s', {col}) END)"
+    )
+
+
+def _text_dsv(col: str) -> str:
     """Text with the empty string folded into NULL, as the writer sees it.
 
     COPY writes an empty string as `""` and a NULL as nothing, keeping them
@@ -86,6 +124,17 @@ def _text(col: str) -> str:
     losing it is what byte equality means here.
     """
     return f"nullif({col}, '')"
+
+
+def _text_votable(col: str) -> str:
+    """`_xml_escape`: the three metacharacters, `&` first so it is not doubled.
+
+    An empty string stays an empty string here — `<TD></TD>`, which is what the
+    writer emits for it — where the DSV expression folds it into NULL.
+    `replace` returns its input untouched when there is nothing to replace,
+    so the three calls cost a scan each on ObsCore text, not a copy.
+    """
+    return f"replace(replace(replace({col}, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')"
 
 
 def _float(col: str) -> str:
@@ -141,17 +190,31 @@ def _numeric(col: str) -> str:
     return _float(f"({col}::float8)")
 
 
+def _fraction(col: str) -> str:
+    """`.ffffff` when the microseconds are not zero, else nothing.
+
+    Python emits six fractional digits or none at all, never a trailing zero
+    group; PostgreSQL's `::text` trims trailing zeros ('03:04:05.5'), so
+    neither `time` nor `timestamp` can be passed through.
+    """
+    return f"""CASE WHEN to_char({col}, 'US') = '000000'
+            THEN '' ELSE '.' || to_char({col}, 'US') END"""
+
+
+def _time(col: str) -> str:
+    """`time.isoformat()`: HH:MM:SS, then the fraction as Python prints it."""
+    return f"""CASE WHEN {col} IS NULL THEN NULL ELSE
+        to_char({col}, 'HH24:MI:SS') || {_fraction(col)}
+    END"""
+
+
 def _timestamp(col: str, offset: str = "") -> str:
     """`datetime.isoformat()`: 'T' between date and time, fraction only if any.
 
     PostgreSQL's own text output uses a space, so this cannot be `::text`.
-    Python emits six fractional digits or none at all, never a trailing zero
-    group, which is the branch.
     """
-    fraction = f"""CASE WHEN to_char({col}, 'US') = '000000'
-            THEN '' ELSE '.' || to_char({col}, 'US') END"""
     return f"""CASE WHEN {col} IS NULL THEN NULL ELSE
-        to_char({col}, 'YYYY-MM-DD"T"HH24:MI:SS') || {fraction}{offset}
+        to_char({col}, 'YYYY-MM-DD"T"HH24:MI:SS') || {_fraction(col)}{offset}
     END"""
 
 
@@ -165,20 +228,37 @@ def _timestamptz(col: str) -> str:
     return _timestamp(f"({col} AT TIME ZONE 'UTC')")
 
 
-_EXPRESSIONS = {
-    **dict.fromkeys(_TEXT, _text),
-    16: lambda col: (
-        # 'True'/'False' with capitals: `csv.writer` calls `str` on the Python
-        # bool, and PostgreSQL's own 't'/'f' is a third spelling again. The
-        # IS NULL branch is not decoration -- CASE WHEN col THEN ... ELSE
-        # renders NULL as 'False', turning absent data into data.
-        f"CASE WHEN {col} IS NULL THEN NULL WHEN {col} THEN 'True' ELSE 'False' END"
-    ),
+def _bool(true: str, false: str):
+    # PostgreSQL's own 't'/'f' is a third spelling again: `csv.writer` calls
+    # `str` on the Python bool ('True'), VOTable spells it in lower case. The
+    # IS NULL branch is not decoration -- CASE WHEN col THEN ... ELSE renders
+    # NULL as 'False', turning absent data into data.
+    return lambda col: (
+        f"CASE WHEN {col} IS NULL THEN NULL WHEN {col} THEN '{true}' ELSE '{false}' END"
+    )
+
+
+# The two writers agree on every number and every timestamp -- both call `str`
+# or `isoformat` -- and differ only on text and bool.
+_SHARED = {
     700: _float4,
     701: _float,
     1700: _numeric,
+    1083: _time,
     1114: _timestamp,
     1184: _timestamptz,
+}
+_EXPRESSIONS = {
+    **_SHARED,
+    **dict.fromkeys(_TEXT, _text_dsv),
+    1042: _bpchar(_text_dsv),
+    16: _bool("True", "False"),
+}
+_VOTABLE_EXPRESSIONS = {
+    **_SHARED,
+    **dict.fromkeys(_TEXT, _text_votable),
+    1042: _bpchar(_text_votable),
+    16: _bool("true", "false"),
 }
 
 
@@ -195,6 +275,24 @@ class Undecidable(Exception):
         self.reason = reason
 
 
+def _cells(description, expressions: dict) -> tuple[list[str], list[str]]:
+    """(aliases, one expression per column), or `Undecidable` for a type with
+    no expression."""
+    unknown = sorted({e.type_code for e in description} - _PASSTHROUGH - set(expressions))
+    if unknown:
+        raise Undecidable("unknown_type", f"no COPY rendering for type OIDs {unknown}")
+    aliases = [f"c{i}" for i in range(len(description))]
+    cells = [
+        expressions[entry.type_code](alias) if entry.type_code in expressions else alias
+        for entry, alias in zip(description, aliases, strict=True)
+    ]
+    return aliases, cells
+
+
+def _from(inner_sql: str, aliases: list[str]) -> str:
+    return f"FROM ({inner_sql.rstrip().rstrip(';')}) AS src({', '.join(aliases)})"
+
+
 def projection(description, inner_sql: str) -> str:
     """`inner_sql` re-projected so `COPY ... FORMAT csv` matches `stream_dsv`.
 
@@ -205,17 +303,38 @@ def projection(description, inner_sql: str) -> str:
 
     Raises `Undecidable` for a type with no expression.
     """
-    unknown = sorted({e.type_code for e in description} - _PASSTHROUGH - set(_EXPRESSIONS))
-    if unknown:
-        raise Undecidable("unknown_type", f"no COPY rendering for type OIDs {unknown}")
+    aliases, cells = _cells(description, _EXPRESSIONS)
+    return f"SELECT {', '.join(cells)} {_from(inner_sql, aliases)}"
 
-    aliases = [f"c{i}" for i in range(len(description))]
-    cells = [
-        _EXPRESSIONS[entry.type_code](alias) if entry.type_code in _EXPRESSIONS else alias
-        for entry, alias in zip(description, aliases, strict=True)
-    ]
-    inner = inner_sql.rstrip().rstrip(";")
-    return f"SELECT {', '.join(cells)} FROM ({inner}) AS src({', '.join(aliases)})"
+
+def votable_projection(description, inner_sql: str) -> str:
+    """`inner_sql` folded into one text column per row: `stream_votable`'s `<TR>`.
+
+    Every cell is `<TD>text</TD>` or, for NULL, `<TD/>` -- `coalesce` over the
+    concatenation is what turns a NULL cell into the second spelling without
+    a CASE per cell. The row is never NULL itself, so COPY's NULL marker never
+    appears; the newline after `</TR>` is COPY's own row terminator.
+    """
+    aliases, cells = _cells(description, _VOTABLE_EXPRESSIONS)
+    tds = " || ".join(f"coalesce('<TD>' || ({cell})::text || '</TD>', '<TD/>')" for cell in cells)
+    return f"SELECT '<TR>' || {tds} || '</TR>' {_from(inner_sql, aliases)}"
+
+
+# The executor prefixes its statement with `/* tap_job_<id> */` so the abort
+# watchdog can find it in `pg_stat_activity.query`, which is truncated at
+# track_activity_query_size (1 KiB by default). Wrapped inside a projection
+# whose float CASEs alone run past that, the tag would be cut off; so a
+# leading comment is lifted out of the inner query and put in front of the
+# statement that actually runs.
+_LEADING_COMMENT = re.compile(r"\s*(/\*.*?\*/)\s*", re.DOTALL)
+
+
+def _split_tag(sql: str) -> tuple[str, str]:
+    """(leading comment with a trailing space, or ''; the rest of `sql`)."""
+    match = _LEADING_COMMENT.match(sql)
+    if match is None:
+        return "", sql
+    return match.group(1) + " ", sql[match.end() :]
 
 
 # --- the stream -------------------------------------------------------------
@@ -300,17 +419,71 @@ def stream_copy_dsv(cur, inner_sql: str, columns, description, delimiter: str, m
         raise Undecidable("single_column", "a lone NULL renders differently in csv.writer")
     if len({c.name for c in columns}) != len(columns):
         raise Undecidable("duplicate_column", "the result has repeated column names")
-    projected = projection(description, inner_sql)
+    tag, body = _split_tag(inner_sql)
+    projected = projection(description, body)
     rows = CopiedRows(maxrec)
 
     def chunks() -> Iterator[bytes]:
         yield header(columns, delimiter)
         statement = (
-            f"COPY ({projected}) TO STDOUT WITH (FORMAT csv, DELIMITER {_delimiter(delimiter)})"
+            f"{tag}COPY ({projected}) TO STDOUT"
+            f" WITH (FORMAT csv, DELIMITER {_delimiter(delimiter)})"
         )
         with cur.copy(statement) as copy:
             yield from rows.chunks(copy)
         COPY_DSV_RESULTS.inc()
+
+    return chunks(), rows
+
+
+# COPY's text format writes backslash, the delimiter (tab) and the C escapes
+# `\b \f \n \r \t \v` as two-character escapes and everything else raw; those
+# seven are its whole output alphabet after a backslash, so the table is closed.
+_ESCAPES = {
+    b"\\": b"\\",
+    b"b": b"\b",
+    b"f": b"\f",
+    b"n": b"\n",
+    b"r": b"\r",
+    b"t": b"\t",
+    b"v": b"\v",
+}
+_ESCAPE = re.compile(rb"\\(.)")
+
+
+def unescape(chunk: bytes) -> bytes:
+    """A COPY text chunk as the raw bytes it stands for.
+
+    The `in` test is a C memchr and is the whole cost on ObsCore text, which
+    holds none of the escaped bytes. No escape straddles two chunks: a chunk
+    is whole rows -- `CopiedRows` coalesces libpq's one-row blocks -- and a row
+    ends in the literal newline COPY terminates it with, never a backslash.
+    """
+    if b"\\" not in chunk:
+        return chunk
+    return _ESCAPE.sub(lambda match: _ESCAPES[match.group(1)], chunk)
+
+
+def stream_copy_votable(cur, inner_sql: str, columns, description, maxrec: int):
+    """(chunk iterator, row accounting) for the server-side VOTable path.
+
+    Neither DSV decline applies. A lone NULL is `<TR><TD/></TR>` on both paths,
+    and repeated names are no worse than on the writer's path: the FIELDs are
+    written from the same cursor description either way, and the projection
+    renders positionally. Raises `Undecidable` (an unknown type) before
+    yielding anything, so the caller can still choose the Python writer.
+    """
+    tag, body = _split_tag(inner_sql)
+    projected = votable_projection(description, body)
+    rows = CopiedRows(maxrec)
+
+    def chunks() -> Iterator[bytes]:
+        yield votable_head(columns)
+        with cur.copy(f"{tag}COPY ({projected}) TO STDOUT WITH (FORMAT text)") as copy:
+            for chunk in rows.chunks(copy):
+                yield unescape(chunk)
+        yield votable_tail(rows.overflowed)
+        COPY_VOTABLE_RESULTS.inc()
 
     return chunks(), rows
 
@@ -338,14 +511,14 @@ def _describe(cur, sql: str, tap_meta: dict):
     price of this path: the COPY projection has to know the column types
     before the query runs, and only the server can say what they are.
     """
-    probe = sql.rstrip().rstrip(";")
-    cur.execute(f"SELECT * FROM ({probe}) AS probe LIMIT 0")
+    tag, body = _split_tag(sql.rstrip().rstrip(";"))
+    cur.execute(f"{tag}SELECT * FROM ({body}) AS probe LIMIT 0")
     return columns_from_cursor(cur.description, tap_meta), cur.description
 
 
 @contextlib.contextmanager
 def result_stream(cur, sql: str, tap_meta: dict, fmt_key: str, maxrec: int, chunk_rows: int):
-    """(chunks, row accounting) for `sql`, server-side when DSV allows it.
+    """(chunks, row accounting) for `sql`, server-side when the format allows it.
 
     Yields the same pair either way — an iterator of body bytes, and an object
     carrying `count`, `overflowed` and `status` — so callers do not branch on
@@ -357,13 +530,23 @@ def result_stream(cur, sql: str, tap_meta: dict, fmt_key: str, maxrec: int, chun
     to be closed even if the consumer walks away mid-download; the COPY path
     has nothing to close but is yielded the same way.
     """
-    delimiter = _DELIMITERS.get(fmt_key) if settings.copy_dsv else None
-    if delimiter is not None:
+    server = None
+    if fmt_key in _DELIMITERS and settings.copy_dsv:
+        server, fallbacks = (
+            lambda c, d: stream_copy_dsv(cur, sql, c, d, _DELIMITERS[fmt_key], maxrec),
+            COPY_DSV_FALLBACKS,
+        )
+    elif fmt_key == "votable" and settings.copy_votable:
+        server, fallbacks = (
+            lambda c, d: stream_copy_votable(cur, sql, c, d, maxrec),
+            COPY_VOTABLE_FALLBACKS,
+        )
+    if server is not None:
         try:
             columns, description = _describe(cur, sql, tap_meta)
-            chunks, rows = stream_copy_dsv(cur, sql, columns, description, delimiter, maxrec)
+            chunks, rows = server(columns, description)
         except Undecidable as exc:
-            COPY_DSV_FALLBACKS.labels(reason=exc.reason).inc()
+            fallbacks.labels(reason=exc.reason).inc()
         else:
             yield chunks, rows
             return
