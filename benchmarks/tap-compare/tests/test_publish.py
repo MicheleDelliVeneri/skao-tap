@@ -59,6 +59,28 @@ def test_single_repetition_never_claims_a_difference():
     assert publish.verdict(cells, *_keys()) == "tie"
 
 
+def test_an_erroring_target_cannot_win_on_its_inflated_throughput():
+    rows = _rows([100, 102, 98], [50, 51, 49])
+    rows[0]["error_fraction"] = 0.5  # the "faster" egernia numbers are error responses
+    cells = publish.aggregate(rows)
+    assert publish.verdict(cells, *_keys()) == "dachs-local"
+
+
+def test_both_targets_erroring_is_invalid():
+    rows = _rows([100, 102, 98], [50, 51, 49])
+    rows[0]["error_fraction"] = 0.5
+    rows[1]["error_fraction"] = 0.5
+    cells = publish.aggregate(rows)
+    assert publish.verdict(cells, *_keys()) == "invalid"
+
+
+def test_tripped_generator_guard_declares_no_winner():
+    rows = _rows([100, 102, 98], [50, 51, 49])
+    rows[0]["generator_guard_ok"] = False
+    cells = publish.aggregate(rows)
+    assert publish.verdict(cells, *_keys()) == "invalid"
+
+
 def test_render_writes_the_full_report(tmp_path):
     run_dir = tmp_path / "20260901T000000Z-abc12345-tap-compare"
     run_dir.mkdir()

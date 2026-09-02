@@ -84,6 +84,43 @@ def _saturated(summaries: list[dict], scenario: dict) -> bool:
     return False
 
 
+def _record_provenance(
+    run: runs.Run,
+    target: dict,
+    cfg: dict,
+    corpus_sha: str,
+    scenario_name: str,
+    scenario: dict,
+    entries: list[corpus_mod.CorpusEntry],
+) -> None:
+    """Write environment.json and corpus.json once, at the start of a run.
+
+    A resumed run keeps the provenance it started with: overwriting it would
+    silently re-describe rungs that were measured under the original record.
+    Resuming with a different corpus is refused — those cells would not be
+    comparable with the ones already on disk.
+    """
+    env_path = run.path / "environment.json"
+    if env_path.exists():
+        recorded = json.loads(env_path.read_text())["corpus_sha256"]
+        if recorded != corpus_sha:
+            raise SystemExit(
+                f"cannot resume {run.path.name}: it recorded corpus "
+                f"{recorded[:12]}… but the current corpus is {corpus_sha[:12]}…"
+            )
+        return
+    run.write_json(
+        "environment.json",
+        runs.environment(
+            target,
+            seed=cfg["corpus"]["seed"],
+            corpus_sha256=corpus_sha,
+            extras={"scenario": {scenario_name: scenario}},
+        ),
+    )
+    run.write_json("corpus.json", [e.as_dict() for e in entries])
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     cfg = _load_yaml(SUITE / "config" / "scenarios.yaml")
     scenario = cfg["scenarios"][args.scenario]
@@ -101,16 +138,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     mix = {k: float(v) for k, v in cfg["mix"].items()}
 
     run = runs.new_run(f"{args.scenario}-{target.name}", resume=args.resume)
-    run.write_json(
-        "environment.json",
-        runs.environment(
-            target.as_dict(),
-            seed=cfg["corpus"]["seed"],
-            corpus_sha256=corpus_sha,
-            extras={"scenario": {args.scenario: scenario}},
-        ),
-    )
-    run.write_json("corpus.json", [e.as_dict() for e in entries])
+    _record_provenance(run, target.as_dict(), cfg, corpus_sha, args.scenario, scenario, entries)
 
     classes = sorted({e.query_class for e in entries}) if scenario.get("per_class") else [None]
     guard_max = cfg["guards"]["generator_cpu_max_fraction"]
@@ -242,16 +270,15 @@ def cmd_compare(args: argparse.Namespace) -> int:
     mix = {k: float(v) for k, v in cfg["mix"].items()}
 
     run = runs.new_run("tap-compare", resume=args.resume)
-    run.write_json(
-        "environment.json",
-        runs.environment(
-            {name: t.as_dict() for name, t in chosen.items()},
-            seed=cfg["corpus"]["seed"],
-            corpus_sha256=corpus_sha,
-            extras={"scenario": {args.scenario: scenario}},
-        ),
+    _record_provenance(
+        run,
+        {name: t.as_dict() for name, t in chosen.items()},
+        cfg,
+        corpus_sha,
+        args.scenario,
+        scenario,
+        entries,
     )
-    run.write_json("corpus.json", [e.as_dict() for e in entries])
 
     if run.done("gates"):
         gates = json.loads((run.path / "gates.json").read_text())

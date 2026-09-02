@@ -17,9 +17,11 @@ import shutil
 from . import stats
 
 #: the pre-registered tie rule: a comparison is a tie when the 95% intervals
-#: overlap, or the point difference is under the practical floor
+#: overlap, or the throughput means are under this fraction apart
 RPS_FLOOR = 0.10
-P95_FLOOR = 0.20
+#: no winner may be declared from a cell with more than this fraction of
+#: errored requests, or one where the generator CPU guard tripped
+ERROR_CEILING = 0.01
 
 CSV_COLUMNS = [
     "target",
@@ -86,8 +88,23 @@ def _overlap(a: dict, b: dict) -> bool:
 
 
 def verdict(cells: dict, key_a: tuple, key_b: tuple) -> str:
-    """ "tie", or the winning target's name, by the pre-registered rule."""
+    """ "tie", "invalid", or the winning target's name, by the pre-registered rule.
+
+    A tripped generator guard invalidates the cell: the harness measured
+    itself. A target whose requests errored beyond the ceiling cannot *win* —
+    error responses return fast and inflate its throughput — but a clean
+    opponent still can: the errors are the server's own behaviour under that
+    load, and the page prints them beside the number.
+    """
     a, b = cells[key_a], cells[key_b]
+    if not (a["guard_ok"] and b["guard_ok"]):
+        return "invalid"
+    a_clean = a["errors"] <= ERROR_CEILING
+    b_clean = b["errors"] <= ERROR_CEILING
+    if not (a_clean or b_clean):
+        return "invalid"
+    if a_clean != b_clean:
+        return (key_a if a_clean else key_b)[3]
     rps_a, rps_b = a["rps"], b["rps"]
     if rps_a["mean"] is None or rps_b["mean"] is None:
         return "tie"
@@ -187,7 +204,10 @@ def render(run_dir: pathlib.Path, out_dir: pathlib.Path) -> pathlib.Path:
                     continue
                 row = f"| {cls} | {concurrency} |"
                 for key in keys:
-                    row += f" {_fmt(cells[key]['rps'])} | {_fmt(cells[key]['p95'], 3)} |"
+                    rps_txt = _fmt(cells[key]["rps"])
+                    if cells[key]["errors"] > ERROR_CEILING:
+                        rps_txt += f" ({cells[key]['errors']:.0%} err)"
+                    row += f" {rps_txt} | {_fmt(cells[key]['p95'], 3)} |"
                 outcome = verdict(cells, keys[0], keys[1]) if len(keys) == 2 else "—"
                 row += f" {outcome} |"
                 lines.append(row)

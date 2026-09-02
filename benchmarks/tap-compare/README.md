@@ -122,7 +122,11 @@ pipeline proven end-to-end with `compare-smoke`. What remains, in order:
 Results may claim the relative behaviour *of the measured versions, on this
 hardware, on this corpus, as deployed by their own documentation, under the
 recorded resource pins* — with confidence intervals, per query class, ties
-reported as ties (overlapping 95% CIs, or under 10% rps / 20% p95 apart).
+reported as ties (overlapping 95% CIs, or under 10% apart in throughput).
+A target whose requests errored beyond 1% cannot win a cell (its error
+responses inflate its throughput; the error rate is printed beside the
+number); a tripped generator guard, or both targets erroring, voids the
+cell's verdict.
 They may not claim anything about other corpus sizes, other hardware, other
 versions, or classes a gate excluded. Classes where egernia loses are
 reported with the same prominence as classes where it wins.
