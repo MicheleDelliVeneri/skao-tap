@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vosi:availability xmlns:vosi="http://www.ivoa.net/xml/VOSIAvailability/v1.0">
+  <vosi:available>true</vosi:available>
+  <vosi:note>service is accepting queries</vosi:note>
+</vosi:availability>

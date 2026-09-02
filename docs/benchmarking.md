@@ -1,7 +1,7 @@
 # Performance testing
 
-Performance is checked in two places, and neither of them is a benchmark suite
-in this repository any more.
+Performance is checked in three places: two regression mechanisms, and a
+comparative benchmark harness.
 
 ## Timing guards in the integration suite
 
@@ -64,6 +64,31 @@ rather than knobs: one project expands to 4 observations, 8 scheduling blocks,
 16 execution blocks, 128 data products and 256 artifacts, so the ODP tables
 cannot hold equal row counts; and the software catalogue's
 `{publisher}:{tool}:{semver}` identity admits 7,700 distinct uris and no more.
+
+## The comparative benchmark (tap-compare)
+
+`benchmarks/tap-compare` compares egernia against other open TAP servers —
+GAVO DaCHS today — on identical hardware over an identical logical corpus,
+each server deployed per its own project's documentation. Before any timed
+rung three gates run: VOSI provenance capture, a `stilts taplint` conformance
+check (the gate that found — and drove the fixes for — egernia's own 53
+taplint errors), and a cross-server agreement check that the same query
+returns the same rows everywhere. Repetitions are interleaved round-robin
+across servers, every request carries an explicit MAXREC, throughput and
+latency are reported with confidence intervals, and a pre-registered tie
+rule decides every comparative cell. Results publish into
+[Performance](performance/index.md) under the `tap-compare` family.
+
+```bash
+scripts/export_obscore_snapshot.sh benchmarks/tap-compare/corpus
+docker compose -f benchmarks/tap-compare/docker-compose.dachs.yml up -d
+uv run --group tap-compare python benchmarks/tap-compare compare \
+    --targets egernia-local dachs-local --scenario compare
+uv run --group tap-compare python benchmarks/tap-compare publish --run <run-name>
+```
+
+See `benchmarks/tap-compare/README.md` for the fairness rules and the claims
+policy.
 
 ## The archived results
 

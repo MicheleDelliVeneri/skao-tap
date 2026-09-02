@@ -1,0 +1,3 @@
+<?xml version='1.0' encoding='utf-8'?>
+<?xml-stylesheet href='/static/xsl/vosi.xsl' type='text/xsl'?>
+<avl:availability xmlns:avl="http://www.ivoa.net/xml/VOSIAvailability/v1.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.ivoa.net/xml/VOSIAvailability/v1.0 http://vo.ari.uni-heidelberg.de/docs/schemata/VOSIAvailability-v1.0.xsd"><avl:available>true</avl:available><avl:upSince>2026-09-01T05:39:56Z</avl:upSince></avl:availability>

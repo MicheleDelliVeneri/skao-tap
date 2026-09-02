@@ -63,6 +63,41 @@ scenarios:
     generator_processes: 2
     per_class: true
 
+  # A pipeline shake-out for the compare command: mixed workload only, one
+  # short rung. Proves gates + interleaving + publishing, measures nothing.
+  compare-smoke:
+    ladder: [2]
+    warmup_seconds: 3
+    measure_seconds: 10
+    repetitions: 1
+    response_formats: [csv]
+    maxrec: 100000
+    generator_processes: 1
+
+  # The reference comparison protocol: fixed grid (no early stop — cells
+  # must align across servers), both cross-server formats, reference windows.
+  compare:
+    ladder: [1, 4, 8, 16, 32]
+    warmup_seconds: 30
+    measure_seconds: 120
+    repetitions: 3
+    response_formats: [votable, csv]
+    maxrec: 100000
+    generator_processes: 4
+    per_class: true
+
+  # A shortened variant for method demonstrations on developer hardware:
+  # same protocol, smaller windows and grid, VOTable (the TAP default) only.
+  compare-demo:
+    ladder: [8]
+    warmup_seconds: 10
+    measure_seconds: 45
+    repetitions: 3
+    response_formats: [votable]
+    maxrec: 100000
+    generator_processes: 2
+    per_class: true
+
 guards:
   # The busiest generator process must stay under this fraction of one core,
   # or the rung is invalidated: a pinned generator reports its own ceiling as

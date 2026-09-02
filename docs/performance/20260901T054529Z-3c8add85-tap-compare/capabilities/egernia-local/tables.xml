@@ -1,0 +1,1215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vosi:tableset xmlns:vosi="http://www.ivoa.net/xml/VOSITables/v1.0" xmlns:vod="http://www.ivoa.net/xml/VODataService/v1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <schema>
+    <name>tap_schema</name>
+    <description>TAP standard metadata tables</description>
+    <table type="table">
+      <name>tap_schema.schemas</name>
+      <description>Schemas published by this service</description>
+      <column>
+        <name>schema_name</name>
+        <description>schema name</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>utype</name>
+        <description>utype if schema maps a model</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>description</name>
+        <description>brief description</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>schema_index</name>
+        <description>recommended sort order</description>
+        <dataType xsi:type="vod:VOTableType">int</dataType>
+      </column>
+    </table>
+    <table type="table">
+      <name>tap_schema.tables</name>
+      <description>Tables published by this service</description>
+      <column>
+        <name>schema_name</name>
+        <description>schema the table belongs to</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>table_name</name>
+        <description>fully qualified table name</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>table_type</name>
+        <description>table or view</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>utype</name>
+        <description>utype if table maps a model</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>description</name>
+        <description>brief description</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>table_index</name>
+        <description>recommended sort order</description>
+        <dataType xsi:type="vod:VOTableType">int</dataType>
+      </column>
+      <foreignKey>
+        <targetTable>tap_schema.schemas</targetTable>
+        <fkColumn>
+          <fromColumn>schema_name</fromColumn>
+          <targetColumn>schema_name</targetColumn>
+        </fkColumn>
+        <description>table membership</description>
+      </foreignKey>
+    </table>
+    <table type="table">
+      <name>tap_schema.columns</name>
+      <description>Columns of the published tables</description>
+      <column>
+        <name>table_name</name>
+        <description>table the column belongs to</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>column_name</name>
+        <description>column name</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>datatype</name>
+        <description>ADQL datatype</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>arraysize</name>
+        <description>VOTable arraysize</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>xtype</name>
+        <description>extended type</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>"size"</name>
+        <description>deprecated: use arraysize</description>
+        <dataType xsi:type="vod:VOTableType">int</dataType>
+      </column>
+      <column>
+        <name>description</name>
+        <description>brief description</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>utype</name>
+        <description>utype if column maps a model</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>unit</name>
+        <description>unit (VOUnits)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>ucd</name>
+        <description>UCD of the column</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>indexed</name>
+        <description>1 if indexed</description>
+        <dataType xsi:type="vod:VOTableType">int</dataType>
+      </column>
+      <column>
+        <name>principal</name>
+        <description>1 if principal column</description>
+        <dataType xsi:type="vod:VOTableType">int</dataType>
+      </column>
+      <column>
+        <name>std</name>
+        <description>1 if defined by a standard</description>
+        <dataType xsi:type="vod:VOTableType">int</dataType>
+      </column>
+      <column>
+        <name>column_index</name>
+        <description>recommended sort order</description>
+        <dataType xsi:type="vod:VOTableType">int</dataType>
+      </column>
+      <foreignKey>
+        <targetTable>tap_schema.tables</targetTable>
+        <fkColumn>
+          <fromColumn>table_name</fromColumn>
+          <targetColumn>table_name</targetColumn>
+        </fkColumn>
+        <description>column membership</description>
+      </foreignKey>
+    </table>
+    <table type="table">
+      <name>tap_schema.keys</name>
+      <description>Foreign keys between published tables</description>
+      <column>
+        <name>key_id</name>
+        <description>unique key identifier</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>from_table</name>
+        <description>referencing table</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>target_table</name>
+        <description>referenced table</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>utype</name>
+        <description>utype of the key</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>description</name>
+        <description>brief description</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <foreignKey>
+        <targetTable>tap_schema.tables</targetTable>
+        <fkColumn>
+          <fromColumn>from_table</fromColumn>
+          <targetColumn>table_name</targetColumn>
+        </fkColumn>
+        <description>referencing table</description>
+      </foreignKey>
+      <foreignKey>
+        <targetTable>tap_schema.tables</targetTable>
+        <fkColumn>
+          <fromColumn>target_table</fromColumn>
+          <targetColumn>table_name</targetColumn>
+        </fkColumn>
+        <description>referenced table</description>
+      </foreignKey>
+    </table>
+    <table type="table">
+      <name>tap_schema.key_columns</name>
+      <description>Columns of the foreign keys</description>
+      <column>
+        <name>key_id</name>
+        <description>key this column belongs to</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>from_column</name>
+        <description>referencing column</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>target_column</name>
+        <description>referenced column</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <foreignKey>
+        <targetTable>tap_schema.keys</targetTable>
+        <fkColumn>
+          <fromColumn>key_id</fromColumn>
+          <targetColumn>key_id</targetColumn>
+        </fkColumn>
+        <description>key membership</description>
+      </foreignKey>
+    </table>
+  </schema>
+  <schema>
+    <name>ska</name>
+    <description>Example SKAO science tables</description>
+    <table type="table">
+      <name>ska.continuum_sources</name>
+      <description>Example radio continuum source catalogue</description>
+      <column>
+        <name>source_id</name>
+        <description>unique source identifier</description>
+        <ucd>meta.id;meta.main</ucd>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>source_name</name>
+        <description>IAU-style source name</description>
+        <ucd>meta.id</ucd>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>ra</name>
+        <description>Right ascension (ICRS)</description>
+        <unit>deg</unit>
+        <ucd>pos.eq.ra;meta.main</ucd>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>dec</name>
+        <description>Declination (ICRS)</description>
+        <unit>deg</unit>
+        <ucd>pos.eq.dec;meta.main</ucd>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>flux_peak</name>
+        <description>Peak flux density</description>
+        <unit>mJy/beam</unit>
+        <ucd>phot.flux.density;em.radio</ucd>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>flux_int</name>
+        <description>Integrated flux density</description>
+        <unit>mJy</unit>
+        <ucd>phot.flux.density;em.radio</ucd>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>maj_axis</name>
+        <description>Fitted major axis</description>
+        <unit>arcsec</unit>
+        <ucd>phys.angSize.smajAxis</ucd>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>min_axis</name>
+        <description>Fitted minor axis</description>
+        <unit>arcsec</unit>
+        <ucd>phys.angSize.sminAxis</ucd>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>pos_angle</name>
+        <description>Fitted position angle</description>
+        <unit>deg</unit>
+        <ucd>pos.posAng</ucd>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>spectral_index</name>
+        <description>Fitted spectral index</description>
+        <ucd>spect.index</ucd>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>obs_date</name>
+        <description>Observation date</description>
+        <ucd>time.epoch</ucd>
+        <dataType xsi:type="vod:VOTableType" arraysize="*" extendedType="timestamp">char</dataType>
+      </column>
+    </table>
+  </schema>
+  <schema>
+    <name>ivoa</name>
+    <description>IVOA standard tables</description>
+    <table type="view">
+      <name>ivoa.obscore</name>
+      <description>ObsCore 1.1: one row per data product of the ingested ODP metadata</description>
+      <utype>ivo://ivoa.net/std/ObsCore#core-1.1</utype>
+      <column>
+        <name>dataproduct_type</name>
+        <description>Data product (file content) primary type</description>
+        <ucd>meta.code.class</ucd>
+        <utype>obscore:ObsDataset.dataProductType</utype>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>calib_level</name>
+        <description>Calibration level as declared by the SRCNet producer, passed through untranslated (srcnet: 0=raw, 1=calibrated, 2=science-ready, 3=analysis)</description>
+        <ucd>meta.code;obs.calib</ucd>
+        <utype>obscore:ObsDataset.calibLevel</utype>
+        <dataType xsi:type="vod:VOTableType">int</dataType>
+      </column>
+      <column>
+        <name>obs_collection</name>
+        <description>Name of the data collection</description>
+        <ucd>meta.id</ucd>
+        <utype>obscore:DataID.collection</utype>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>obs_id</name>
+        <description>Internal ID given by the ObsTAP service</description>
+        <ucd>meta.id</ucd>
+        <utype>obscore:DataID.observationID</utype>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>obs_publisher_did</name>
+        <description>ID for the Dataset given by the publisher</description>
+        <ucd>meta.ref.ivoid</ucd>
+        <utype>obscore:Curation.publisherDID</utype>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>access_url</name>
+        <description>URL used to access the dataset</description>
+        <ucd>meta.ref.url</ucd>
+        <utype>obscore:Access.reference</utype>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>access_format</name>
+        <description>Content format of the dataset</description>
+        <ucd>meta.code.mime</ucd>
+        <utype>obscore:Access.format</utype>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>access_estsize</name>
+        <description>Estimated size of the dataset in kilobytes</description>
+        <unit>kbyte</unit>
+        <ucd>phys.size;meta.file</ucd>
+        <utype>obscore:Access.size</utype>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>target_name</name>
+        <description>Object of interest</description>
+        <ucd>meta.id;src</ucd>
+        <utype>obscore:Target.name</utype>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>s_ra</name>
+        <description>Central spatial position in ICRS: right ascension</description>
+        <unit>deg</unit>
+        <ucd>pos.eq.ra</ucd>
+        <utype>obscore:Char.SpatialAxis.Coverage.Location.Coord.Position2D.Value2.C1</utype>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>s_dec</name>
+        <description>Central spatial position in ICRS: declination</description>
+        <unit>deg</unit>
+        <ucd>pos.eq.dec</ucd>
+        <utype>obscore:Char.SpatialAxis.Coverage.Location.Coord.Position2D.Value2.C2</utype>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>s_fov</name>
+        <description>Estimated size of the covered region (diameter)</description>
+        <unit>deg</unit>
+        <ucd>phys.angSize;instr.fov</ucd>
+        <utype>obscore:Char.SpatialAxis.Coverage.Bounds.Extent.diameter</utype>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>s_region</name>
+        <description>Sky region covered by the data product (STC-S)</description>
+        <ucd>pos.outline;obs.field</ucd>
+        <utype>obscore:Char.SpatialAxis.Coverage.Support.Area</utype>
+        <dataType xsi:type="vod:VOTableType" arraysize="*" extendedType="adql:REGION">char</dataType>
+      </column>
+      <column>
+        <name>s_resolution</name>
+        <description>Spatial resolution of the data (FWHM)</description>
+        <unit>arcsec</unit>
+        <ucd>pos.angResolution</ucd>
+        <utype>obscore:Char.SpatialAxis.Resolution.Refval.value</utype>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>s_xel1</name>
+        <description>Number of elements along the first coordinate of the spatial axis</description>
+        <ucd>meta.number</ucd>
+        <utype>obscore:Char.SpatialAxis.numBins1</utype>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>s_xel2</name>
+        <description>Number of elements along the second coordinate of the spatial axis</description>
+        <ucd>meta.number</ucd>
+        <utype>obscore:Char.SpatialAxis.numBins2</utype>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>t_min</name>
+        <description>Start time in MJD</description>
+        <unit>d</unit>
+        <ucd>time.start;obs.exposure</ucd>
+        <utype>obscore:Char.TimeAxis.Coverage.Bounds.Limits.StartTime</utype>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>t_max</name>
+        <description>Stop time in MJD</description>
+        <unit>d</unit>
+        <ucd>time.end;obs.exposure</ucd>
+        <utype>obscore:Char.TimeAxis.Coverage.Bounds.Limits.StopTime</utype>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>t_exptime</name>
+        <description>Total exposure time</description>
+        <unit>s</unit>
+        <ucd>time.duration;obs.exposure</ucd>
+        <utype>obscore:Char.TimeAxis.Coverage.Support.Extent</utype>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>t_resolution</name>
+        <description>Temporal resolution (FWHM)</description>
+        <unit>s</unit>
+        <ucd>time.resolution</ucd>
+        <utype>obscore:Char.TimeAxis.Resolution.Refval.value</utype>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>t_xel</name>
+        <description>Number of elements along the time axis</description>
+        <ucd>meta.number</ucd>
+        <utype>obscore:Char.TimeAxis.numBins</utype>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>em_min</name>
+        <description>Start in spectral coordinates (vacuum wavelength)</description>
+        <unit>m</unit>
+        <ucd>em.wl;stat.min</ucd>
+        <utype>obscore:Char.SpectralAxis.Coverage.Bounds.Limits.LoLimit</utype>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>em_max</name>
+        <description>Stop in spectral coordinates (vacuum wavelength)</description>
+        <unit>m</unit>
+        <ucd>em.wl;stat.max</ucd>
+        <utype>obscore:Char.SpectralAxis.Coverage.Bounds.Limits.HiLimit</utype>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>em_res_power</name>
+        <description>Spectral resolving power</description>
+        <ucd>spect.resolution</ucd>
+        <utype>obscore:Char.SpectralAxis.Resolution.ResolPower.refVal</utype>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>em_xel</name>
+        <description>Number of elements along the spectral axis</description>
+        <ucd>meta.number</ucd>
+        <utype>obscore:Char.SpectralAxis.numBins</utype>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>o_ucd</name>
+        <description>Nature of the observable axis</description>
+        <ucd>meta.ucd</ucd>
+        <utype>obscore:Char.ObservableAxis.ucd</utype>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>pol_states</name>
+        <description>List of polarization states or NULL if not applicable</description>
+        <ucd>meta.code;phys.polarization</ucd>
+        <utype>obscore:Char.PolarizationAxis.stateList</utype>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>pol_xel</name>
+        <description>Number of polarization samples</description>
+        <ucd>meta.number</ucd>
+        <utype>obscore:Char.PolarizationAxis.numBins</utype>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>facility_name</name>
+        <description>Name of the facility used for this observation</description>
+        <ucd>meta.id;instr.tel</ucd>
+        <utype>obscore:Provenance.ObsConfig.Facility.name</utype>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>instrument_name</name>
+        <description>Name of the instrument used for this observation</description>
+        <ucd>meta.id;instr</ucd>
+        <utype>obscore:Provenance.ObsConfig.Instrument.name</utype>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>s_region_geom</name>
+        <description>pgsphere footprint derived from s_region at ingestion (non-standard); query it with INTERSECTS/CONTAINS</description>
+        <ucd>pos.outline;obs.field</ucd>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+    </table>
+  </schema>
+  <schema>
+    <name>srcnet</name>
+    <description>SKA SRC metadata, generated from the SRC data models</description>
+    <table type="table">
+      <name>srcnet.projects</name>
+      <description>Root model for SRC Ingestion Notification files.  This represents the
+hierarchical structure: project_id -&gt; obs_id -&gt; sbd_id -&gt; eb_id -&gt; product_id -&gt;
+artifact_id  The unique identifier for data products is constructed from:
+eb_id.product_id</description>
+      <column>
+        <name>schema_version</name>
+        <description>Version of the schema this payload conforms to</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>project_id</name>
+        <description>Project identifier</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>group_ids</name>
+        <description>Group IDs that have access to this data</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>project_title</name>
+        <description>Human-readable title for the project</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>pi_name</name>
+        <description>Principal Investigator name</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>data_rights</name>
+        <description>Access rights for the data (public, proprietary, private)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+    </table>
+    <table type="table">
+      <name>srcnet.software</name>
+      <description>software</description>
+      <column>
+        <name>uri</name>
+        <description>Format: {publisher}:{name}:{version} where version is semver</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>description</name>
+        <description>description</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>release_date</name>
+        <description>release_date</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>changelog</name>
+        <description>changelog</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>status</name>
+        <description>status</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>discovery_science_category</name>
+        <description>discovery_science_category</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>discovery_function_category</name>
+        <description>discovery_function_category</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>discovery_science_working_group</name>
+        <description>discovery_science_working_group</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>discovery_tools_included</name>
+        <description>discovery_tools_included</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>data_compatibility_data_input_type</name>
+        <description>data_compatibility_data_input_type</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>data_compatibility_data_output_type</name>
+        <description>data_compatibility_data_output_type</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>resources_requires_gpu</name>
+        <description>resources_requires_gpu</description>
+        <dataType xsi:type="vod:VOTableType">boolean</dataType>
+      </column>
+      <column>
+        <name>resources_min_memory</name>
+        <description>resources_min_memory</description>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>resources_recommended_memory</name>
+        <description>resources_recommended_memory</description>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>provenance_repository_url</name>
+        <description>provenance_repository_url</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>provenance_registered_by</name>
+        <description>provenance_registered_by</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>provenance_registration_date</name>
+        <description>provenance_registration_date</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+    </table>
+    <table type="table">
+      <name>srcnet.software_artifacts</name>
+      <description>software_artifacts</description>
+      <column>
+        <name>uri</name>
+        <description>uri</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>kind</name>
+        <description>kind</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>location</name>
+        <description>location</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>cpu_architecture</name>
+        <description>cpu_architecture</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>digest</name>
+        <description>digest</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>entrypoint</name>
+        <description>entrypoint</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>supported_modes</name>
+        <description>supported_modes</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <foreignKey>
+        <targetTable>srcnet.software</targetTable>
+        <fkColumn>
+          <fromColumn>uri</fromColumn>
+          <targetColumn>uri</targetColumn>
+        </fkColumn>
+        <description>hierarchy link</description>
+      </foreignKey>
+    </table>
+    <table type="table">
+      <name>srcnet.observations</name>
+      <description>Represents an observation containing scheduling blocks.  An observation groups
+related scheduling blocks with common instrument metadata. Spatial, spectral,
+and temporal coverage are defined at the DataProduct and Artifact levels.</description>
+      <column>
+        <name>project_id</name>
+        <description>project_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>obs_id</name>
+        <description>Observation identifier (namespace/scope, e.g., SKA-Mid.integration)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>obs_title</name>
+        <description>Human-readable title for the observation</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>collection</name>
+        <description>Collection identifier (es=early science, sv=science verification, cycle-N=observation cycle)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>instrument_name</name>
+        <description>Name of the instrument used (e.g., SKA-Mid, SKA-Low)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>facility_name</name>
+        <description>Name of the facility/observatory</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <foreignKey>
+        <targetTable>srcnet.projects</targetTable>
+        <fkColumn>
+          <fromColumn>project_id</fromColumn>
+          <targetColumn>project_id</targetColumn>
+        </fkColumn>
+        <description>hierarchy link</description>
+      </foreignKey>
+    </table>
+    <table type="table">
+      <name>srcnet.scheduling_blocks</name>
+      <description>Represents a scheduling block containing execution blocks.  A scheduling block
+defines a set of observations to be executed.</description>
+      <column>
+        <name>project_id</name>
+        <description>project_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>obs_id</name>
+        <description>obs_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>sbd_id</name>
+        <description>Scheduling block definition identifier</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <foreignKey>
+        <targetTable>srcnet.observations</targetTable>
+        <fkColumn>
+          <fromColumn>project_id</fromColumn>
+          <targetColumn>project_id</targetColumn>
+        </fkColumn>
+        <fkColumn>
+          <fromColumn>obs_id</fromColumn>
+          <targetColumn>obs_id</targetColumn>
+        </fkColumn>
+        <description>hierarchy link</description>
+      </foreignKey>
+    </table>
+    <table type="table">
+      <name>srcnet.execution_blocks</name>
+      <description>Represents an execution block containing data products.  An execution block is a
+single execution of a scheduling block.</description>
+      <column>
+        <name>project_id</name>
+        <description>project_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>obs_id</name>
+        <description>obs_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>sbd_id</name>
+        <description>sbd_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>eb_id</name>
+        <description>Execution block identifier</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <foreignKey>
+        <targetTable>srcnet.scheduling_blocks</targetTable>
+        <fkColumn>
+          <fromColumn>project_id</fromColumn>
+          <targetColumn>project_id</targetColumn>
+        </fkColumn>
+        <fkColumn>
+          <fromColumn>obs_id</fromColumn>
+          <targetColumn>obs_id</targetColumn>
+        </fkColumn>
+        <fkColumn>
+          <fromColumn>sbd_id</fromColumn>
+          <targetColumn>sbd_id</targetColumn>
+        </fkColumn>
+        <description>hierarchy link</description>
+      </foreignKey>
+    </table>
+    <table type="table">
+      <name>srcnet.data_products</name>
+      <description>Represents a data product containing one or more artifacts.  Data products group
+related artifacts together with common metadata. Spatial, spectral, and temporal
+coverage at this level are computed from the artifacts (centroids for spatial,
+union for spectral/temporal).</description>
+      <column>
+        <name>project_id</name>
+        <description>project_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>obs_id</name>
+        <description>obs_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>sbd_id</name>
+        <description>sbd_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>eb_id</name>
+        <description>eb_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>product_id</name>
+        <description>Unique identifier for the data product</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>data_product_origin</name>
+        <description>Origin of the data product: ODP (Observatory Data Product) or ADP (Advanced Data Product)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>o_ucd</name>
+        <description>Unified Content Descriptor for the observable (e.g., phot.flux.density;em.radio)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>dataproduct_type</name>
+        <description>Type of data product</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>calib_level</name>
+        <description>Calibration level (0=raw, 1=calibrated, 2=science-ready, 3=analysis)</description>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>target_name</name>
+        <description>Name of the observed target</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>is_calibrator</name>
+        <description>Whether this target is a calibrator</description>
+        <dataType xsi:type="vod:VOTableType">boolean</dataType>
+      </column>
+      <column>
+        <name>calibrator_type</name>
+        <description>Type of calibrator if is_calibrator is true</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>em_band</name>
+        <description>Electromagnetic band (e.g., Radio, Optical)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>s_ra</name>
+        <description>Right ascension of product center in degrees (computed from artifacts)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>s_dec</name>
+        <description>Declination of product center in degrees (computed from artifacts)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>s_fov</name>
+        <description>Field of view diameter in degrees (computed from artifacts, must be &gt; 0)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>s_region</name>
+        <description>Spatial region as STC-S in ICRS frame, degrees (computed from artifacts)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>s_region_geom</name>
+        <description>pgsphere footprint derived from s_region at ingestion; query it with INTERSECTS/CONTAINS</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>em_wlen</name>
+        <description>Representative wavelength in meters (computed from artifacts)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>em_min</name>
+        <description>Minimum wavelength in meters (computed from artifacts)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>em_max</name>
+        <description>Maximum wavelength in meters (computed from artifacts)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>t_min</name>
+        <description>Start time in MJD (computed from artifacts)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>t_max</name>
+        <description>End time in MJD (computed from artifacts)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>t_exptime</name>
+        <description>Total exposure time in seconds (sum from artifacts)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>s_xel1</name>
+        <description>Number of elements along spatial axis 1</description>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>s_xel2</name>
+        <description>Number of elements along spatial axis 2</description>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>em_xel</name>
+        <description>Number of spectral samples</description>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>t_xel</name>
+        <description>Number of time samples</description>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>baseline_min</name>
+        <description>Minimum baseline length in meters</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>baseline_max</name>
+        <description>Maximum baseline length in meters for interferometry observations</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>num_baselines</name>
+        <description>Number of baselines</description>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>num_antennas</name>
+        <description>Number of antennas</description>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>beam_size</name>
+        <description>Synthesized beam size in arcseconds</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>beam_maj</name>
+        <description>Beam major axis FWHM in degrees (synthesized beam for interferometry, PSF for single dish)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>beam_min</name>
+        <description>Beam minor axis FWHM in degrees (synthesized beam for interferometry, PSF for single dish)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>beam_pa</name>
+        <description>Beam position angle in degrees (measured East of North)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>pol_states</name>
+        <description>Polarization states as concatenated codes (e.g., 'IQUV', 'XXYXYXYX')</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>pol_xel</name>
+        <description>Number of polarization dimensions/axes in the data product</description>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>baselines</name>
+        <description>List of unique baseline identifiers</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>calibrator_targets</name>
+        <description>Names of ancillary targets used for calibration (e.g., bandpass calibrators, flux calibrators)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <foreignKey>
+        <targetTable>srcnet.execution_blocks</targetTable>
+        <fkColumn>
+          <fromColumn>project_id</fromColumn>
+          <targetColumn>project_id</targetColumn>
+        </fkColumn>
+        <fkColumn>
+          <fromColumn>obs_id</fromColumn>
+          <targetColumn>obs_id</targetColumn>
+        </fkColumn>
+        <fkColumn>
+          <fromColumn>sbd_id</fromColumn>
+          <targetColumn>sbd_id</targetColumn>
+        </fkColumn>
+        <fkColumn>
+          <fromColumn>eb_id</fromColumn>
+          <targetColumn>eb_id</targetColumn>
+        </fkColumn>
+        <description>hierarchy link</description>
+      </foreignKey>
+    </table>
+    <table type="table">
+      <name>srcnet.artifacts</name>
+      <description>Represents a single data artifact (file) within a data product.  Artifacts are
+the actual files that will be ingested into the system. Spatial, spectral, and
+temporal coverage fields are specific to this artifact.</description>
+      <column>
+        <name>project_id</name>
+        <description>project_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>obs_id</name>
+        <description>obs_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>sbd_id</name>
+        <description>sbd_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>eb_id</name>
+        <description>eb_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>product_id</name>
+        <description>product_id</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>artifact_id</name>
+        <description>Unique identifier for the artifact</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>access_url</name>
+        <description>URL or path to access the artifact (e.g., file://staging/data/file.fits)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>access_format</name>
+        <description>MIME type of the artifact (e.g., image/fits, application/fits)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>access_estsize</name>
+        <description>Estimated size of the artifact in bytes</description>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <column>
+        <name>path_to_parent</name>
+        <description>Virtual path to parent directory for organizing artifacts (e.g., ./cubes/)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>semantics</name>
+        <description>Semantic type of the artifact (science, auxiliary, noise, calibration)</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>s_ra</name>
+        <description>Right ascension of artifact center in degrees</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>s_dec</name>
+        <description>Declination of artifact center in degrees</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>s_fov</name>
+        <description>Field of view diameter in degrees (must be &gt; 0)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>s_region</name>
+        <description>STC-S region in ICRS frame, degrees: CIRCLE|POLYGON|POSITION (e.g. 'CIRCLE 3.5867 -30.4 0.25')</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>s_region_geom</name>
+        <description>pgsphere footprint derived from s_region at ingestion; query it with INTERSECTS/CONTAINS</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>em_wlen</name>
+        <description>Representative wavelength in meters</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>em_min</name>
+        <description>Minimum wavelength in meters (SKA range: 0.0195m to 6m)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>em_max</name>
+        <description>Maximum wavelength in meters (SKA range: 0.0195m to 6m)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>t_min</name>
+        <description>Start time in MJD (Modified Julian Date, days)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>t_max</name>
+        <description>End time in MJD (days)</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>t_exptime</name>
+        <description>Exposure time in seconds</description>
+        <dataType xsi:type="vod:VOTableType">double</dataType>
+      </column>
+      <column>
+        <name>pol_states</name>
+        <description>Polarization states present in the artifact as concatenated codes (e.g., 'IQUV', 'XXYXYXYX')</description>
+        <dataType xsi:type="vod:VOTableType" arraysize="*">char</dataType>
+      </column>
+      <column>
+        <name>pol_xel</name>
+        <description>Number of polarization samples in artifact</description>
+        <dataType xsi:type="vod:VOTableType">long</dataType>
+      </column>
+      <foreignKey>
+        <targetTable>srcnet.data_products</targetTable>
+        <fkColumn>
+          <fromColumn>project_id</fromColumn>
+          <targetColumn>project_id</targetColumn>
+        </fkColumn>
+        <fkColumn>
+          <fromColumn>obs_id</fromColumn>
+          <targetColumn>obs_id</targetColumn>
+        </fkColumn>
+        <fkColumn>
+          <fromColumn>sbd_id</fromColumn>
+          <targetColumn>sbd_id</targetColumn>
+        </fkColumn>
+        <fkColumn>
+          <fromColumn>eb_id</fromColumn>
+          <targetColumn>eb_id</targetColumn>
+        </fkColumn>
+        <fkColumn>
+          <fromColumn>product_id</fromColumn>
+          <targetColumn>product_id</targetColumn>
+        </fkColumn>
+        <description>hierarchy link</description>
+      </foreignKey>
+    </table>
+  </schema>
+</vosi:tableset>

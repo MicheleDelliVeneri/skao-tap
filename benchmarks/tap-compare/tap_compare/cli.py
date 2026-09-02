@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import logging
 import pathlib
 import sys
+import time
 
 import yaml
 
@@ -83,6 +85,63 @@ def _saturated(summaries: list[dict], scenario: dict) -> bool:
     return False
 
 
+def _record_provenance(
+    run: runs.Run,
+    target: dict,
+    cfg: dict,
+    corpus_sha: str,
+    scenario_name: str,
+    scenario: dict,
+    entries: list[corpus_mod.CorpusEntry],
+) -> None:
+    """Write environment.json and corpus.json once, at the start of a run.
+
+    A resumed run keeps the provenance it started with: overwriting it would
+    silently re-describe rungs that were measured under the original record.
+    Resuming with a different corpus, scenario or target set is refused —
+    those cells would not be comparable with the ones already on disk. A
+    resume from a different git state is recorded (appended, never rewriting
+    the original) rather than refused: refusing would discard a day-long run
+    over a harness fix, but the record must say the code changed mid-run.
+    """
+    env_path = run.path / "environment.json"
+    if env_path.exists():
+        recorded = json.loads(env_path.read_text())
+        mismatches = []
+        if recorded["corpus_sha256"] != corpus_sha:
+            mismatches.append(f"corpus {recorded['corpus_sha256'][:12]}… is now {corpus_sha[:12]}…")
+        if recorded["scenario"] != {scenario_name: scenario}:
+            mismatches.append(
+                f"scenario {'/'.join(recorded['scenario'])} is now {scenario_name}"
+                " (or its configuration changed)"
+            )
+        if recorded["target"] != target:
+            mismatches.append("the target descriptors changed")
+        if mismatches:
+            raise SystemExit(f"cannot resume {run.path.name}: " + "; ".join(mismatches))
+        current = {"sha": runs.git_sha(), "dirty": runs.git_dirty()}
+        last = (recorded.get("resumed") or [recorded["git"]])[-1]
+        if {"sha": last.get("sha"), "dirty": last.get("dirty")} != current:
+            recorded.setdefault("resumed", []).append({"at": time.time(), **current})
+            run.write_json("environment.json", recorded)
+            log.warning(
+                "resuming under different code (git %s, dirty=%s); recorded in environment.json",
+                current["sha"][:8],
+                current["dirty"],
+            )
+        return
+    run.write_json(
+        "environment.json",
+        runs.environment(
+            target,
+            seed=cfg["corpus"]["seed"],
+            corpus_sha256=corpus_sha,
+            extras={"scenario": {scenario_name: scenario}},
+        ),
+    )
+    run.write_json("corpus.json", [e.as_dict() for e in entries])
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     cfg = _load_yaml(SUITE / "config" / "scenarios.yaml")
     scenario = cfg["scenarios"][args.scenario]
@@ -100,16 +159,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     mix = {k: float(v) for k, v in cfg["mix"].items()}
 
     run = runs.new_run(f"{args.scenario}-{target.name}", resume=args.resume)
-    run.write_json(
-        "environment.json",
-        runs.environment(
-            target.as_dict(),
-            seed=cfg["corpus"]["seed"],
-            corpus_sha256=corpus_sha,
-            extras={"scenario": {args.scenario: scenario}},
-        ),
-    )
-    run.write_json("corpus.json", [e.as_dict() for e in entries])
+    _record_provenance(run, target.as_dict(), cfg, corpus_sha, args.scenario, scenario, entries)
 
     classes = sorted({e.query_class for e in entries}) if scenario.get("per_class") else [None]
     guard_max = cfg["guards"]["generator_cpu_max_fraction"]
@@ -163,25 +213,24 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_gates(args: argparse.Namespace) -> int:
-    """The pre-measurement gates: VOSI provenance, taplint, agreement.
-
-    Runs against every named target and writes one gates run directory. No
-    timed rung may be compared across servers unless this passed for all of
-    them on the same corpus.
-    """
-    from . import conformance, validate, vosi
-
-    cfg = _load_yaml(SUITE / "config" / "scenarios.yaml")
+def _resolve_targets(names: list[str]) -> dict[str, targets.Target]:
     all_targets = targets.load()
     chosen = {}
-    for name in args.targets:
+    for name in names:
         if name not in all_targets:
             raise SystemExit(f"unknown target {name!r} (one of: {', '.join(all_targets)})")
         chosen[name] = all_targets[name]
+    return chosen
 
-    entries = _build_corpus(cfg, portable_only=True)
-    run = runs.new_run("gates-" + "-".join(sorted(chosen)))
+
+def _run_gates(run: runs.Run, chosen: dict, entries: list, maxrec: int) -> dict:
+    """VOSI provenance, taplint conformance, cross-server agreement.
+
+    No timed rung may be compared across servers unless this passed for all
+    of them on the same corpus.
+    """
+    from . import conformance, validate, vosi
+
     outcome: dict = {"targets": {}}
     for name, target in chosen.items():
         facts = vosi.capture(target.base_url, run.path / "capabilities" / name)
@@ -203,9 +252,7 @@ def cmd_gates(args: argparse.Namespace) -> int:
         outcome["targets"][name] = {"vosi": facts, "taplint": lint}
     if len(chosen) > 1:
         verdict = validate.agreement(
-            {name: t.base_url for name, t in chosen.items()},
-            entries,
-            maxrec=cfg["scenarios"]["ladder"]["maxrec"],
+            {name: t.base_url for name, t in chosen.items()}, entries, maxrec=maxrec
         )
         outcome["agreement"] = verdict
         log.info(
@@ -214,9 +261,122 @@ def cmd_gates(args: argparse.Namespace) -> int:
             ", ".join(verdict["disagreed"]) or "none",
         )
     run.write_json("gates.json", outcome)
+    return outcome
+
+
+def cmd_gates(args: argparse.Namespace) -> int:
+    cfg = _load_yaml(SUITE / "config" / "scenarios.yaml")
+    chosen = _resolve_targets(args.targets)
+    entries = _build_corpus(cfg, portable_only=True)
+    run = runs.new_run("gates-" + "-".join(sorted(chosen)))
+    outcome = _run_gates(run, chosen, entries, maxrec=cfg["scenarios"]["ladder"]["maxrec"])
     log.info("gates -> %s", run.path)
     failed = any(not t["taplint"]["passed"] for t in outcome["targets"].values())
     return 1 if failed else 0
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    """One comparison run: gates, then interleaved rungs across targets.
+
+    Repetitions are interleaved round-robin across servers (A,B,A,B — never
+    AAABBB), so host drift decorrelates from server identity. Every target
+    is held to the portable corpus and the same fixed rung grid; there is no
+    early stop, because comparison cells have to align.
+    """
+    cfg = _load_yaml(SUITE / "config" / "scenarios.yaml")
+    scenario = cfg["scenarios"][args.scenario]
+    chosen = _resolve_targets(args.targets)
+    entries = _build_corpus(cfg, portable_only=True)
+    corpus_sha = corpus_mod.corpus_hash(entries)
+    mix = {k: float(v) for k, v in cfg["mix"].items()}
+
+    run = runs.new_run("tap-compare", resume=args.resume)
+    _record_provenance(
+        run,
+        {name: t.as_dict() for name, t in chosen.items()},
+        cfg,
+        corpus_sha,
+        args.scenario,
+        scenario,
+        entries,
+    )
+
+    if run.done("gates"):
+        gates = json.loads((run.path / "gates.json").read_text())
+    else:
+        gates = _run_gates(run, chosen, entries, maxrec=scenario["maxrec"])
+        run.mark_done("gates")
+    failed = [n for n, t in gates["targets"].items() if not t["taplint"]["passed"]]
+    if failed and not args.allow_gate_failures:
+        raise SystemExit(f"taplint failed for {', '.join(failed)}; refusing to compare")
+    excluded = set(gates.get("agreement", {}).get("disagreed", []))
+
+    classes: list[str | None] = [None]  # None = the mixed workload
+    if scenario.get("per_class"):
+        classes += [c for c in sorted({e.query_class for e in entries}) if c not in excluded]
+
+    guard_max = cfg["guards"]["generator_cpu_max_fraction"]
+    rows: list[dict] = []
+    for response_format in scenario["response_formats"]:
+        for query_class in classes:
+            for concurrency in scenario["ladder"]:
+                for repetition in range(1, scenario["repetitions"] + 1):
+                    for name, target in chosen.items():
+                        key = (
+                            f"{name}-{response_format}-{query_class or 'mix'}"
+                            f"-c{concurrency}-r{repetition}"
+                        )
+                        summary_path = run.path / "summaries" / f"{key}.json"
+                        if run.done(key):
+                            rows.append(json.loads(summary_path.read_text()))
+                            continue
+                        recorder, elapsed = _rung(
+                            target,
+                            entries,
+                            scenario,
+                            None if query_class else mix,
+                            query_class,
+                            concurrency,
+                            repetition,
+                            response_format,
+                            cfg["corpus"]["seed"],
+                        )
+                        runner.write_samples(recorder.samples, run.samples_dir / f"{key}.parquet")
+                        summary = stats.summarise(recorder.samples, elapsed)
+                        summary.update(
+                            target=name,
+                            server=target.server,
+                            response_format=response_format,
+                            query_class=query_class or "mix",
+                            concurrency=concurrency,
+                            repetition=repetition,
+                            generator_cpu_peak=recorder.generator_cpu_peak,
+                            generator_guard_ok=recorder.generator_cpu_peak < guard_max,
+                        )
+                        if recorder.generator_cpu_peak >= guard_max:
+                            run.invalidate(
+                                "generator ran hot",
+                                {"key": key, "peak": recorder.generator_cpu_peak},
+                            )
+                        rows.append(summary)
+                        run.write_json(f"summaries/{key}.json", summary)
+                        run.mark_done(key, {"requests": summary["requests"]})
+    run.write_json("summary.json", rows)
+    log.info("comparison complete: %s (%d rung summaries)", run.path, len(rows))
+    return 0
+
+
+def cmd_publish(args: argparse.Namespace) -> int:
+    """Render a comparison run into docs/performance/."""
+    from . import publish
+
+    run_dir = runs.RESULTS / args.run
+    if not run_dir.is_dir():
+        raise SystemExit(f"no such run: {run_dir}")
+    out_dir = pathlib.Path(args.out) if args.out else REPO / "docs" / "performance" / run_dir.name
+    page = publish.render(run_dir, out_dir)
+    log.info("published %s", page)
+    return 0
 
 
 def cmd_corpus(args: argparse.Namespace) -> int:
@@ -248,6 +408,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     gates_parser.add_argument("--targets", nargs="+", required=True)
     gates_parser.set_defaults(func=cmd_gates)
+
+    compare_parser = sub.add_parser(
+        "compare", help="gates, then interleaved comparison rungs across targets"
+    )
+    compare_parser.add_argument("--targets", nargs="+", required=True)
+    compare_parser.add_argument("--scenario", default="compare-demo")
+    compare_parser.add_argument("--resume", help="existing run directory name to continue")
+    compare_parser.add_argument(
+        "--allow-gate-failures",
+        action="store_true",
+        help="measure anyway (debugging only; the report will say the gate failed)",
+    )
+    compare_parser.set_defaults(func=cmd_compare)
+
+    publish_parser = sub.add_parser("publish", help="render a comparison run into docs/performance")
+    publish_parser.add_argument("--run", required=True, help="run directory name under results/")
+    publish_parser.add_argument("--out", help="output directory (default docs/performance/<run>)")
+    publish_parser.set_defaults(func=cmd_publish)
 
     corpus_parser = sub.add_parser("corpus", help="print the deterministic query corpus")
     corpus_parser.add_argument("--all-classes", action="store_true")

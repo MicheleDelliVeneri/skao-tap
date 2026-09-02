@@ -1,0 +1,19 @@
+# Parity pins for a comparison run: hold the egernia stack to the same
+# budget docker-compose.dachs.yml pins for DaCHS (cpus: 8, mem_limit: 8g,
+# DaCHS + its PostgreSQL in one container). Compose has no group-level
+# quota, so the three egernia serving containers share one 8-core cpuset
+# (work-conserving within the stack, like DaCHS's single 8-cpu pool) and
+# split the 8 GiB: 4 db + 2 api + 2 executor.
+#
+#   docker compose -f docker-compose.yml \
+#       -f benchmarks/tap-compare/docker-compose.egernia-pins.yml up -d --build
+services:
+  db:
+    cpuset: "0-7"
+    mem_limit: 4g
+  tap-api:
+    cpuset: "0-7"
+    mem_limit: 2g
+  tap-executor:
+    cpuset: "0-7"
+    mem_limit: 2g
