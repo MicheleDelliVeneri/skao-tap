@@ -280,7 +280,9 @@ def _coerced_rows(rows: Iterable[tuple], plan: list[tuple[int, object]]) -> Iter
     return (_coerced(row, plan) for row in rows)
 
 
-def stream_votable(columns: list[ColumnMeta], rows: RowLimiter) -> Iterator[bytes]:
+def votable_head(columns: list[ColumnMeta]) -> bytes:
+    """Everything before the first `<TR>`. Shared with the COPY path, which
+    writes the rows in the server and the envelope here (see copy_dsv.py)."""
     head = [
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<VOTABLE version="1.4" xmlns="http://www.ivoa.net/xml/VOTable/v1.3">\n'
@@ -307,7 +309,20 @@ def stream_votable(columns: list[ColumnMeta], rows: RowLimiter) -> Iterator[byte
         else:
             head.append(f"<FIELD {' '.join(attrs)}/>\n")
     head.append("<DATA><TABLEDATA>\n")
-    yield "".join(head).encode()
+    return "".join(head).encode()
+
+
+def votable_tail(overflowed: bool) -> bytes:
+    """Everything after the last `</TR>`, with the DALI overflow INFO."""
+    tail = "</TABLEDATA></DATA>\n</TABLE>\n"
+    if overflowed:  # DALI: overflow indicator after the table
+        tail += '<INFO name="QUERY_STATUS" value="OVERFLOW"/>\n'
+    tail += "</RESOURCE>\n</VOTABLE>\n"
+    return tail.encode()
+
+
+def stream_votable(columns: list[ColumnMeta], rows: RowLimiter) -> Iterator[bytes]:
+    yield votable_head(columns)
 
     # One text encoder per column, chosen from its kind. The row loop below
     # then has no type dispatch left to do: it decides only whether the row
@@ -337,12 +352,7 @@ def stream_votable(columns: list[ColumnMeta], rows: RowLimiter) -> Iterator[byte
             buffer.clear()
     if buffer:
         yield "".join(buffer).encode()
-
-    tail = "</TABLEDATA></DATA>\n</TABLE>\n"
-    if rows.overflowed:  # DALI: overflow indicator after the table
-        tail += '<INFO name="QUERY_STATUS" value="OVERFLOW"/>\n'
-    tail += "</RESOURCE>\n</VOTABLE>\n"
-    yield tail.encode()
+    yield votable_tail(rows.overflowed)
 
 
 def stream_dsv(columns: list[ColumnMeta], rows: RowLimiter, delimiter: str) -> Iterator[bytes]:

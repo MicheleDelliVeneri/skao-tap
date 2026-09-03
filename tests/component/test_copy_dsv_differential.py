@@ -79,6 +79,9 @@ PROBES = [
     ("date", "date", "'2026-01-02'::date"),
     ("time", "time", "'03:04:05'::time"),
     ("time_micros", "time", "'03:04:05.123456'::time"),
+    # Python prints six fractional digits or none; PostgreSQL's text trims
+    # trailing zeros, so `time` cannot pass through.
+    ("time_half", "time", "'03:04:05.5'::time"),
     ("timestamp", "timestamp", "'2026-01-02 03:04:05'::timestamp"),
     ("timestamp_micros", "timestamp", "'2026-01-02 03:04:05.123456'::timestamp"),
     ("timestamp_millis", "timestamp", "'2026-01-02 03:04:05.123'::timestamp"),
@@ -93,6 +96,9 @@ PROBES = [
     ("text_empty", "text", "''::text"),
     ("varchar", "varchar", "'vc'::varchar(8)"),
     ("bpchar", "bpchar", "'bp'::char(4)"),
+    # psycopg keeps char(n)'s padding; `''::bpchar` compares equal to blanks,
+    # so a plain nullif would turn four spaces into NULL.
+    ("bpchar_blank", "bpchar", "'    '::char(4)"),
 ]
 
 # Every probe in one row, plus a text column in front. The multi-column shape

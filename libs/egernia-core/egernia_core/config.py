@@ -79,6 +79,8 @@ class Settings:
     # field, and the way to measure the change on one host without moving
     # between two builds.
     copy_dsv: bool = _bool("TAP_COPY_DSV", True)
+    # The same switch for the server-side VOTable path (same module).
+    copy_votable: bool = _bool("TAP_COPY_VOTABLE", True)
     # Entries in the ADQL translation memo (see query/adql.py). Read once, at
     # import: lru_cache fixes its size at decoration. 0 disables the cache
     # without a rebuild -- every call becomes a miss and nothing is stored,
