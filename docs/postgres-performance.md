@@ -116,8 +116,8 @@ own limits:
 
 - `shared_buffers` = 1/4 of the container's memory limit. The rest is the
   OS page cache, per-backend `work_mem`, and the parallel workers.
-- `effective_cache_size` = 3/4 of the memory limit. A planner hint only;
-  the image's 4GB default already matches the compose budget.
+- `effective_cache_size` = 3/4 of the memory limit — a planner hint, not
+  an allocation. Compose: 3GB of the 4 GiB pin; chart: 1536MB of 2 GiB.
 - `max_parallel_workers` >= (sum of the services' connection pool sizes) x
   `max_parallel_workers_per_gather`. Every pooled query must be able to
   get the workers its plan assumed. Compose: (API 8 + executor 8) x 2 = 32.

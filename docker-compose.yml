@@ -19,6 +19,8 @@ services:
       - -c
       - shared_buffers=1GB
       - -c
+      - effective_cache_size=3GB
+      - -c
       - work_mem=64MB
       - -c
       - max_parallel_workers=32

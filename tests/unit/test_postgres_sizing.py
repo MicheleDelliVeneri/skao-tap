@@ -30,12 +30,16 @@ _UNITS = {
 
 
 def _bytes(value: str) -> int:
-    digits = value.rstrip("".join(_UNITS))
-    return int(digits) * _UNITS[value[len(digits) :]]
+    """A PostgreSQL, compose or Kubernetes memory quantity, in bytes."""
+    for suffix, scale in sorted(_UNITS.items(), key=lambda item: -len(item[0])):
+        if value.endswith(suffix):
+            return int(value.removesuffix(suffix)) * scale
+    raise AssertionError(f"{value!r} has no known unit suffix ({', '.join(_UNITS)})")
 
 
 def _check(tuning: dict, memory_limit: int, pool_slots: int) -> None:
     assert _bytes(tuning["shared_buffers"]) == memory_limit // 4
+    assert _bytes(tuning["effective_cache_size"]) == memory_limit * 3 // 4
     workers = int(tuning["max_parallel_workers"])
     assert workers >= pool_slots * PER_GATHER
     assert int(tuning["max_worker_processes"]) >= workers + SERVER_OWN_WORKERS
@@ -66,4 +70,16 @@ def test_chart_settings_fit_the_in_chart_pod():
     api = values["tapApi"]["replicas"] * values["tapApi"]["workers"]
     slots = (api + values["tapExecutor"]["replicas"]) * values["config"]["dbPoolMax"]
     _check(pg["tuning"], memory, pool_slots=slots)
-    assert _bytes(pg["tuning"]["effective_cache_size"]) == memory * 3 // 4
+
+
+@pytest.mark.parametrize(
+    ("quantity", "expected"),
+    [("1GB", 2**30), ("512MB", 2**29), ("4g", 2**32), ("2Gi", 2**31), ("8kB", 2**13)],
+)
+def test_memory_quantities_are_read_in_every_dialect(quantity, expected):
+    assert _bytes(quantity) == expected
+
+
+def test_an_unknown_unit_is_a_clear_failure():
+    with pytest.raises(AssertionError, match="no known unit suffix"):
+        _bytes("1TB")
