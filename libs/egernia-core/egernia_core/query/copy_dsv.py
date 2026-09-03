@@ -530,7 +530,7 @@ def result_stream(cur, sql: str, tap_meta: dict, fmt_key: str, maxrec: int, chun
     to be closed even if the consumer walks away mid-download; the COPY path
     has nothing to close but is yielded the same way.
     """
-    server = None
+    server = fallbacks = None
     if fmt_key in _DELIMITERS and settings.copy_dsv:
         server, fallbacks = (
             lambda c, d: stream_copy_dsv(cur, sql, c, d, _DELIMITERS[fmt_key], maxrec),

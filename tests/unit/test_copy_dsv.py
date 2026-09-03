@@ -181,6 +181,32 @@ def test_unescape_undoes_copy_text_escaping(escaped, raw):
     assert unescape(escaped) == raw
 
 
+def test_the_fake_copy_escapes_exactly_what_unescape_decodes():
+    """The unit-test fake and the decoder are checked against each other: every
+    byte COPY's text format escapes goes through the fake's escaping and comes
+    back out of `unescape` as itself, and each one was actually escaped."""
+    import types
+
+    from egernia_core.query.copy_dsv import _ESCAPES, unescape
+
+    from tests.unit.conftest import _FakeCopy, copy_text_escape
+
+    for raw in _ESCAPES.values():
+        assert copy_text_escape(raw) != raw, f"the fake does not escape {raw!r}"
+        assert unescape(copy_text_escape(raw)) == raw
+    every = b"\\ \x08 \x0c \n \r \t \x0b"
+    assert set(_ESCAPES.values()) <= {every[i : i + 1] for i in range(len(every))}
+    assert unescape(copy_text_escape(every)) == every
+
+    # and through the fake's COPY iteration, as the server-side path sees it
+    text = every.decode()
+    description = (types.SimpleNamespace(name="t", type_code=25),)
+    blocks = list(_FakeCopy([(text,)], description, "COPY (...) TO STDOUT WITH (FORMAT text)"))
+    assert len(blocks) == 1 and blocks[0].endswith(b"\n")
+    assert unescape(blocks[0]) == f"<TR><TD>{text}</TD></TR>\n".encode()
+    assert blocks[0] != unescape(blocks[0]), "the row held escapable bytes yet nothing was escaped"
+
+
 def test_unescape_returns_a_chunk_with_no_escape_untouched():
     """The common ObsCore chunk: the cost has to be a memchr, not a copy."""
     from egernia_core.query.copy_dsv import unescape

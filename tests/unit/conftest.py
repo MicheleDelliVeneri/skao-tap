@@ -92,6 +92,19 @@ class FakeStreamCursor:
         return _FakeCopy(self._db.result_rows, self._db.result_description, statement)
 
 
+def copy_text_escape(raw: bytes) -> bytes:
+    """COPY's text-format escaping: the inverse of `copy_dsv.unescape`, over
+    the same closed table -- backslash first, so the escapes it introduces are
+    not escaped again."""
+    from egernia_core.query.copy_dsv import _ESCAPES
+
+    out = raw.replace(b"\\", b"\\\\")
+    for escaped, byte in _ESCAPES.items():
+        if escaped != b"\\":
+            out = out.replace(byte, b"\\" + escaped)
+    return out
+
+
 class _FakeCopy:
     def __init__(self, rows, description, statement):
         self._rows = list(rows)
@@ -113,7 +126,7 @@ class _FakeCopy:
             for row in self._rows:
                 body = b"".join(stream_votable(columns, RowLimiter([row], 1)))
                 tr = body.split(b"<TABLEDATA>\n", 1)[1].split(b"</TABLEDATA>", 1)[0]
-                yield tr[:-1].replace(b"\\", b"\\\\").replace(b"\n", b"\\n") + b"\n"
+                yield copy_text_escape(tr[:-1]) + b"\n"
             return
         for row in self._rows:
             out = io.StringIO()
