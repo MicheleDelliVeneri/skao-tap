@@ -517,18 +517,31 @@ postgresql:
   storage: 5Gi
   storageClass: ""
   # -- postgresql.conf overrides, passed as `-c key=value` server arguments.
-  # Size to the pod's memory limit; typical starting points for 2Gi:
-  #   max_connections: 100
-  #   shared_buffers: 512MB
-  #   effective_cache_size: 1536MB
-  #   work_mem: 32MB              # per sort/hash node — large ADQL joins
-  #   maintenance_work_mem: 128MB
-  # Result queries run as plain statements, so scan-heavy ADQL (full-table
-  # aggregates) can use parallel workers. With a multi-CPU pod the knob that
-  # decides how many one query may take is max_parallel_workers_per_gather
-  # (PostgreSQL defaults to 2); max_parallel_workers caps the total across
-  # concurrent queries and should track the pod's CPU limit.
-  tuning: {}
+  # Sized to the pod's memory limit below (2Gi) and to the services'
+  # connection pools; resize together when either changes. The rule is
+  # measured in docs/postgres-performance.md ("Sizing the server to its
+  # container"):
+  #   shared_buffers        = 1/4 of the memory limit
+  #   effective_cache_size  = 3/4 of the memory limit (a planner hint)
+  #   work_mem              = per sort/hash node, per backend -- keep
+  #                           max_connections x work_mem well inside the rest
+  #   max_parallel_workers  >= sum of pool sizes x max_parallel_workers_per_gather
+  #                           = (tapApi.replicas x tapApi.workers + tapExecutor.replicas)
+  #                             x config.dbPoolMax x 2, here (1 + 1) x 8 x 2 = 32.
+  #                           Below that, concurrent full-table queries starve
+  #                           each other of the workers the planner assumed,
+  #                           and the tail latency doubles.
+  #   max_worker_processes  = max_parallel_workers + 8 for the server's own
+  #                           launchers, I/O workers and autovacuum
+  # max_parallel_workers_per_gather stays at PostgreSQL's 2: more helps only an
+  # idle server (one query, 26% faster) and costs every concurrent one.
+  tuning:
+    shared_buffers: 512MB
+    effective_cache_size: 1536MB
+    work_mem: 32MB
+    maintenance_work_mem: 128MB
+    max_parallel_workers: 32
+    max_worker_processes: 40
   resources:
     requests:
       cpu: 250m

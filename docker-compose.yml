@@ -1,6 +1,29 @@
 services:
   db:
     build: ./db
+    # Server settings sized to this container, not the postgres image's
+    # laptop defaults (128MB shared_buffers, 8 parallel workers in total):
+    # a 4 GiB memory budget (what the comparison pins give it, see
+    # benchmarks/tap-compare/docker-compose.egernia-pins.yml) and the two
+    # services' connection pools. The rule, measured in
+    # docs/postgres-performance.md ("Sizing the server to its container"):
+    #   shared_buffers        = 1/4 of the memory limit
+    #   max_parallel_workers  >= sum of pool sizes x max_parallel_workers_per_gather
+    #                           (api 8 + executor 8) x 2 = 32
+    #   max_worker_processes  = max_parallel_workers + 8 for the server's own
+    #                           launchers, I/O workers and autovacuum
+    # The Helm chart carries the same rule for its 2 GiB pod in
+    # postgresql.tuning.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - work_mem=64MB
+      - -c
+      - max_parallel_workers=32
+      - -c
+      - max_worker_processes=40
     environment:
       POSTGRES_USER: tap
       POSTGRES_PASSWORD: tap
