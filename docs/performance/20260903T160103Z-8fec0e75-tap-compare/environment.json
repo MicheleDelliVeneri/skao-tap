@@ -1,0 +1,55 @@
+{
+  "corpus_sha256": "9f9da00f45f129bca6af68083a08a1a9e340eded89c29ad17d89eefe6cd7ff1b",
+  "git": {
+    "branch": "main",
+    "describe": "8fec0e7",
+    "dirty": false,
+    "sha": "8fec0e75eb11c12cdd080d7c1790eb7117f76d2c"
+  },
+  "host": {
+    "cpu_count": 30,
+    "machine": "x86_64",
+    "platform": "Linux-6.8.0-134-generic-x86_64-with-glibc2.39",
+    "processor": "x86_64",
+    "python": "3.14.6"
+  },
+  "recorded_at": 1788451263.8245409,
+  "scenario": {
+    "compare": {
+      "generator_processes": 4,
+      "ladder": [
+        1,
+        4,
+        8,
+        16,
+        32
+      ],
+      "maxrec": 100000,
+      "measure_seconds": 120,
+      "per_class": true,
+      "repetitions": 3,
+      "response_formats": [
+        "votable",
+        "csv"
+      ],
+      "warmup_seconds": 30
+    }
+  },
+  "seed": 424242,
+  "target": {
+    "dachs-local": {
+      "base_url": "http://localhost:8081/tap",
+      "name": "dachs-local",
+      "notes": "GAVO DaCHS from the Debian gavodachs2-server package (benchmarks/tap-compare/docker-compose.dachs.yml), serving the exported ObsCore corpus via //obscore#publishObscoreLike.",
+      "portable_only": true,
+      "server": "dachs"
+    },
+    "egernia-local": {
+      "base_url": "http://localhost:8080/tap",
+      "name": "egernia-local",
+      "notes": "The repository's own docker-compose.yml stack, seeded with `uv run --group dataset python -m egernia_dataset.seed`.",
+      "portable_only": true,
+      "server": "egernia"
+    }
+  }
+}
