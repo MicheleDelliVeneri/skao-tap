@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vosi:capabilities
+    xmlns:vosi="http://www.ivoa.net/xml/VOSICapabilities/v1.0"
+    xmlns:vod="http://www.ivoa.net/xml/VODataService/v1.1"
+    xmlns:tr="http://www.ivoa.net/xml/TAPRegExt/v1.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <capability standardID="ivo://ivoa.net/std/TAP" xsi:type="tr:TableAccess">
+    <interface xsi:type="vod:ParamHTTP" role="std" version="1.1">
+      <accessURL use="base">http://localhost:8080/tap</accessURL>
+    </interface>
+    <dataModel ivo-id="ivo://ivoa.net/std/ObsCore#core-1.1">ObsCore-1.1</dataModel>
+    <language>
+      <name>ADQL</name>
+      <version ivo-id="ivo://ivoa.net/std/ADQL#v2.0">2.0</version>
+      <version ivo-id="ivo://ivoa.net/std/ADQL#v2.1">2.1</version>
+      <description>ADQL translated to PostgreSQL/pg_sphere</description>
+      <languageFeatures type="ivo://ivoa.net/std/TAPRegExt#features-adqlgeo">
+        <feature><form>AREA</form></feature>
+        <feature><form>BOX</form></feature>
+        <feature><form>CIRCLE</form></feature>
+        <feature><form>CONTAINS</form></feature>
+        <feature><form>DISTANCE</form></feature>
+        <feature><form>INTERSECTS</form></feature>
+        <feature><form>POINT</form></feature>
+        <feature><form>POLYGON</form></feature>
+      </languageFeatures>
+      <languageFeatures type="ivo://ivoa.net/std/TAPRegExt#features-adql-string">
+        <feature><form>LOWER</form></feature>
+        <feature><form>UPPER</form></feature>
+        <feature><form>ILIKE</form></feature>
+      </languageFeatures>
+      <languageFeatures type="ivo://ivoa.net/std/TAPRegExt#features-adql-offset">
+        <feature><form>OFFSET</form></feature>
+      </languageFeatures>
+      <languageFeatures type="ivo://ivoa.net/std/TAPRegExt#features-adql-type">
+        <feature><form>CAST</form></feature>
+      </languageFeatures>
+      <languageFeatures type="ivo://ivoa.net/std/TAPRegExt#features-adql-sets">
+        <feature><form>UNION</form></feature>
+        <feature><form>EXCEPT</form></feature>
+        <feature><form>INTERSECT</form></feature>
+      </languageFeatures>
+      <languageFeatures type="ivo://ivoa.net/std/TAPRegExt#features-adql-conditional">
+        <feature><form>COALESCE</form></feature>
+      </languageFeatures>
+    </language>
+    <outputFormat><mime>application/x-votable+xml</mime><alias>votable</alias></outputFormat>
+    <outputFormat><mime>text/csv</mime><alias>csv</alias></outputFormat>
+    <outputFormat><mime>text/tab-separated-values</mime><alias>tsv</alias></outputFormat>
+    <outputFormat><mime>application/json</mime><alias>json</alias></outputFormat>
+    <outputFormat><mime>application/vnd.apache.parquet</mime><alias>parquet</alias></outputFormat>
+    <outputFormat><mime>application/vnd.apache.arrow.stream</mime><alias>arrow</alias></outputFormat>
+    <!-- http/https declared unconditionally: TAP 1.1 makes them mandatory
+         for a service that supports uploads at all (taplint E-CAP-MUPM).
+         The methods are implemented; TAP_UPLOAD_ALLOWED_HOSTS still decides,
+         per request, which destinations a fetch may reach — a capability is
+         not an authorisation. -->
+    <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-inline"/>
+    <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-http"/>
+    <uploadMethod ivo-id="ivo://ivoa.net/std/TAPRegExt#upload-https"/>
+    <retentionPeriod>
+      <default>604800</default>
+    </retentionPeriod>
+    <executionDuration><default>600</default></executionDuration>
+    <outputLimit>
+      <default unit="row">10000</default>
+      <hard unit="row">1000000</hard>
+    </outputLimit>
+    <uploadLimit>
+      <hard unit="row">100000</hard>
+    </uploadLimit>
+  </capability>
+  <capability standardID="ivo://ivoa.net/std/VOSI#capabilities">
+    <interface xsi:type="vod:ParamHTTP" role="std">
+      <accessURL use="full">http://localhost:8080/tap/capabilities</accessURL>
+    </interface>
+  </capability>
+  <capability standardID="ivo://ivoa.net/std/VOSI#availability">
+    <interface xsi:type="vod:ParamHTTP" role="std">
+      <accessURL use="full">http://localhost:8080/tap/availability</accessURL>
+    </interface>
+  </capability>
+  <capability standardID="ivo://ivoa.net/std/VOSI#tables">
+    <interface xsi:type="vod:ParamHTTP" role="std">
+      <accessURL use="full">http://localhost:8080/tap/tables</accessURL>
+    </interface>
+  </capability>
+  <capability standardID="ivo://ivoa.net/std/DALI#examples">
+    <interface xsi:type="vod:ParamHTTP" role="std">
+      <accessURL use="full">http://localhost:8080/tap/examples</accessURL>
+    </interface>
+  </capability>
+</vosi:capabilities>

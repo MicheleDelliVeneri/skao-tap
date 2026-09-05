@@ -1,0 +1,192 @@
+This is STILTS taplint, 3.5-6/6df87fe94 (2026-08-21)
+Timestamp: 2026-09-03 16:01:16 UTC
+Static report types: ERROR(173), WARNING(77), INFO(32), SUMMARY(13), FAILURE(25)
+
+Section TMV: Validate table metadata against XML schema
+I-TMV-VURL-1 Validating http://localhost:8081/tap/tables as tableset (http://www.ivoa.net/xml/VODataService/v1.1)
+W-TMV-UNSC-1 Schema from unknown namespace during validation: http://dc.g-vo.org/ColStats-1
+S-TMV-VALI-1 SAX report: warnings 0, errors 0, fatal 0
+
+Section TME: Check content of tables metadata from /tables
+I-TME-CURL-1 Reading capability metadata from http://localhost:8081/tap/capabilities
+I-TME-TURL-1 Reading table metadata from http://localhost:8081/tap/tables?detail=max
+S-TME-SUMM-1 Schemas: 3, Tables: 8, Columns: 119, Foreign Keys: 6
+S-TME-FLGS-1 Standard column flags: indexed: 11, primary: 5, nullable: 109
+S-TME-FLGO-1 Other column flags: none
+
+Section TMS: Check content of tables metadata from TAP_SCHEMA
+I-TMS-TAPV-1 Validating for TAP version V1.1
+I-TMS-QSUB-1 Submitting query: SELECT COUNT(*) AS nr FROM TAP_SCHEMA.schemas
+I-TMS-QGET-1 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+COUNT%28*%29+AS+nr+FROM+TAP_SCHEMA.schemas
+I-TMS-QSUB-2 Submitting query: SELECT COUNT(*) AS nr FROM TAP_SCHEMA.tables
+I-TMS-QGET-2 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+COUNT%28*%29+AS+nr+FROM+TAP_SCHEMA.tables
+I-TMS-QSUB-3 Submitting query: SELECT COUNT(*) AS nr FROM TAP_SCHEMA.columns
+I-TMS-QGET-3 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+COUNT%28*%29+AS+nr+FROM+TAP_SCHEMA.columns
+I-TMS-QSUB-4 Submitting query: SELECT COUNT(*) AS nr FROM TAP_SCHEMA.keys
+I-TMS-QGET-4 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+COUNT%28*%29+AS+nr+FROM+TAP_SCHEMA.keys
+I-TMS-QSUB-5 Submitting query: SELECT COUNT(*) AS nr FROM TAP_SCHEMA.key_columns
+I-TMS-QGET-5 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+COUNT%28*%29+AS+nr+FROM+TAP_SCHEMA.key_columns
+I-TMS-QSUB-6 Submitting query: SELECT principal, indexed, std, "size" FROM TAP_SCHEMA.columns
+I-TMS-QGET-6 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+principal%2C+indexed%2C+std%2C+%22size%22+FROM+TAP_SCHEMA.columns&MAXREC=129
+I-TMS-QSUB-7 Submitting query: SELECT TOP 1 * FROM TAP_SCHEMA.columns
+I-TMS-QGET-7 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+*+FROM+TAP_SCHEMA.columns&MAXREC=1
+I-TMS-QSUB-8 Submitting query: SELECT table_name, column_name, description, unit, ucd, utype, datatype, arraysize, xtype, principal, indexed, std, sourcerd, column_index FROM TAP_SCHEMA.columns
+I-TMS-QGET-8 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+table_name%2C+column_name%2C+description%2C+unit%2C+ucd%2C+utype%2C+datatype%2C+arraysize%2C+xtype%2C+principal%2C+indexed%2C+std%2C+sourcerd%2C+column_index+FROM+TAP_SCHEMA.columns&MAXREC=129
+I-TMS-QSUB-9 Submitting query: SELECT from_column, target_column, key_id FROM TAP_SCHEMA.key_columns
+I-TMS-QGET-9 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+from_column%2C+target_column%2C+key_id+FROM+TAP_SCHEMA.key_columns&MAXREC=129
+I-TMS-TSNS-1 2 non-standard columns in TAP_SCHEMA.tables: [sourcerd, nrows]
+I-TMS-TSNS-2 1 non-standard columns in TAP_SCHEMA.columns: [sourcerd]
+I-TMS-TSNS-3 1 non-standard columns in TAP_SCHEMA.keys: [sourcerd]
+I-TMS-TSNS-4 1 non-standard columns in TAP_SCHEMA.key_columns: [sourcerd]
+S-TMS-SUMM-1 Schemas: 3, Tables: 8, Columns: 119, Foreign Keys: 6
+S-TMS-FLGS-1 Standard column flags: indexed: 11, principal: 115, std: 106
+S-TMS-QNUM-1 Successful/submitted TAP queries: 31/31
+S-TMS-QTIM-1 Average successful query time: 0.06s
+I-TMS-QSUB-x (22 more)
+I-TMS-QGET-x (22 more)
+
+Section TMC: Compare table metadata from /tables and TAP_SCHEMA
+
+Section UUC: Check column units and UCDs are legal
+I-UUC-UCDV-1 UCD validation details: Ucidy version 1.2, UCD words version EN-UCD1+-1.4, UCD deprecated words version EN-UCD1+-1.4
+
+Section CPV: Validate capabilities against XML schema
+I-CPV-VURL-1 Validating http://localhost:8081/tap/capabilities as capabilities (http://www.ivoa.net/xml/VOSICapabilities/v1.0)
+S-CPV-VALI-1 SAX report: warnings 0, errors 0, fatal 0
+
+Section CAP: Check TAP and TAPRegExt content of capabilities document
+I-CAP-SVRI-1 HTTP server header "Server: DaCHS/2.11 twistedWeb/24.11.0"
+I-CAP-CULF-1 Custom feature type "ivo://org.gavo.dc/std/exts#extra-adql-keywords" for language ADQL
+W-CAP-CPUL-1 AccessURL for ivo://ivoa.net/std/VOSI#capabilities is not at fixed location ("http://localhost:8081/__system__/tap/run/capabilities" != "http://localhost:8081/tap/capabilities"
+W-CAP-CPUL-2 AccessURL for ivo://ivoa.net/std/VOSI#tables is not at fixed location ("http://localhost:8081/__system__/tap/run/tableMetadata" != "http://localhost:8081/tap/tables"
+
+Section AVV: Validate availability against XML schema
+I-AVV-VURL-1 Validating http://localhost:8081/tap/availability as availability (http://www.ivoa.net/xml/VOSIAvailability/v1.0)
+S-AVV-VALI-1 SAX report: warnings 0, errors 0, fatal 0
+
+Section QGE: Make ADQL queries in sync GET mode
+I-QGE-SCHM-1 Using standard TAP_SCHEMA tables for metadata
+I-QGE-QSUB-1 Submitting query: SELECT TOP 10 dataproduct_type FROM ivoa.obscore
+I-QGE-QGET-1 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+10+dataproduct_type+FROM+ivoa.obscore
+I-QGE-QSUB-2 Submitting query: SELECT dataproduct_type FROM ivoa.obscore
+I-QGE-QGET-2 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+dataproduct_type+FROM+ivoa.obscore&MAXREC=9
+I-QGE-QSUB-3 Submitting query: SELECT TOP 10 dataproduct_type FROM ivoa.obscore
+I-QGE-QGET-3 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+10+dataproduct_type+FROM+ivoa.obscore&DUMMY=ignore-me
+I-QGE-QSUB-4 Submitting query: SELECT TOP 1 dataproduct_type FROM ivoa.obscore
+I-QGE-QGET-4 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL-2.0&QUERY=SELECT+TOP+1+dataproduct_type+FROM+ivoa.obscore
+I-QGE-QSUB-5 Submitting query: SELECT TOP 1 dataproduct_type FROM ivoa.obscore
+I-QGE-QGET-5 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL-2.1&QUERY=SELECT+TOP+1+dataproduct_type+FROM+ivoa.obscore
+I-QGE-QSUB-6 Submitting query: SELECT TOP 1 dataproduct_type FROM ivoa.obscore
+I-QGE-QGET-6 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+dataproduct_type+FROM+ivoa.obscore
+I-QGE-QSUB-7 Submitting query: SELECT TOP 8 source_table, s_pixel_scale AS taplint_c_2, i.t_xel, instrument_name AS taplint_c_4, o_ucd, i.em_min AS taplint_c_6, t_max, s_region AS taplint_c_8, i.s_ra, access_estsize AS taplint_c_10, obs_creator_did, i.obs_id AS taplint_c_12, dataproduct_subtype FROM ivoa.obscore AS i
+I-QGE-QGET-7 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+8+source_table%2C+s_pixel_scale+AS+taplint_c_2%2C+i.t_xel%2C+instrument_name+AS+taplint_c_4%2C+o_ucd%2C+i.em_min+AS+taplint_c_6%2C+t_max%2C+s_region+AS+taplint_c_8%2C+i.s_ra%2C+access_estsize+AS+taplint_c_10%2C+obs_creator_did%2C+i.obs_id+AS+taplint_c_12%2C+dataproduct_subtype++FROM+ivoa.obscore+AS+i
+W-QGE-YXDL-1 (l.2, c.4323): Non-DALI 1.1 xtype value "mjd" (FIELD t_max)
+I-QGE-YXNI-1 (l.2, c.4595): Namespaced non-DALI xtype value "adql:REGION" (FIELD taplint_c_8)
+I-QGE-QSUB-8 Submitting query: SELECT dataproduct_type FROM ivoa.obscore
+I-QGE-QGET-8 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+dataproduct_type+FROM+ivoa.obscore&MAXREC=0
+I-QGE-DUFF-1 Submitting query expected to fail (bad ADQL): DUFF QUERY
+I-QGE-QGET-9 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=DUFF+QUERY
+I-QGE-YPIY-1 (l.1, c.81): Ignoring processing instruction <?xml-stylesheet href='/static/xsl/dalierror-to-html.xsl' type='text/xsl'?>
+I-QGE-DUFF-2 Submitting query expected to fail (unknown query language): SELECT TOP 1 * FROM TAP_SCHEMA.tables
+I-QGE-YPIY-2 (l.1, c.81): Ignoring processing instruction <?xml-stylesheet href='/static/xsl/dalierror-to-html.xsl' type='text/xsl'?>
+S-QGE-QNUM-1 Successful/submitted TAP queries: 8/8
+S-QGE-QTIM-1 Average successful query time: 0.05s
+I-QGE-QGET-x (1 more)
+
+Section QPO: Make ADQL queries in sync POST mode
+I-QPO-QSUB-1 Submitting query: SELECT TOP 10 dataproduct_type FROM ivoa.obscore
+I-QPO-QSUB-2 Submitting query: SELECT dataproduct_type FROM ivoa.obscore
+I-QPO-QSUB-3 Submitting query: SELECT TOP 10 dataproduct_type FROM ivoa.obscore
+I-QPO-QSUB-4 Submitting query: SELECT TOP 8 source_table, s_pixel_scale AS taplint_c_2, i.t_xel, instrument_name AS taplint_c_4, o_ucd, i.em_min AS taplint_c_6, t_max, s_region AS taplint_c_8, i.s_ra, access_estsize AS taplint_c_10, obs_creator_did, i.obs_id AS taplint_c_12, dataproduct_subtype FROM ivoa.obscore AS i
+W-QPO-YXDL-1 (l.2, c.4323): Non-DALI 1.1 xtype value "mjd" (FIELD t_max)
+I-QPO-YXNI-1 (l.2, c.4595): Namespaced non-DALI xtype value "adql:REGION" (FIELD taplint_c_8)
+I-QPO-QSUB-5 Submitting query: SELECT dataproduct_type FROM ivoa.obscore
+I-QPO-DUFF-1 Submitting query expected to fail (bad ADQL): DUFF QUERY
+I-QPO-YPIY-1 (l.1, c.81): Ignoring processing instruction <?xml-stylesheet href='/static/xsl/dalierror-to-html.xsl' type='text/xsl'?>
+I-QPO-DUFF-2 Submitting query expected to fail (unknown query language): SELECT TOP 1 * FROM TAP_SCHEMA.tables
+I-QPO-YPIY-2 (l.1, c.81): Ignoring processing instruction <?xml-stylesheet href='/static/xsl/dalierror-to-html.xsl' type='text/xsl'?>
+S-QPO-QNUM-1 Successful/submitted TAP queries: 5/5
+S-QPO-QTIM-1 Average successful query time: 0.05s
+
+Section QAS: Make ADQL queries in async mode
+I-QAS-QSUB-1 Submitting query: SELECT TOP 10 dataproduct_type FROM ivoa.obscore
+I-QAS-QJOB-1 Submitted query at http://localhost:8081/__system__/tap/run/async/r1bjm8jy
+I-QAS-QSUB-2 Submitting query: SELECT dataproduct_type FROM ivoa.obscore
+I-QAS-QJOB-2 Submitted query at http://localhost:8081/__system__/tap/run/async/218_3ixs
+I-QAS-QSUB-3 Submitting query: SELECT TOP 10 dataproduct_type FROM ivoa.obscore
+I-QAS-QJOB-3 Submitted query at http://localhost:8081/__system__/tap/run/async/7h82ynrc
+I-QAS-QSUB-4 Submitting query: SELECT TOP 8 source_table, s_pixel_scale AS taplint_c_2, i.t_xel, instrument_name AS taplint_c_4, o_ucd, i.em_min AS taplint_c_6, t_max, s_region AS taplint_c_8, i.s_ra, access_estsize AS taplint_c_10, obs_creator_did, i.obs_id AS taplint_c_12, dataproduct_subtype FROM ivoa.obscore AS i
+I-QAS-QJOB-4 Submitted query at http://localhost:8081/__system__/tap/run/async/0wi2wl9v
+W-QAS-YXDL-1 (l.2, c.4323): Non-DALI 1.1 xtype value "mjd" (FIELD t_max)
+I-QAS-YXNI-1 (l.2, c.4595): Namespaced non-DALI xtype value "adql:REGION" (FIELD taplint_c_8)
+I-QAS-QSUB-5 Submitting query: SELECT dataproduct_type FROM ivoa.obscore
+I-QAS-QJOB-5 Submitted query at http://localhost:8081/__system__/tap/run/async/ltxbdpe_
+I-QAS-DUFF-1 Submitting query expected to fail (bad ADQL): DUFF QUERY
+I-QAS-QJOB-6 Submitted query at http://localhost:8081/__system__/tap/run/async/mdgfql4a
+I-QAS-YPIY-1 (l.1, c.81): Ignoring processing instruction <?xml-stylesheet href='/static/xsl/dalierror-to-html.xsl' type='text/xsl'?>
+I-QAS-DUFF-2 Submitting query expected to fail (unknown query language): SELECT TOP 1 * FROM TAP_SCHEMA.tables
+I-QAS-QJOB-7 Submitted query at http://localhost:8081/__system__/tap/run/async/oz24lb2l
+I-QAS-YPIY-2 (l.1, c.81): Ignoring processing instruction <?xml-stylesheet href='/static/xsl/dalierror-to-html.xsl' type='text/xsl'?>
+S-QAS-QNUM-1 Successful/submitted TAP queries: 5/5
+S-QAS-QTIM-1 Average successful query time: 2.1s
+
+Section UWS: Test asynchronous UWS/TAP behaviour
+I-UWS-CJOB-1 Created new job http://localhost:8081/__system__/tap/run/async/wbkke76m
+I-UWS-POPA-1 POSTed runId=TAPLINT-002 to http://localhost:8081/__system__/tap/run/async/wbkke76m/parameters (303)
+I-UWS-POPA-2 POSTed PHASE=ABORT to http://localhost:8081/__system__/tap/run/async/wbkke76m/phase (303)
+I-UWS-POPA-3 POSTed ACTION=DELETE to http://localhost:8081/__system__/tap/run/async/wbkke76m (303)
+I-UWS-CJOB-2 Created new job http://localhost:8081/__system__/tap/run/async/u27r8psp
+I-UWS-CJOB-3 Created new job http://localhost:8081/__system__/tap/run/async/za7ct7qf
+I-UWS-VUWS-1 UWS job document explicitly V1.1
+I-UWS-POPA-4 POSTed PHASE=RUN to http://localhost:8081/__system__/tap/run/async/za7ct7qf/phase (303)
+
+Section MDQ: Check table query result columns against declared metadata
+I-MDQ-TMAX-1 Testing only 5/8 tables
+I-MDQ-QSUB-1 Submitting query: SELECT TOP 1 * FROM bench.main
+W-MDQ-DRXT-1 Declared/result XType mismatch for column t_min in table bench.main (null != mjd)
+W-MDQ-DRXT-2 Declared/result XType mismatch for column t_max in table bench.main (null != mjd)
+I-MDQ-QSUB-2 Submitting query: SELECT TOP 1 * FROM ivoa.obscore
+W-MDQ-DRXT-3 Declared/result XType mismatch for column t_min in table ivoa.obscore (null != mjd)
+W-MDQ-DRXT-4 Declared/result XType mismatch for column t_max in table ivoa.obscore (null != mjd)
+I-MDQ-QSUB-3 Submitting query: SELECT TOP 1 * FROM tap_schema.columns
+W-MDQ-CCAS-1 Declared/result column capitalization mismatch in table tap_schema.columns sourcerd != sourceRD
+I-MDQ-QSUB-4 Submitting query: SELECT TOP 1 * FROM tap_schema.groups
+W-MDQ-CCAS-2 Declared/result column capitalization mismatch in table tap_schema.groups sourcerd != sourceRD
+I-MDQ-QSUB-5 Submitting query: SELECT TOP 1 * FROM tap_schema.key_columns
+W-MDQ-CCAS-3 Declared/result column capitalization mismatch in table tap_schema.key_columns sourcerd != sourceRD
+S-MDQ-QNUM-1 Successful/submitted TAP queries: 5/5
+S-MDQ-QTIM-1 Average successful query time: 0.08s
+
+Section OBS: Test implementation of ObsCore Data Model
+I-OBS-DMID-1 Checking against ObsCore DM 1.1
+I-OBS-QSUB-1 Submitting query: SELECT DISTINCT TOP 4 dataproduct_type FROM ivoa.ObsCore WHERE dataproduct_type NOT IN ('image', 'cube', 'spectrum', 'sed', 'timeseries', 'visibility', 'event', 'measurements') AND dataproduct_type IS NOT NULL
+I-OBS-QGET-1 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+DISTINCT+TOP+4+dataproduct_type+FROM+ivoa.ObsCore+WHERE+dataproduct_type+NOT+IN+%28%27image%27%2C+%27cube%27%2C+%27spectrum%27%2C+%27sed%27%2C+%27timeseries%27%2C+%27visibility%27%2C+%27event%27%2C+%27measurements%27%29+AND+dataproduct_type+IS+NOT+NULL
+I-OBS-QSUB-2 Submitting query: SELECT TOP 1 calib_level FROM ivoa.ObsCore WHERE calib_level IS NULL
+I-OBS-QGET-2 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+calib_level+FROM+ivoa.ObsCore+WHERE+calib_level+IS+NULL
+I-OBS-QSUB-3 Submitting query: SELECT TOP 1 calib_level FROM ivoa.ObsCore WHERE calib_level NOT BETWEEN 0 AND 4
+I-OBS-QGET-3 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+calib_level+FROM+ivoa.ObsCore+WHERE+calib_level+NOT+BETWEEN+0+AND+4
+I-OBS-QSUB-4 Submitting query: SELECT TOP 1 obs_collection FROM ivoa.ObsCore WHERE obs_collection IS NULL
+I-OBS-QGET-4 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+obs_collection+FROM+ivoa.ObsCore+WHERE+obs_collection+IS+NULL
+I-OBS-QSUB-5 Submitting query: SELECT TOP 1 obs_id FROM ivoa.ObsCore WHERE obs_id IS NULL
+I-OBS-QGET-5 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+obs_id+FROM+ivoa.ObsCore+WHERE+obs_id+IS+NULL
+I-OBS-QSUB-6 Submitting query: SELECT TOP 1 obs_publisher_did FROM ivoa.ObsCore WHERE obs_publisher_did IS NULL
+I-OBS-QGET-6 Query GET URL: http://localhost:8081/tap/sync?LANG=ADQL&QUERY=SELECT+TOP+1+obs_publisher_did+FROM+ivoa.ObsCore+WHERE+obs_publisher_did+IS+NULL
+S-OBS-COLS-1 ivoa.ObsCore columns: 30/30 required, 6/30 optional, 2 custom
+S-OBS-QNUM-1 Successful/submitted TAP queries: 6/6
+S-OBS-QTIM-1 Average successful query time: 0.10s
+
+Section LOC: Test implementation of ObsLocTAP Data Model
+
+Section UPL: Make queries with table uploads
+I-UPL-QSUB-1 Submitting query: SELECT * FROM TAP_UPLOAD.t1 ORDER BY d_int ASC
+I-UPL-QJOB-1 Submitted query at http://localhost:8081/__system__/tap/run/async/qdetn6gj
+W-UPL-YAR1-1 (l.2, c.2001): arraysize="1" deprecated since VOTable 1.3 Erratum #3
+I-UPL-QSUB-2 Submitting query: SELECT * FROM TAP_UPLOAD.t1 ORDER BY d_int ASC
+I-UPL-QJOB-2 Submitted query at http://localhost:8081/__system__/tap/run/async/z7tfrcmy
+W-UPL-YAR1-2 (l.2, c.2001): arraysize="1" deprecated since VOTable 1.3 Erratum #3
+
+Section EXA: Check content of examples document
+I-EXA-EURL-1 Reading examples document from http://localhost:8081/tap/examples
+
+Totals: Errors: 0; Warnings: 15; Infos: 158; Summaries: 21
+

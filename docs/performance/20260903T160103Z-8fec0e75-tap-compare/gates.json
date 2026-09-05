@@ -1,0 +1,969 @@
+{
+  "agreement": {
+    "agreed": [
+      "Q01",
+      "Q02",
+      "Q03",
+      "Q04",
+      "Q05",
+      "Q06",
+      "Q07",
+      "Q10",
+      "Q11",
+      "Q12",
+      "Q13"
+    ],
+    "classes": {
+      "Q01": {
+        "agrees": true,
+        "detail": [
+          {
+            "query_id": "fb8cc70b4bc4f83b",
+            "results": {
+              "dachs-local": {
+                "rows": 8,
+                "sha256": "6a3fc1aec8867e58415052d7b164ce4baebb5e80c9636ceb8bf9eb85e971a138"
+              },
+              "egernia-local": {
+                "rows": 15,
+                "sha256": "b821082ff231decdee089692e798a6401831e312e68ce3daf87f92d2a09148d2"
+              }
+            },
+            "same": true
+          }
+        ]
+      },
+      "Q02": {
+        "agrees": true,
+        "detail": [
+          {
+            "query_id": "983b74bc28fc2943",
+            "results": {
+              "dachs-local": {
+                "rows": 128,
+                "sha256": "64ff3f0761dce6f241c20d06ea8df62e81e1b8bf6103d97b55f2855617e4ae9a"
+              },
+              "egernia-local": {
+                "rows": 128,
+                "sha256": "64ff3f0761dce6f241c20d06ea8df62e81e1b8bf6103d97b55f2855617e4ae9a"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "32da0ece6d5c8835",
+            "results": {
+              "dachs-local": {
+                "rows": 128,
+                "sha256": "474b672532d4871a179367f00acb7059f6b2964d9b8470eee183e3818bbb8c98"
+              },
+              "egernia-local": {
+                "rows": 128,
+                "sha256": "474b672532d4871a179367f00acb7059f6b2964d9b8470eee183e3818bbb8c98"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "823dfbf6d96b7828",
+            "results": {
+              "dachs-local": {
+                "rows": 128,
+                "sha256": "81a145aa1296afb0b09661de7a2d2d01bcb8dc5c85de72191277fa054f83ef91"
+              },
+              "egernia-local": {
+                "rows": 128,
+                "sha256": "81a145aa1296afb0b09661de7a2d2d01bcb8dc5c85de72191277fa054f83ef91"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "9ef2efdc8e36b574",
+            "results": {
+              "dachs-local": {
+                "rows": 128,
+                "sha256": "7f327a609752f984ab2f888a18b6b6352a027ebdd8eb56323416bcefaf806e5b"
+              },
+              "egernia-local": {
+                "rows": 128,
+                "sha256": "7f327a609752f984ab2f888a18b6b6352a027ebdd8eb56323416bcefaf806e5b"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "3b17dedae58ed40a",
+            "results": {
+              "dachs-local": {
+                "rows": 128,
+                "sha256": "655f4caa5ee67fcf479b5bcc362c9887657a289f2bd6e3c644e835e39f4bc06d"
+              },
+              "egernia-local": {
+                "rows": 128,
+                "sha256": "655f4caa5ee67fcf479b5bcc362c9887657a289f2bd6e3c644e835e39f4bc06d"
+              }
+            },
+            "same": true
+          }
+        ]
+      },
+      "Q03": {
+        "agrees": true,
+        "detail": [
+          {
+            "query_id": "77b457024f510c7b",
+            "results": {
+              "dachs-local": {
+                "rows": 100,
+                "sha256": "0f7647e964f031f5b264125e0a5bc343c4d39debb0ec94217c9e804e674c1230"
+              },
+              "egernia-local": {
+                "rows": 100,
+                "sha256": "0f7647e964f031f5b264125e0a5bc343c4d39debb0ec94217c9e804e674c1230"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "4969d493a6ed1589",
+            "results": {
+              "dachs-local": {
+                "rows": 100,
+                "sha256": "65e409720ee5d9d6eb26e7f0f0b8d4aedf91b40435af5fba6672dcd145319a38"
+              },
+              "egernia-local": {
+                "rows": 100,
+                "sha256": "65e409720ee5d9d6eb26e7f0f0b8d4aedf91b40435af5fba6672dcd145319a38"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "ae703b200c234925",
+            "results": {
+              "dachs-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "egernia-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "9e7ee803f55af76a",
+            "results": {
+              "dachs-local": {
+                "rows": 100,
+                "sha256": "d8130c36f635cece0a9bcbf349012b389bd8c043d69d48de2dfd179573972d46"
+              },
+              "egernia-local": {
+                "rows": 100,
+                "sha256": "d8130c36f635cece0a9bcbf349012b389bd8c043d69d48de2dfd179573972d46"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "19061955fa4648d5",
+            "results": {
+              "dachs-local": {
+                "rows": 100,
+                "sha256": "74533bbeee6ae07cc9962f7decc0029175b1cb1f2782da7c0329e8a3c19328c0"
+              },
+              "egernia-local": {
+                "rows": 100,
+                "sha256": "74533bbeee6ae07cc9962f7decc0029175b1cb1f2782da7c0329e8a3c19328c0"
+              }
+            },
+            "same": true
+          }
+        ]
+      },
+      "Q04": {
+        "agrees": true,
+        "detail": [
+          {
+            "query_id": "e2cfb62d0e2127d8",
+            "results": {
+              "dachs-local": {
+                "rows": 200,
+                "sha256": "f29563446f6f448843ad6b30946a712f2266c8a022e15e1f68406e0b4ee4dda5"
+              },
+              "egernia-local": {
+                "rows": 200,
+                "sha256": "f29563446f6f448843ad6b30946a712f2266c8a022e15e1f68406e0b4ee4dda5"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "9bf50476bba8cda1",
+            "results": {
+              "dachs-local": {
+                "rows": 200,
+                "sha256": "5868a0f302049c487a3e3664da5d5cd47f94934ade48f6282650da902cf1ee5f"
+              },
+              "egernia-local": {
+                "rows": 200,
+                "sha256": "5868a0f302049c487a3e3664da5d5cd47f94934ade48f6282650da902cf1ee5f"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "9563c820db70aee1",
+            "results": {
+              "dachs-local": {
+                "rows": 200,
+                "sha256": "a0cbcf4e0e6c5819bb6925d273ba25ed8673d3b7d0ec2537a4bf3ebb29bea33c"
+              },
+              "egernia-local": {
+                "rows": 200,
+                "sha256": "a0cbcf4e0e6c5819bb6925d273ba25ed8673d3b7d0ec2537a4bf3ebb29bea33c"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "c6bb53ada86051e4",
+            "results": {
+              "dachs-local": {
+                "rows": 200,
+                "sha256": "b82049343224bf855ff5a51fa37bede62453aa8e8133e37963771227c62c2a9d"
+              },
+              "egernia-local": {
+                "rows": 200,
+                "sha256": "b82049343224bf855ff5a51fa37bede62453aa8e8133e37963771227c62c2a9d"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "a2b15b2b1acb4578",
+            "results": {
+              "dachs-local": {
+                "rows": 200,
+                "sha256": "104f71b73599f3204044c2d31eae4fa1f07213ad75b3d052e443f2d7cf8b6305"
+              },
+              "egernia-local": {
+                "rows": 200,
+                "sha256": "104f71b73599f3204044c2d31eae4fa1f07213ad75b3d052e443f2d7cf8b6305"
+              }
+            },
+            "same": true
+          }
+        ]
+      },
+      "Q05": {
+        "agrees": true,
+        "detail": [
+          {
+            "query_id": "dd234c81f68de1ab",
+            "results": {
+              "dachs-local": {
+                "rows": 19,
+                "sha256": "2b85cbaa7925435e61bf849094b4581429dd299268e8b5dfaf817b34cb93b2a5"
+              },
+              "egernia-local": {
+                "rows": 19,
+                "sha256": "2b85cbaa7925435e61bf849094b4581429dd299268e8b5dfaf817b34cb93b2a5"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "aaf19c6d62afcebb",
+            "results": {
+              "dachs-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "egernia-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "080087597d3d5303",
+            "results": {
+              "dachs-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "egernia-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "fe8308de9c1aa154",
+            "results": {
+              "dachs-local": {
+                "rows": 5,
+                "sha256": "7831a08ad2e41bdc62cb9d9253a32a0541f8ac84c9e9506c54354ea8693778bf"
+              },
+              "egernia-local": {
+                "rows": 5,
+                "sha256": "7831a08ad2e41bdc62cb9d9253a32a0541f8ac84c9e9506c54354ea8693778bf"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "672ced1fe480bcdd",
+            "results": {
+              "dachs-local": {
+                "rows": 12,
+                "sha256": "cc485bd19172e83845305df3b8d5b23bc00db163e36b8a85fad816956f4fdb1d"
+              },
+              "egernia-local": {
+                "rows": 12,
+                "sha256": "cc485bd19172e83845305df3b8d5b23bc00db163e36b8a85fad816956f4fdb1d"
+              }
+            },
+            "same": true
+          }
+        ]
+      },
+      "Q06": {
+        "agrees": true,
+        "detail": [
+          {
+            "query_id": "f020cb3d3cb00abe",
+            "results": {
+              "dachs-local": {
+                "rows": 284,
+                "sha256": "a8222fc08014d7e137a979012e04185be98d45f3e1e8057d8d71c88940fde880"
+              },
+              "egernia-local": {
+                "rows": 284,
+                "sha256": "a8222fc08014d7e137a979012e04185be98d45f3e1e8057d8d71c88940fde880"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "dca39df3a72133f8",
+            "results": {
+              "dachs-local": {
+                "rows": 229,
+                "sha256": "7fa704a7a4e26b89e5b3b2037db6a015869ce6b905497fccc66d47b02fc45d77"
+              },
+              "egernia-local": {
+                "rows": 229,
+                "sha256": "7fa704a7a4e26b89e5b3b2037db6a015869ce6b905497fccc66d47b02fc45d77"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "a5074172aa447a2f",
+            "results": {
+              "dachs-local": {
+                "rows": 222,
+                "sha256": "cac8958f0aedc3e8bc36f7dc119f0d09fa48e4fac5fffccbf47bfca18ce4e081"
+              },
+              "egernia-local": {
+                "rows": 222,
+                "sha256": "cac8958f0aedc3e8bc36f7dc119f0d09fa48e4fac5fffccbf47bfca18ce4e081"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "bc30676ec132a026",
+            "results": {
+              "dachs-local": {
+                "rows": 256,
+                "sha256": "91048c45bc6c7465fbd66014f170ccc7127d6e292d1338f89f1b765017819816"
+              },
+              "egernia-local": {
+                "rows": 256,
+                "sha256": "91048c45bc6c7465fbd66014f170ccc7127d6e292d1338f89f1b765017819816"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "75b5bc86b2560236",
+            "results": {
+              "dachs-local": {
+                "rows": 217,
+                "sha256": "dd934b1279055c02949267d54a4e9e0dbae2bd5df0c55a2a52d3636845d4ab94"
+              },
+              "egernia-local": {
+                "rows": 217,
+                "sha256": "dd934b1279055c02949267d54a4e9e0dbae2bd5df0c55a2a52d3636845d4ab94"
+              }
+            },
+            "same": true
+          }
+        ]
+      },
+      "Q07": {
+        "agrees": true,
+        "detail": [
+          {
+            "query_id": "c1d0d39c6f84f7eb",
+            "results": {
+              "dachs-local": {
+                "rows": 66,
+                "sha256": "f99966c043066c1530930c1e8f4537af98d7df39ac8d85bdda8f34940e74d009"
+              },
+              "egernia-local": {
+                "rows": 66,
+                "sha256": "f99966c043066c1530930c1e8f4537af98d7df39ac8d85bdda8f34940e74d009"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "8b08b947f40553d6",
+            "results": {
+              "dachs-local": {
+                "rows": 118,
+                "sha256": "c6ff2181e11fc2471c000ecb052b85c590581293f5c89dc222bcb98cbbdcadf9"
+              },
+              "egernia-local": {
+                "rows": 118,
+                "sha256": "c6ff2181e11fc2471c000ecb052b85c590581293f5c89dc222bcb98cbbdcadf9"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "0a0f8128bb7abe5d",
+            "results": {
+              "dachs-local": {
+                "rows": 97,
+                "sha256": "f26c518f3f454dc542ceea2ecd75d5992f63e9c8e2692390c3e73c16ffa5c069"
+              },
+              "egernia-local": {
+                "rows": 97,
+                "sha256": "f26c518f3f454dc542ceea2ecd75d5992f63e9c8e2692390c3e73c16ffa5c069"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "c85ef5203eaf561a",
+            "results": {
+              "dachs-local": {
+                "rows": 97,
+                "sha256": "ad42c636581fedc1183684897f10fe3a741e2104d8fa21c1ff89a04459828e2c"
+              },
+              "egernia-local": {
+                "rows": 97,
+                "sha256": "ad42c636581fedc1183684897f10fe3a741e2104d8fa21c1ff89a04459828e2c"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "21db2c0e2ca917bc",
+            "results": {
+              "dachs-local": {
+                "rows": 50,
+                "sha256": "edd51b547a87707672d106cdc59578b489c677c8d71c610b090936692e7ebe88"
+              },
+              "egernia-local": {
+                "rows": 50,
+                "sha256": "edd51b547a87707672d106cdc59578b489c677c8d71c610b090936692e7ebe88"
+              }
+            },
+            "same": true
+          }
+        ]
+      },
+      "Q10": {
+        "agrees": true,
+        "detail": [
+          {
+            "query_id": "0c6f4992eec29dde",
+            "results": {
+              "dachs-local": {
+                "rows": 1000,
+                "sha256": "948c7cd3383b65ac49b1bf13539b44dc3bd47c8408314468ce69f85581385244"
+              },
+              "egernia-local": {
+                "rows": 1000,
+                "sha256": "948c7cd3383b65ac49b1bf13539b44dc3bd47c8408314468ce69f85581385244"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "a3501f7a2e1f5b5f",
+            "results": {
+              "dachs-local": {
+                "rows": 1000,
+                "sha256": "6401780d9b5d50b2186a994c7d75df986e9a21157f70971f0e9f72fc48c7bf82"
+              },
+              "egernia-local": {
+                "rows": 1000,
+                "sha256": "6401780d9b5d50b2186a994c7d75df986e9a21157f70971f0e9f72fc48c7bf82"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "701b931c25e4e16d",
+            "results": {
+              "dachs-local": {
+                "rows": 1000,
+                "sha256": "e0ecd1bf9ca00db2cc48f1f5efe96f2193af6ef3422a54f8b888a8b14a0aa602"
+              },
+              "egernia-local": {
+                "rows": 1000,
+                "sha256": "e0ecd1bf9ca00db2cc48f1f5efe96f2193af6ef3422a54f8b888a8b14a0aa602"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "68dbfd92a9d777eb",
+            "results": {
+              "dachs-local": {
+                "rows": 1000,
+                "sha256": "84afbde94bbc67d594e46fcd85fdc4ee95221c86cbea7893aea8820000d78bce"
+              },
+              "egernia-local": {
+                "rows": 1000,
+                "sha256": "84afbde94bbc67d594e46fcd85fdc4ee95221c86cbea7893aea8820000d78bce"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "49208bb8836c6c5f",
+            "results": {
+              "dachs-local": {
+                "rows": 1000,
+                "sha256": "8802723578425780cea791277cca1ad469a4206a259e17db13d3d3bc25e13512"
+              },
+              "egernia-local": {
+                "rows": 1000,
+                "sha256": "8802723578425780cea791277cca1ad469a4206a259e17db13d3d3bc25e13512"
+              }
+            },
+            "same": true
+          }
+        ]
+      },
+      "Q11": {
+        "agrees": true,
+        "detail": [
+          {
+            "query_id": "4be85d5105e27e23",
+            "results": {
+              "dachs-local": {
+                "rows": 10000,
+                "sha256": "25bd4a9b37169b27667c284074bf50e311be7f6fd782c6c1e2330aa99bd02a82"
+              },
+              "egernia-local": {
+                "rows": 10000,
+                "sha256": "25bd4a9b37169b27667c284074bf50e311be7f6fd782c6c1e2330aa99bd02a82"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "c0c34cd850f64a0f",
+            "results": {
+              "dachs-local": {
+                "rows": 10000,
+                "sha256": "0403b23b534bb325ea0e8b326198a992637bfe4b00f59577fe831cfe44917d3b"
+              },
+              "egernia-local": {
+                "rows": 10000,
+                "sha256": "0403b23b534bb325ea0e8b326198a992637bfe4b00f59577fe831cfe44917d3b"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "ba3fdcc7346546e2",
+            "results": {
+              "dachs-local": {
+                "rows": 10000,
+                "sha256": "1ddf720c67e6c26d95bc1b8766d08d25e952edfeb2bfd63915a0be114708a7d8"
+              },
+              "egernia-local": {
+                "rows": 10000,
+                "sha256": "1ddf720c67e6c26d95bc1b8766d08d25e952edfeb2bfd63915a0be114708a7d8"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "69cecb9408e91aa0",
+            "results": {
+              "dachs-local": {
+                "rows": 10000,
+                "sha256": "ec9c46106ffba6a9ac9d3cfc9d09f8dc58d174e196e3a696e13c7a5d85c5b893"
+              },
+              "egernia-local": {
+                "rows": 10000,
+                "sha256": "ec9c46106ffba6a9ac9d3cfc9d09f8dc58d174e196e3a696e13c7a5d85c5b893"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "3c2a34c8d6b8b311",
+            "results": {
+              "dachs-local": {
+                "rows": 10000,
+                "sha256": "f0ffd6786e3294685cf4b9c9bb945fa1687659053bce58cec4a28f82f6f58716"
+              },
+              "egernia-local": {
+                "rows": 10000,
+                "sha256": "f0ffd6786e3294685cf4b9c9bb945fa1687659053bce58cec4a28f82f6f58716"
+              }
+            },
+            "same": true
+          }
+        ]
+      },
+      "Q12": {
+        "agrees": true,
+        "detail": [
+          {
+            "query_id": "5ad8faf4e6733ec7",
+            "results": {
+              "dachs-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "egernia-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "3943eca203235153",
+            "results": {
+              "dachs-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "egernia-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "91d483e3d6a165b7",
+            "results": {
+              "dachs-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "egernia-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "34f1348126fdcffc",
+            "results": {
+              "dachs-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "egernia-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "ce4d9499d4c9ca62",
+            "results": {
+              "dachs-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "egernia-local": {
+                "rows": 0,
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            },
+            "same": true
+          }
+        ]
+      },
+      "Q13": {
+        "agrees": true,
+        "detail": [
+          {
+            "query_id": "1501d339cf627742",
+            "results": {
+              "dachs-local": {
+                "rows": 35,
+                "sha256": "8f6ee19ddd6c7e3b62b1231956f79c3802a3498363374962bf4cbf8d70fd28fc"
+              },
+              "egernia-local": {
+                "rows": 35,
+                "sha256": "8f6ee19ddd6c7e3b62b1231956f79c3802a3498363374962bf4cbf8d70fd28fc"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "8c8280232ecce0ed",
+            "results": {
+              "dachs-local": {
+                "rows": 35,
+                "sha256": "0cf35e7db20953d9442b656162a15dd29d1b9136169fd095874cf86d345ed12f"
+              },
+              "egernia-local": {
+                "rows": 35,
+                "sha256": "0cf35e7db20953d9442b656162a15dd29d1b9136169fd095874cf86d345ed12f"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "618705ef4b650355",
+            "results": {
+              "dachs-local": {
+                "rows": 35,
+                "sha256": "89a1a573081b6c8415c1bf7f4c59661010821cb0b0e4e301c995d58d434cd5f4"
+              },
+              "egernia-local": {
+                "rows": 35,
+                "sha256": "89a1a573081b6c8415c1bf7f4c59661010821cb0b0e4e301c995d58d434cd5f4"
+              }
+            },
+            "same": true
+          },
+          {
+            "query_id": "698aaa8d9d0bbd5a",
+            "results": {
+              "dachs-local": {
+                "rows": 35,
+                "sha256": "bbfd1007cd574893924bdb2f67c8913296157f2a42cf991f7a872ebf75c6773e"
+              },
+              "egernia-local": {
+                "rows": 35,
+                "sha256": "bbfd1007cd574893924bdb2f67c8913296157f2a42cf991f7a872ebf75c6773e"
+              }
+            },
+            "same": true
+          }
+        ]
+      }
+    },
+    "disagreed": []
+  },
+  "targets": {
+    "dachs-local": {
+      "taplint": {
+        "by_stage": {
+          "AVV": {
+            "I": 1,
+            "S": 1
+          },
+          "CAP": {
+            "I": 2,
+            "W": 2
+          },
+          "CPV": {
+            "I": 1,
+            "S": 1
+          },
+          "EXA": {
+            "I": 1
+          },
+          "MDQ": {
+            "I": 6,
+            "S": 2,
+            "W": 7
+          },
+          "OBS": {
+            "I": 13,
+            "S": 3
+          },
+          "QAS": {
+            "I": 17,
+            "S": 2,
+            "W": 1
+          },
+          "QGE": {
+            "I": 24,
+            "S": 2,
+            "W": 1
+          },
+          "QPO": {
+            "I": 10,
+            "S": 2,
+            "W": 1
+          },
+          "TME": {
+            "I": 2,
+            "S": 3
+          },
+          "TMS": {
+            "I": 25,
+            "S": 4
+          },
+          "TMV": {
+            "I": 1,
+            "S": 1,
+            "W": 1
+          },
+          "UPL": {
+            "I": 4,
+            "W": 2
+          },
+          "UUC": {
+            "I": 1
+          },
+          "UWS": {
+            "I": 8
+          }
+        },
+        "errors_blocking": 0,
+        "errors_total": 0,
+        "passed": true,
+        "report_path": "/home/mdelliveneri/egernia/benchmarks/tap-compare/results/20260903T160103Z-8fec0e75-tap-compare/taplint/dachs-local.txt"
+      },
+      "vosi": {
+        "availability_status": 200,
+        "base_url": "http://localhost:8081/tap",
+        "capabilities_status": 200,
+        "maxrec_default": 20000,
+        "maxrec_hard": 20000000,
+        "output_formats": [
+          "application/fits",
+          "application/geo+json",
+          "application/json",
+          "application/x-votable+xml",
+          "application/x-votable+xml;serialization=BINARY2",
+          "application/x-votable+xml;serialization=TABLEDATA",
+          "application/x-votable+xml;serialization=TABLEDATA;version=1.1",
+          "application/x-votable+xml;serialization=TABLEDATA;version=1.2",
+          "application/x-votable+xml;serialization=TABLEDATA;version=1.6",
+          "application/x-votable+xml;version=1.1",
+          "application/x-votable+xml;version=1.6",
+          "text/csv",
+          "text/csv;header=present",
+          "text/html",
+          "text/plain",
+          "text/tab-separated-values"
+        ],
+        "server_header": "DaCHS/2.11 twistedWeb/24.11.0",
+        "tables_status": 200,
+        "tap_versions": [
+          "1.1"
+        ]
+      }
+    },
+    "egernia-local": {
+      "taplint": {
+        "by_stage": {
+          "AVV": {
+            "I": 1,
+            "S": 1
+          },
+          "CAP": {
+            "I": 1
+          },
+          "CPV": {
+            "I": 1,
+            "S": 1
+          },
+          "EXA": {
+            "I": 14,
+            "S": 2
+          },
+          "MDQ": {
+            "I": 6,
+            "S": 2,
+            "W": 11
+          },
+          "OBS": {
+            "I": 13,
+            "S": 3
+          },
+          "QAS": {
+            "I": 14,
+            "S": 2
+          },
+          "QGE": {
+            "I": 21,
+            "S": 2
+          },
+          "QPO": {
+            "I": 7,
+            "S": 2
+          },
+          "TMC": {
+            "W": 10
+          },
+          "TME": {
+            "I": 2,
+            "S": 3
+          },
+          "TMS": {
+            "I": 21,
+            "S": 4
+          },
+          "TMV": {
+            "I": 1,
+            "S": 1
+          },
+          "UPL": {
+            "I": 4
+          },
+          "UUC": {
+            "I": 1
+          },
+          "UWS": {
+            "I": 8
+          }
+        },
+        "errors_blocking": 0,
+        "errors_total": 0,
+        "passed": true,
+        "report_path": "/home/mdelliveneri/egernia/benchmarks/tap-compare/results/20260903T160103Z-8fec0e75-tap-compare/taplint/egernia-local.txt"
+      },
+      "vosi": {
+        "availability_status": 200,
+        "base_url": "http://localhost:8080/tap",
+        "capabilities_status": 200,
+        "maxrec_default": 10000,
+        "maxrec_hard": 1000000,
+        "output_formats": [
+          "application/json",
+          "application/vnd.apache.arrow.stream",
+          "application/vnd.apache.parquet",
+          "application/x-votable+xml",
+          "text/csv",
+          "text/tab-separated-values"
+        ],
+        "server_header": "uvicorn",
+        "tables_status": 200,
+        "tap_versions": [
+          "1.1"
+        ]
+      }
+    }
+  }
+}
