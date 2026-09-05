@@ -233,3 +233,30 @@ does not describe, or classes a gate excluded.
 None are allowed silently. Anything that has to change once measurement has
 started is recorded in the run's `environment.json` (`resumed` entries
 carry the git state) and in the published report's run notes.
+
+## Amendment 1 — resource telemetry (added 2026-09-05T08:47:02Z, mid-run)
+
+Telemetry, not a measurement rule: nothing above changes. From
+2026-09-05T08:47:02Z (the first sample's timestamp; the run had started at
+07:39Z and the tier-8 egernia block at 07:41Z) `sample_resources.sh` —
+`setsid`, `taskset -c 24-29`, pure cgroup-v2 file reads, well under 1% of a
+core — records every 5 s, for every running `egernia-*` (Prometheus
+excluded) and `tap-compare-dachs-*` container, into the run directory's
+`resources.jsonl`: timestamp, container, `cpu.stat usage_usec`,
+`memory.current`, and the number of python processes (for the API: the
+uvicorn supervisor plus its workers, or the single process at one worker).
+
+`publish` joins the samples to each rung's measured window — taken from the
+rung's own request samples (`samples/<key>.parquet`: first `t_start` to the
+last request's end) — and reports, per tier, per server, per class,
+format and concurrency: CPU cores used (CPU-seconds over the window divided
+by the window), CPU-seconds per request, mean and peak memory, and the API
+worker count; plus a throughput-versus-cores table for the mixed workload,
+so the paper can plot requests/s against CPU and CPU per request against
+workers. A server's figure sums its containers (egernia: db + api +
+executor; DaCHS: its one container).
+
+Coverage: the tier-8 egernia rungs measured before 08:47:02Z (47 of 216)
+have no resource data and show as `—`; 169 of 216 (78%) are covered, above
+the half that would have called for re-measuring the block, so the block is
+not repeated. Every other server-tier block is fully covered.

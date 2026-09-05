@@ -211,3 +211,122 @@ def test_a_flat_run_renders_exactly_as_before(protocol, tmp_path):
     page = publish.render(run_dir, tmp_path / "docs").read_text()
     assert "## Gates" in page and "## csv" in page and "Tier" not in page
     assert "tier" not in (tmp_path / "docs" / "summary.csv").read_text().splitlines()[0]
+
+
+# -- resource telemetry joined to rungs ---------------------------------------
+
+
+def _resource_run(tmp_path, tier="8"):
+    """One egernia rung (60 s window from t=1000) with cgroup samples: the db
+    burns 2 cores, the api 1 core with 3 python processes, memory flat."""
+    run_dir = tmp_path / "20260905T000000Z-abc12345-tap-compare-scaling"
+    (run_dir / "samples").mkdir(parents=True)
+    row = {
+        "target": "egernia-local",
+        "server": "egernia",
+        "query_class": "mix",
+        "response_format": "csv",
+        "concurrency": 8,
+        "repetition": 1,
+        "requests": 6000,
+        "error_fraction": 0.0,
+        "rps": 100.0,
+        "latency": {"p50_s": 0.01, "p95_s": 0.02},
+        "ttfb": {"p95_s": 0.01},
+        "mean_response_bytes": 100.0,
+        "generator_cpu_peak": 0.1,
+        "generator_guard_ok": True,
+        "tier": tier,
+    }
+    samples = [
+        runner.Sample(1000.0 + i * 10, 0.0, "Q01", "q", 200, "", 0.5, 0.1, 10, -1, "", "sync", "")
+        for i in range(7)  # t_start 1000..1060, last ends at 1060.5
+    ]
+    runner.write_samples(
+        samples, run_dir / "samples" / f"t{tier}-egernia-local-csv-mix-c8-r1.parquet"
+    )
+    lines = []
+    for k in range(14):  # every 5 s from 998 to 1063
+        t = 998 + 5 * k
+        lines.append(
+            json.dumps(
+                {
+                    "t": t,
+                    "container": "egernia-db-1",
+                    "cpu_usec": int(2e6 * t),
+                    "mem_bytes": 2 * 2**30,
+                    "python_procs": 0,
+                }
+            )
+        )
+        lines.append(
+            json.dumps(
+                {
+                    "t": t,
+                    "container": "egernia-tap-api-1",
+                    "cpu_usec": int(1e6 * t),
+                    "mem_bytes": 2**30,
+                    "python_procs": 3,
+                }
+            )
+        )
+        lines.append(
+            json.dumps(
+                {
+                    "t": t,
+                    "container": "egernia-tap-executor-1",
+                    "cpu_usec": 0,
+                    "mem_bytes": 2**28,
+                    "python_procs": 1,
+                }
+            )
+        )
+    (run_dir / "resources.jsonl").write_text("\n".join(lines) + "\n")
+    return run_dir, row
+
+
+def test_resources_join_cgroup_samples_to_the_rung_window(tmp_path):
+    run_dir, row = _resource_run(tmp_path)
+    (res,) = publish.resources(run_dir, [row]).values()
+    assert res["coverage"] >= publish.MIN_COVERAGE
+    assert res["cpu_cores"] == pytest.approx(3.0, rel=0.01)  # 2 + 1 + 0
+    assert res["cpu_seconds_per_request"] == pytest.approx(3.0 * 60.5 / 6000, rel=0.01)
+    assert res["mem_mean_bytes"] == 2 * 2**30 + 2**30 + 2**28
+    assert res["mem_peak_bytes"] == res["mem_mean_bytes"]
+    assert res["api_workers"] == 2  # three python processes = supervisor + 2 workers
+
+
+def test_uncovered_rungs_get_no_resources(tmp_path):
+    run_dir, row = _resource_run(tmp_path)
+    text = (run_dir / "resources.jsonl").read_text().splitlines()
+    (run_dir / "resources.jsonl").write_text("\n".join(text[-6:]) + "\n")  # last 10 s only
+    assert publish.resources(run_dir, [row]) == {}
+
+
+def test_report_carries_resource_tables_and_csv(tmp_path):
+    run_dir, row = _resource_run(tmp_path)
+    dachs = {**row, "target": "dachs-local", "server": "dachs", "rps": 10.0}
+    (run_dir / "summary.json").write_text(json.dumps([row, dachs]))
+    (run_dir / "environment.json").write_text(
+        json.dumps({"git": {"sha": "abc12345"}, "seed": 1, "corpus_sha256": "c" * 64})
+    )
+    (run_dir / "t8-gates.json").write_text(json.dumps({"targets": {}}))
+    page = publish.render(run_dir, tmp_path / "docs").read_text()
+    assert "### resources, csv" in page and "### throughput vs CPU cores used (mix)" in page
+    assert "| mix | 8 | — | — | — | — | 3.00 | 30.2 ms | 3.25 | 3.25 |" in page  # dachs uncovered
+    assert "| csv | 8 | egernia-local | 2 | 100.0 | 3.00 | 33.3 | 30.2 |" in page
+    csv_lines = (tmp_path / "docs" / "resources.csv").read_text().splitlines()
+    assert csv_lines[0].startswith("target,tier,query_class") and len(csv_lines) == 2
+
+
+def test_a_run_without_samples_has_no_resource_section(tmp_path):
+    run_dir, row = _resource_run(tmp_path)
+    (run_dir / "resources.jsonl").unlink()
+    (run_dir / "summary.json").write_text(json.dumps([row]))
+    (run_dir / "environment.json").write_text(
+        json.dumps({"git": {"sha": "abc12345"}, "seed": 1, "corpus_sha256": "c" * 64})
+    )
+    (run_dir / "t8-gates.json").write_text(json.dumps({"targets": {}}))
+    page = publish.render(run_dir, tmp_path / "docs").read_text()
+    assert "resources" not in page.split("## Claims")[0].split("Tier 8")[1]
+    assert not (tmp_path / "docs" / "resources.csv").exists()
