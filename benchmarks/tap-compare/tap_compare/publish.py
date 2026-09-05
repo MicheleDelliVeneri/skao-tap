@@ -126,40 +126,39 @@ def _fmt(ci: dict, digits: int = 1) -> str:
     return f"{ci['mean']:.{digits}f} ±{half:.{digits}f}"
 
 
-def render(run_dir: pathlib.Path, out_dir: pathlib.Path) -> pathlib.Path:
-    """The docs/performance page for one comparison run directory."""
-    rows = json.loads((run_dir / "summary.json").read_text())
-    environment = json.loads((run_dir / "environment.json").read_text())
-    gates = json.loads((run_dir / "gates.json").read_text())
-    targets = sorted({r["target"] for r in rows})
-    cells = aggregate(rows)
+PARITY_INTRO = [
+    "Same-hardware TAP-server comparison: identical logical corpus, each",
+    "server deployed per its own documentation, one target under load at",
+    "a time (all stacks stay up so repetitions interleave), the identical",
+    "seeded query stream, MAXREC pinned on every request. Every target",
+    "stack is pinned to the same 8 CPU / 8 GiB",
+    "budget: DaCHS in `benchmarks/tap-compare/docker-compose.dachs.yml`",
+    "(`cpus: 8`, `mem_limit: 8g`), egernia in",
+    "`benchmarks/tap-compare/docker-compose.egernia-pins.yml` (shared",
+    "`cpuset` of 8 cores; 8 GiB split 4 db / 2 api / 2 executor).",
+    "See `benchmarks/tap-compare/README.md` for the protocol.",
+]
+SCALING_INTRO = [
+    "Same-hardware TAP-server resource-scaling comparison: the parity",
+    "protocol's corpus, gates, query stream, formats and statistics, with",
+    "both servers' resource pins raised tier by tier. Within a tier each",
+    "server is measured alone under that tier's pins (the host cannot hold",
+    "two pinned stacks of the larger tiers at once), so repetitions do not",
+    "interleave across servers; the gates run per tier with both stacks up.",
+    "The pins actually applied, as `docker inspect` and `SHOW` saw them, are",
+    "under `pins/`. See `benchmarks/tap-compare/scaling/PROTOCOL.md` for",
+    "the pre-registered design.",
+]
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    with (out_dir / "summary.csv").open("w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(_flat(row))
-    shutil.copy(run_dir / "environment.json", out_dir / "environment.json")
-    (out_dir / "gates.json").write_text(json.dumps(gates, indent=2, sort_keys=True))
-    for extra in ("taplint", "capabilities"):
-        if (run_dir / extra).is_dir():
-            shutil.copytree(run_dir / extra, out_dir / extra, dirs_exist_ok=True)
 
-    lines = [f"# {run_dir.name}", ""]
-    lines += [
-        "Same-hardware TAP-server comparison: identical logical corpus, each",
-        "server deployed per its own documentation, one target under load at",
-        "a time (all stacks stay up so repetitions interleave), the identical",
-        "seeded query stream, MAXREC pinned on every request. Every target",
-        "stack is pinned to the same 8 CPU / 8 GiB",
-        "budget: DaCHS in `benchmarks/tap-compare/docker-compose.dachs.yml`",
-        "(`cpus: 8`, `mem_limit: 8g`), egernia in",
-        "`benchmarks/tap-compare/docker-compose.egernia-pins.yml` (shared",
-        "`cpuset` of 8 cores; 8 GiB split 4 db / 2 api / 2 executor).",
-        "See `benchmarks/tap-compare/README.md` for the protocol.",
+def _tier_key(tier: str | None) -> tuple:
+    return (0, int(tier)) if tier and tier.isdigit() else (1, tier or "")
+
+
+def _gates_section(gates: dict, targets: list[str], heading: str) -> list[str]:
+    lines = [
         "",
-        "## Gates",
+        f"{heading} Gates",
         "",
         "| target | TAP | taplint | maxrec default |",
         "| --- | --- | --- | --- |",
@@ -186,12 +185,17 @@ def render(run_dir: pathlib.Path, out_dir: pathlib.Path) -> pathlib.Path:
             )
             + ".",
         ]
+    return lines
 
+
+def _tables(rows: list[dict], targets: list[str], heading: str) -> list[str]:
+    cells = aggregate(rows)
+    lines: list[str] = []
     formats = sorted({r["response_format"] for r in rows})
     classes = sorted({r["query_class"] for r in rows})
     concurrencies = sorted({r["concurrency"] for r in rows})
     for response_format in formats:
-        lines += ["", f"## {response_format}", ""]
+        lines += ["", f"{heading} {response_format}", ""]
         header = "| class | c |"
         rule = "| --- | --- |"
         for name in targets:
@@ -214,6 +218,44 @@ def render(run_dir: pathlib.Path, out_dir: pathlib.Path) -> pathlib.Path:
                 outcome = verdict(cells, keys[0], keys[1]) if len(keys) == 2 else "—"
                 row += f" {outcome} |"
                 lines.append(row)
+    return lines
+
+
+def render(run_dir: pathlib.Path, out_dir: pathlib.Path) -> pathlib.Path:
+    """The docs/performance page for one comparison run directory.
+
+    A run whose rows carry a ``tier`` (a resource-scaling run) renders one
+    section per tier, each with its own gate record (``t<tier>-gates.json``)
+    and tables; a flat run renders exactly as before.
+    """
+    rows = json.loads((run_dir / "summary.json").read_text())
+    environment = json.loads((run_dir / "environment.json").read_text())
+    targets = sorted({r["target"] for r in rows})
+    tiers = sorted({r.get("tier") for r in rows}, key=_tier_key)
+    scaling = tiers != [None]
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with (out_dir / "summary.csv").open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS + (["tier"] if scaling else []))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(_flat(row) | ({"tier": row.get("tier")} if scaling else {}))
+    shutil.copy(run_dir / "environment.json", out_dir / "environment.json")
+    for extra in ("taplint", "capabilities", "pins"):
+        if (run_dir / extra).is_dir():
+            shutil.copytree(run_dir / extra, out_dir / extra, dirs_exist_ok=True)
+
+    lines = [f"# {run_dir.name}", ""] + (SCALING_INTRO if scaling else PARITY_INTRO)
+    for tier in tiers:
+        prefix = f"t{tier}-" if tier else ""
+        gates = json.loads((run_dir / f"{prefix}gates.json").read_text())
+        (out_dir / f"{prefix}gates.json").write_text(json.dumps(gates, indent=2, sort_keys=True))
+        heading = "##"
+        if tier:
+            lines += ["", f"## Tier {tier}"]
+            heading = "###"
+        lines += _gates_section(gates, targets, heading)
+        lines += _tables([r for r in rows if r.get("tier") == tier], targets, heading)
 
     lines += [
         "",
@@ -233,16 +275,31 @@ def render(run_dir: pathlib.Path, out_dir: pathlib.Path) -> pathlib.Path:
         "- The team operates egernia expertly and DaCHS from its documentation.",
         "- Single hardware, single run window; versions frozen at the recorded",
         "  digests.",
+    ]
+    if scaling:
+        lines += [
+            "- Within a tier the servers were measured one after the other, not",
+            "  interleaved: host drift over a tier's hours lands on one server.",
+            "  The order alternates between tiers (recorded in `pins/`).",
+        ]
+    lines += [
         "",
         "## Reproduce with",
         "",
         "```bash",
         "scripts/export_obscore_snapshot.sh benchmarks/tap-compare/corpus",
-        "docker compose -f docker-compose.yml \\",
-        "    -f benchmarks/tap-compare/docker-compose.egernia-pins.yml up -d",
-        "docker compose -f benchmarks/tap-compare/docker-compose.dachs.yml up -d",
-        "uv run --group tap-compare python benchmarks/tap-compare compare \\",
-        f"    --targets {' '.join(targets)} --scenario <scenario>",
+    ]
+    if scaling:
+        lines += ["benchmarks/tap-compare/scaling/run.sh"]
+    else:
+        lines += [
+            "docker compose -f docker-compose.yml \\",
+            "    -f benchmarks/tap-compare/docker-compose.egernia-pins.yml up -d",
+            "docker compose -f benchmarks/tap-compare/docker-compose.dachs.yml up -d",
+            "uv run --group tap-compare python benchmarks/tap-compare compare \\",
+            f"    --targets {' '.join(targets)} --scenario <scenario>",
+        ]
+    lines += [
         "```",
         "",
         f"Environment: see `environment.json` (git {environment['git']['sha'][:8]},"

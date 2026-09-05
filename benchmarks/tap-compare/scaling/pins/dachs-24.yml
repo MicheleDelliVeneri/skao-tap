@@ -1,0 +1,15 @@
+# DaCHS at the 24 CPU / 24 GiB tier (PROTOCOL.md): the parity compose file's
+# limits raised, plus a cpuset so the container stays off the generator
+# cores, and its Debian PostgreSQL sized to the container by the same rule
+# egernia's database follows (dachs-postgres-24.conf, a conf.d drop-in).
+#
+#   docker compose -f benchmarks/tap-compare/docker-compose.dachs.yml \
+#       -f benchmarks/tap-compare/scaling/pins/dachs-24.yml up -d --no-build
+services:
+  dachs:
+    cpus: 24
+    cpuset: "0-23"
+    mem_limit: 24g
+    volumes:
+      # relative to the first compose file's directory (benchmarks/tap-compare)
+      - ./scaling/pins/dachs-postgres-24.conf:/etc/postgresql/17/main/conf.d/90-tier.conf:ro

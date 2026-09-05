@@ -1,0 +1,62 @@
+# The resource-scaling protocol's scenarios. `corpus`, `mix` and `guards` are
+# copied verbatim from config/scenarios.yaml (tag tap-compare-prereg-v1): the
+# question changes, the workload does not. Pre-registered in PROTOCOL.md.
+
+corpus:
+  seed: 424242
+  combinations: 400
+  projects: 3906
+
+mix:
+  Q01: 1
+  Q02: 3
+  Q03: 3
+  Q04: 2
+  Q05: 5
+  Q06: 2
+  Q07: 2
+  Q10: 1
+
+scenarios:
+  # The scaling grid, run once per server per tier: per-class + mix, both
+  # cross-server formats, a three-point concurrency ladder whose top (64) is
+  # above every server's parity-run knee, 3 repetitions, 20 s warm-up and
+  # 60 s windows. 2 x 12 x 3 x 3 = 216 rungs per server-tier.
+  scaling:
+    ladder: [8, 32, 64]
+    warmup_seconds: 20
+    measure_seconds: 60
+    repetitions: 3
+    response_formats: [votable, csv]
+    maxrec: 100000
+    # six processes on the six host cores no server tier uses (24-29): the
+    # 60% single-core guard has to hold at the c=64 throughput of the
+    # largest tier
+    generator_processes: 6
+    per_class: true
+
+  # An untimed mixed-workload pass after a stack is (re)started, so the
+  # first measured repetition does not pay for a cold shared_buffers.
+  # Its results directory is discarded.
+  warm:
+    ladder: [8]
+    warmup_seconds: 0
+    measure_seconds: 45
+    repetitions: 1
+    response_formats: [csv]
+    maxrec: 100000
+    generator_processes: 6
+
+  # The driver's shake-out: proves pins, gates, per-tier records and the
+  # publisher end to end. Measures nothing.
+  scaling-smoke:
+    ladder: [2]
+    warmup_seconds: 2
+    measure_seconds: 6
+    repetitions: 1
+    response_formats: [csv]
+    maxrec: 100000
+    generator_processes: 1
+
+guards:
+  generator_cpu_max_fraction: 0.6
