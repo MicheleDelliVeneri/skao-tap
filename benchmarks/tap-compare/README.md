@@ -53,6 +53,19 @@ per-rung Parquet samples (every request, with TTFB), per-rung JSON summaries
 with bootstrap confidence intervals, `corpus.json`, and `environment.json`
 provenance. Runs never overwrite and are resumable (`--resume <run-name>`).
 
+## The resource-scaling protocol (`scaling/`)
+
+A second, separately pre-registered protocol (tag
+`tap-compare-scaling-prereg-v1`) raises both servers' pins tier by tier
+(8 → 16 → 24 CPUs and GiB) and measures what each does with them; its
+design, sizing rules, grid arithmetic and threats to validity are in
+[`scaling/PROTOCOL.md`](scaling/PROTOCOL.md). It is another config
+directory (`--config-dir benchmarks/tap-compare/scaling`), per-tier compose
+overrides under `scaling/pins/`, and a driver (`scaling/run.sh`) that
+measures the servers one at a time per tier into one run directory
+(`compare --tier <tier> --only <target>`); `publish` renders one section
+per tier. The parity protocol under `config/` is untouched.
+
 ## Fairness rules (lane A — the only lane)
 
 This harness is **never pointed at a production service someone else

@@ -18,6 +18,7 @@ import dataclasses
 import json
 import logging
 import pathlib
+import re
 import sys
 import time
 
@@ -35,6 +36,16 @@ DATASET_CONFIG = REPO / "dataset" / "config" / "datasets.yaml"
 
 def _load_yaml(path: pathlib.Path) -> dict:
     return yaml.safe_load(path.read_text())
+
+
+def _config(args: argparse.Namespace) -> tuple[dict, dict[str, targets.Target]]:
+    """The scenarios and targets of one config directory (default: config/).
+
+    A protocol is a directory: another protocol (the resource-scaling one
+    under scaling/) is another directory, never an edit to a frozen one.
+    """
+    config_dir = pathlib.Path(args.config_dir)
+    return _load_yaml(config_dir / "scenarios.yaml"), targets.load(config_dir / "targets.yaml")
 
 
 def _build_corpus(cfg: dict, portable_only: bool) -> list[corpus_mod.CorpusEntry]:
@@ -93,6 +104,7 @@ def _record_provenance(
     scenario_name: str,
     scenario: dict,
     entries: list[corpus_mod.CorpusEntry],
+    tier: str | None = None,
 ) -> None:
     """Write environment.json and corpus.json once, at the start of a run.
 
@@ -103,11 +115,28 @@ def _record_provenance(
     resume from a different git state is recorded (appended, never rewriting
     the original) rather than refused: refusing would discard a day-long run
     over a harness fix, but the record must say the code changed mid-run.
+    A run is either tiered (``--tier``, prefixed rungs and gate records) or
+    flat, never both: the mode is recorded at creation (inferred from the
+    rungs on disk for runs that predate the record) and a resume in the other
+    mode is refused.
     """
+    mode = "tiered" if tier else "flat"
     env_path = run.path / "environment.json"
     if env_path.exists():
         recorded = json.loads(env_path.read_text())
         mismatches = []
+        recorded_mode = recorded.get("tier_mode") or _tier_mode_on_disk(run.path) or mode
+        if _tier_mode_on_disk(run.path) == "mixed":
+            raise SystemExit(
+                f"cannot resume {run.path.name}: it holds both tier-prefixed and unprefixed"
+                " rung markers and cannot be continued in either mode"
+            )
+        if recorded_mode != mode:
+            mismatches.append(
+                f"it is a {recorded_mode} run"
+                f" (tiers {', '.join(recorded.get('tiers') or []) or 'none recorded'})"
+                f" and this invocation is {mode} (--tier {tier})"
+            )
         if recorded["corpus_sha256"] != corpus_sha:
             mismatches.append(f"corpus {recorded['corpus_sha256'][:12]}… is now {corpus_sha[:12]}…")
         if recorded["scenario"] != {scenario_name: scenario}:
@@ -119,16 +148,25 @@ def _record_provenance(
             mismatches.append("the target descriptors changed")
         if mismatches:
             raise SystemExit(f"cannot resume {run.path.name}: " + "; ".join(mismatches))
+        changed = False
+        if recorded.get("tier_mode") != recorded_mode:
+            recorded["tier_mode"] = recorded_mode  # a run that predates the record
+            changed = True
+        if tier and tier not in (recorded.get("tiers") or []):
+            recorded.setdefault("tiers", []).append(tier)
+            changed = True
         current = {"sha": runs.git_sha(), "dirty": runs.git_dirty()}
         last = (recorded.get("resumed") or [recorded["git"]])[-1]
         if {"sha": last.get("sha"), "dirty": last.get("dirty")} != current:
             recorded.setdefault("resumed", []).append({"at": time.time(), **current})
-            run.write_json("environment.json", recorded)
+            changed = True
             log.warning(
                 "resuming under different code (git %s, dirty=%s); recorded in environment.json",
                 current["sha"][:8],
                 current["dirty"],
             )
+        if changed:
+            run.write_json("environment.json", recorded)
         return
     run.write_json(
         "environment.json",
@@ -136,16 +174,43 @@ def _record_provenance(
             target,
             seed=cfg["corpus"]["seed"],
             corpus_sha256=corpus_sha,
-            extras={"scenario": {scenario_name: scenario}},
+            extras={
+                "scenario": {scenario_name: scenario},
+                "tier_mode": mode,
+                **({"tiers": [tier]} if tier else {}),
+            },
         ),
     )
     run.write_json("corpus.json", [e.as_dict() for e in entries])
 
 
+TIER_LABEL = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def _tier_label(value: str) -> str:
+    """A --tier label goes into rung keys and file names: a closed alphabet."""
+    if not TIER_LABEL.match(value):
+        raise argparse.ArgumentTypeError(
+            f"tier label {value!r} must match {TIER_LABEL.pattern} (it names files)"
+        )
+    return value
+
+
+def _tier_mode_on_disk(run_path: pathlib.Path) -> str | None:
+    """ "tiered" or "flat" from the rung markers of a run that predates the
+    recorded mode; None when nothing has been measured yet."""
+    keys = [p.stem for p in (run_path / "state").glob("*.done")]
+    if not keys:
+        return None
+    prefixed = {bool(re.match(r"t[^-]+-", k)) for k in keys}
+    if len(prefixed) > 1:
+        return "mixed"  # both layouts on disk: nothing can be continued safely
+    return "tiered" if prefixed == {True} else "flat"
+
+
 def cmd_run(args: argparse.Namespace) -> int:
-    cfg = _load_yaml(SUITE / "config" / "scenarios.yaml")
+    cfg, all_targets = _config(args)
     scenario = cfg["scenarios"][args.scenario]
-    all_targets = targets.load()
     if args.target not in all_targets:
         raise SystemExit(f"unknown target {args.target!r} (one of: {', '.join(all_targets)})")
     target = all_targets[args.target]
@@ -213,8 +278,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _resolve_targets(names: list[str]) -> dict[str, targets.Target]:
-    all_targets = targets.load()
+def _resolve_targets(
+    names: list[str], all_targets: dict[str, targets.Target]
+) -> dict[str, targets.Target]:
     chosen = {}
     for name in names:
         if name not in all_targets:
@@ -223,17 +289,18 @@ def _resolve_targets(names: list[str]) -> dict[str, targets.Target]:
     return chosen
 
 
-def _run_gates(run: runs.Run, chosen: dict, entries: list, maxrec: int) -> dict:
+def _run_gates(run: runs.Run, chosen: dict, entries: list, maxrec: int, prefix: str = "") -> dict:
     """VOSI provenance, taplint conformance, cross-server agreement.
 
     No timed rung may be compared across servers unless this passed for all
-    of them on the same corpus.
+    of them on the same corpus. ``prefix`` (a resource tier's ``t8-``) keeps
+    one run's per-tier gate records apart.
     """
     from . import conformance, validate, vosi
 
     outcome: dict = {"targets": {}}
     for name, target in chosen.items():
-        facts = vosi.capture(target.base_url, run.path / "capabilities" / name)
+        facts = vosi.capture(target.base_url, run.path / "capabilities" / f"{prefix}{name}")
         log.info(
             "%s: TAP %s, %d formats, maxrec default %s",
             name,
@@ -241,7 +308,9 @@ def _run_gates(run: runs.Run, chosen: dict, entries: list, maxrec: int) -> dict:
             len(facts["output_formats"]),
             facts["maxrec_default"],
         )
-        lint = conformance.run_taplint(target.base_url, run.path / "taplint" / f"{name}.txt")
+        lint = conformance.run_taplint(
+            target.base_url, run.path / "taplint" / f"{prefix}{name}.txt"
+        )
         log.info(
             "%s: taplint %s (%d blocking / %d total errors)",
             name,
@@ -260,13 +329,13 @@ def _run_gates(run: runs.Run, chosen: dict, entries: list, maxrec: int) -> dict:
             len(verdict["agreed"]),
             ", ".join(verdict["disagreed"]) or "none",
         )
-    run.write_json("gates.json", outcome)
+    run.write_json(f"{prefix}gates.json", outcome)
     return outcome
 
 
 def cmd_gates(args: argparse.Namespace) -> int:
-    cfg = _load_yaml(SUITE / "config" / "scenarios.yaml")
-    chosen = _resolve_targets(args.targets)
+    cfg, all_targets = _config(args)
+    chosen = _resolve_targets(args.targets, all_targets)
     entries = _build_corpus(cfg, portable_only=True)
     run = runs.new_run("gates-" + "-".join(sorted(chosen)))
     outcome = _run_gates(run, chosen, entries, maxrec=cfg["scenarios"]["ladder"]["maxrec"])
@@ -282,15 +351,24 @@ def cmd_compare(args: argparse.Namespace) -> int:
     AAABBB), so host drift decorrelates from server identity. Every target
     is held to the portable corpus and the same fixed rung grid; there is no
     early stop, because comparison cells have to align.
+
+    A resource-scaling run measures the servers one at a time under one
+    tier's pins (``--tier 16 --only egernia-local``): its rungs and gate
+    records carry the tier as a ``t16-`` prefix, so one run directory holds
+    every tier and the report renders one table per tier.
     """
-    cfg = _load_yaml(SUITE / "config" / "scenarios.yaml")
+    cfg, all_targets = _config(args)
     scenario = cfg["scenarios"][args.scenario]
-    chosen = _resolve_targets(args.targets)
+    chosen = _resolve_targets(args.targets, all_targets)
+    unknown = [n for n in args.only or [] if n not in chosen]
+    if unknown:
+        raise SystemExit(f"--only names targets outside --targets: {', '.join(unknown)}")
     entries = _build_corpus(cfg, portable_only=True)
     corpus_sha = corpus_mod.corpus_hash(entries)
     mix = {k: float(v) for k, v in cfg["mix"].items()}
+    prefix = f"t{args.tier}-" if args.tier else ""
 
-    run = runs.new_run("tap-compare", resume=args.resume)
+    run = runs.new_run("tap-compare-scaling" if args.tier else "tap-compare", resume=args.resume)
     _record_provenance(
         run,
         {name: t.as_dict() for name, t in chosen.items()},
@@ -299,36 +377,37 @@ def cmd_compare(args: argparse.Namespace) -> int:
         args.scenario,
         scenario,
         entries,
+        tier=args.tier,
     )
 
-    if run.done("gates"):
-        gates = json.loads((run.path / "gates.json").read_text())
+    if run.done(f"{prefix}gates"):
+        gates = json.loads((run.path / f"{prefix}gates.json").read_text())
     else:
-        gates = _run_gates(run, chosen, entries, maxrec=scenario["maxrec"])
-        run.mark_done("gates")
+        gates = _run_gates(run, chosen, entries, maxrec=scenario["maxrec"], prefix=prefix)
+        run.mark_done(f"{prefix}gates")
     failed = [n for n, t in gates["targets"].items() if not t["taplint"]["passed"]]
     if failed and not args.allow_gate_failures:
         raise SystemExit(f"taplint failed for {', '.join(failed)}; refusing to compare")
+    if args.gates_only:
+        return 1 if failed else 0
     excluded = set(gates.get("agreement", {}).get("disagreed", []))
+    measured = {n: t for n, t in chosen.items() if not args.only or n in args.only}
 
     classes: list[str | None] = [None]  # None = the mixed workload
     if scenario.get("per_class"):
         classes += [c for c in sorted({e.query_class for e in entries}) if c not in excluded]
 
     guard_max = cfg["guards"]["generator_cpu_max_fraction"]
-    rows: list[dict] = []
     for response_format in scenario["response_formats"]:
         for query_class in classes:
             for concurrency in scenario["ladder"]:
                 for repetition in range(1, scenario["repetitions"] + 1):
-                    for name, target in chosen.items():
+                    for name, target in measured.items():
                         key = (
-                            f"{name}-{response_format}-{query_class or 'mix'}"
+                            f"{prefix}{name}-{response_format}-{query_class or 'mix'}"
                             f"-c{concurrency}-r{repetition}"
                         )
-                        summary_path = run.path / "summaries" / f"{key}.json"
                         if run.done(key):
-                            rows.append(json.loads(summary_path.read_text()))
                             continue
                         recorder, elapsed = _rung(
                             target,
@@ -352,15 +431,18 @@ def cmd_compare(args: argparse.Namespace) -> int:
                             repetition=repetition,
                             generator_cpu_peak=recorder.generator_cpu_peak,
                             generator_guard_ok=recorder.generator_cpu_peak < guard_max,
+                            **({"tier": args.tier} if args.tier else {}),
                         )
                         if recorder.generator_cpu_peak >= guard_max:
                             run.invalidate(
                                 "generator ran hot",
                                 {"key": key, "peak": recorder.generator_cpu_peak},
                             )
-                        rows.append(summary)
                         run.write_json(f"summaries/{key}.json", summary)
                         run.mark_done(key, {"requests": summary["requests"]})
+    # every rung on disk, not just this invocation's: a resumed or per-tier
+    # invocation must leave summary.json describing the whole run
+    rows = [json.loads(p.read_text()) for p in sorted((run.path / "summaries").glob("*.json"))]
     run.write_json("summary.json", rows)
     log.info("comparison complete: %s (%d rung summaries)", run.path, len(rows))
     return 0
@@ -381,7 +463,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
 
 def cmd_corpus(args: argparse.Namespace) -> int:
     """Print the corpus (for inspection and for the future agreement gate)."""
-    cfg = _load_yaml(SUITE / "config" / "scenarios.yaml")
+    cfg, _ = _config(args)
     entries = _build_corpus(cfg, portable_only=not args.all_classes)
     for entry in entries:
         print(f"{entry.query_class}\t{entry.query_id}\t{entry.adql}")
@@ -394,6 +476,11 @@ def main(argv: list[str] | None = None) -> int:
     # one line per rung, not one per request
     logging.getLogger("httpx").setLevel(logging.WARNING)
     parser = argparse.ArgumentParser(prog="tap-compare")
+    parser.add_argument(
+        "--config-dir",
+        default=str(SUITE / "config"),
+        help="directory holding scenarios.yaml and targets.yaml (default: config/)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     run_parser = sub.add_parser("run", help="run one scenario against one target")
@@ -419,6 +506,20 @@ def main(argv: list[str] | None = None) -> int:
         "--allow-gate-failures",
         action="store_true",
         help="measure anyway (debugging only; the report will say the gate failed)",
+    )
+    compare_parser.add_argument(
+        "--tier",
+        type=_tier_label,
+        help="resource tier label (e.g. 8): prefixes this invocation's rungs and gate record",
+    )
+    compare_parser.add_argument(
+        "--only",
+        nargs="+",
+        metavar="TARGET",
+        help="measure only these targets' rungs (gates still cover every --targets)",
+    )
+    compare_parser.add_argument(
+        "--gates-only", action="store_true", help="run (or reuse) the gates, then stop"
     )
     compare_parser.set_defaults(func=cmd_compare)
 
