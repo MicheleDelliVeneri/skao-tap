@@ -234,13 +234,14 @@ def resources(run_dir: pathlib.Path, rows: list[dict]) -> dict[str, dict]:
             continue  # a server the sampler does not know: not covered, not zero
         start, end = _window(parquet)
         span = end - start
+        if span <= 0:
+            continue  # a degenerate window has no rate to report
         inside = {c: [s for s in samples.get(c, []) if start <= s[0] <= end] for c in containers}
-        if any(len(v) < 2 for v in inside.values()):
-            continue
-        coverage = min((v[-1][0] - v[0][0]) / span for v in inside.values()) if span else 0.0
-        cpu_seconds = sum(
-            (v[-1][1] - v[0][1]) / 1e6 / ((v[-1][0] - v[0][0]) / span) for v in inside.values()
-        )
+        spans = {c: v[-1][0] - v[0][0] if len(v) >= 2 else 0.0 for c, v in inside.items()}
+        if any(s <= 0 for s in spans.values()):
+            continue  # too few samples, or duplicate timestamps: not covered
+        coverage = min(spans.values()) / span
+        cpu_seconds = sum((v[-1][1] - v[0][1]) / 1e6 * span / spans[c] for c, v in inside.items())
         # the server's memory is the containers summed per sampling tick (the
         # sampler stamps one tick's lines with one timestamp; ticks are
         # aligned to the second), and its peak is the peak of that series —
@@ -264,7 +265,7 @@ def resources(run_dir: pathlib.Path, rows: list[dict]) -> dict[str, dict]:
             "window_seconds": span,
             "coverage": coverage,
             "cpu_seconds": cpu_seconds,
-            "cpu_cores": cpu_seconds / span if span else None,
+            "cpu_cores": cpu_seconds / span,
             "cpu_seconds_per_request": cpu_seconds / row["requests"],
             "mem_mean_bytes": mem_mean,
             "mem_peak_bytes": mem_peak,

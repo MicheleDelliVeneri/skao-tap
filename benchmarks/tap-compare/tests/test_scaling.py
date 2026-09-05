@@ -410,3 +410,38 @@ def test_server_memory_peak_is_the_peak_of_the_summed_series(tmp_path):
 def test_a_server_the_sampler_does_not_know_is_not_covered(tmp_path):
     run_dir, row = _resource_run(tmp_path)
     assert publish.resources(run_dir, [{**row, "server": "cadc-tap"}]) == {}
+
+
+# -- hardening: tier labels name files; spans divide ---------------------------
+
+
+@pytest.mark.parametrize("label", ["8", "t24", "tier_24-b"])
+def test_tier_labels_from_a_closed_alphabet_are_accepted(label):
+    assert cli._tier_label(label) == label
+
+
+@pytest.mark.parametrize("label", ["../x", "a/b", "", "x" * 33, "8 "])
+def test_tier_labels_that_could_name_other_paths_are_refused(label, protocol, capsys):
+    with pytest.raises(argparse.ArgumentTypeError, match="tier label"):
+        cli._tier_label(label)
+    with pytest.raises(SystemExit):
+        cli.main(["--config-dir", str(protocol), "compare", "--targets", "a", "--tier", label])
+    assert "tier label" in capsys.readouterr().err
+
+
+def test_a_zero_span_window_is_not_covered(tmp_path):
+    run_dir, row = _resource_run(tmp_path)
+    same = [runner.Sample(1000.0, 0.0, "Q01", "q", 200, "", 0.0, 0.0, 10, -1, "", "sync", "")] * 3
+    runner.write_samples(same, run_dir / "samples" / "t8-egernia-local-csv-mix-c8-r1.parquet")
+    assert publish.resources(run_dir, [row]) == {}
+
+
+def test_duplicate_sample_timestamps_are_not_covered(tmp_path):
+    run_dir, row = _resource_run(tmp_path)
+    lines = [
+        json.dumps({"t": 1030.0, "container": c, "cpu_usec": 5, "mem_bytes": 1, "python_procs": 1})
+        for c in publish.SERVER_CONTAINERS["egernia"]
+        for _ in range(3)
+    ]
+    (run_dir / "resources.jsonl").write_text("\n".join(lines) + "\n")
+    assert publish.resources(run_dir, [row]) == {}

@@ -179,6 +179,18 @@ def _record_provenance(
     run.write_json("corpus.json", [e.as_dict() for e in entries])
 
 
+TIER_LABEL = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def _tier_label(value: str) -> str:
+    """A --tier label goes into rung keys and file names: a closed alphabet."""
+    if not TIER_LABEL.match(value):
+        raise argparse.ArgumentTypeError(
+            f"tier label {value!r} must match {TIER_LABEL.pattern} (it names files)"
+        )
+    return value
+
+
 def _tier_mode_on_disk(run_path: pathlib.Path) -> str | None:
     """ "tiered" or "flat" from the rung markers of a run that predates the
     recorded mode; None when nothing has been measured yet."""
@@ -489,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     compare_parser.add_argument(
         "--tier",
+        type=_tier_label,
         help="resource tier label (e.g. 8): prefixes this invocation's rungs and gate record",
     )
     compare_parser.add_argument(
