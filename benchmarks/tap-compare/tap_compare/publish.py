@@ -229,26 +229,35 @@ def resources(run_dir: pathlib.Path, rows: list[dict]) -> dict[str, dict]:
         parquet = run_dir / "samples" / f"{key}.parquet"
         if not parquet.exists() or not row["requests"]:
             continue
+        containers = SERVER_CONTAINERS.get(row["server"])
+        if not containers:
+            continue  # a server the sampler does not know: not covered, not zero
         start, end = _window(parquet)
         span = end - start
-        cpu_seconds = 0.0
-        mem_mean = 0.0
-        mem_peak = 0
-        coverage = 1.0
+        inside = {c: [s for s in samples.get(c, []) if start <= s[0] <= end] for c in containers}
+        if any(len(v) < 2 for v in inside.values()):
+            continue
+        coverage = min((v[-1][0] - v[0][0]) / span for v in inside.values()) if span else 0.0
+        cpu_seconds = sum(
+            (v[-1][1] - v[0][1]) / 1e6 / ((v[-1][0] - v[0][0]) / span) for v in inside.values()
+        )
+        # the server's memory is the containers summed per sampling tick (the
+        # sampler stamps one tick's lines with one timestamp; ticks are
+        # aligned to the second), and its peak is the peak of that series —
+        # container peaks at different moments must not add up
+        per_tick: dict[int, dict[str, int]] = {}
+        for container, series in inside.items():
+            for t, _cpu, mem, _procs in series:
+                per_tick.setdefault(round(t), {})[container] = mem
+        totals = [sum(m.values()) for m in per_tick.values() if len(m) == len(containers)]
+        if not totals:
+            continue
         workers = None
-        for container in SERVER_CONTAINERS.get(row["server"], ()):
-            inside = [s for s in samples.get(container, []) if start <= s[0] <= end]
-            if len(inside) < 2:
-                coverage = 0.0
-                break
-            covered = (inside[-1][0] - inside[0][0]) / span if span else 0.0
-            coverage = min(coverage, covered)
-            cpu_seconds += (inside[-1][1] - inside[0][1]) / 1e6 / covered if covered else 0.0
-            mem_mean += sum(s[2] for s in inside) / len(inside)
-            mem_peak += max(s[2] for s in inside)
-            if container == API_CONTAINER:
-                procs = max(s[3] for s in inside)
-                workers = 1 if procs <= 1 else procs - 1  # a supervisor above one worker
+        if API_CONTAINER in inside:
+            procs = max(s[3] for s in inside[API_CONTAINER])
+            workers = 1 if procs <= 1 else procs - 1  # a supervisor above one worker
+        mem_mean = sum(totals) / len(totals)
+        mem_peak = max(totals)
         if coverage < MIN_COVERAGE:
             continue
         out[key] = {

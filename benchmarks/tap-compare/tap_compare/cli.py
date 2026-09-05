@@ -18,6 +18,7 @@ import dataclasses
 import json
 import logging
 import pathlib
+import re
 import sys
 import time
 
@@ -103,6 +104,7 @@ def _record_provenance(
     scenario_name: str,
     scenario: dict,
     entries: list[corpus_mod.CorpusEntry],
+    tier: str | None = None,
 ) -> None:
     """Write environment.json and corpus.json once, at the start of a run.
 
@@ -113,11 +115,23 @@ def _record_provenance(
     resume from a different git state is recorded (appended, never rewriting
     the original) rather than refused: refusing would discard a day-long run
     over a harness fix, but the record must say the code changed mid-run.
+    A run is either tiered (``--tier``, prefixed rungs and gate records) or
+    flat, never both: the mode is recorded at creation (inferred from the
+    rungs on disk for runs that predate the record) and a resume in the other
+    mode is refused.
     """
+    mode = "tiered" if tier else "flat"
     env_path = run.path / "environment.json"
     if env_path.exists():
         recorded = json.loads(env_path.read_text())
         mismatches = []
+        recorded_mode = recorded.get("tier_mode") or _tier_mode_on_disk(run.path) or mode
+        if recorded_mode != mode:
+            mismatches.append(
+                f"it is a {recorded_mode} run"
+                f" (tiers {', '.join(recorded.get('tiers') or []) or 'none recorded'})"
+                f" and this invocation is {mode} (--tier {tier})"
+            )
         if recorded["corpus_sha256"] != corpus_sha:
             mismatches.append(f"corpus {recorded['corpus_sha256'][:12]}… is now {corpus_sha[:12]}…")
         if recorded["scenario"] != {scenario_name: scenario}:
@@ -129,16 +143,25 @@ def _record_provenance(
             mismatches.append("the target descriptors changed")
         if mismatches:
             raise SystemExit(f"cannot resume {run.path.name}: " + "; ".join(mismatches))
+        changed = False
+        if recorded.get("tier_mode") != recorded_mode:
+            recorded["tier_mode"] = recorded_mode  # a run that predates the record
+            changed = True
+        if tier and tier not in (recorded.get("tiers") or []):
+            recorded.setdefault("tiers", []).append(tier)
+            changed = True
         current = {"sha": runs.git_sha(), "dirty": runs.git_dirty()}
         last = (recorded.get("resumed") or [recorded["git"]])[-1]
         if {"sha": last.get("sha"), "dirty": last.get("dirty")} != current:
             recorded.setdefault("resumed", []).append({"at": time.time(), **current})
-            run.write_json("environment.json", recorded)
+            changed = True
             log.warning(
                 "resuming under different code (git %s, dirty=%s); recorded in environment.json",
                 current["sha"][:8],
                 current["dirty"],
             )
+        if changed:
+            run.write_json("environment.json", recorded)
         return
     run.write_json(
         "environment.json",
@@ -146,10 +169,23 @@ def _record_provenance(
             target,
             seed=cfg["corpus"]["seed"],
             corpus_sha256=corpus_sha,
-            extras={"scenario": {scenario_name: scenario}},
+            extras={
+                "scenario": {scenario_name: scenario},
+                "tier_mode": mode,
+                **({"tiers": [tier]} if tier else {}),
+            },
         ),
     )
     run.write_json("corpus.json", [e.as_dict() for e in entries])
+
+
+def _tier_mode_on_disk(run_path: pathlib.Path) -> str | None:
+    """ "tiered" or "flat" from the rung markers of a run that predates the
+    recorded mode; None when nothing has been measured yet."""
+    keys = [p.stem for p in (run_path / "state").glob("*.done")]
+    if not keys:
+        return None
+    return "tiered" if all(re.match(r"t[^-]+-", k) for k in keys) else "flat"
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -321,6 +357,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         args.scenario,
         scenario,
         entries,
+        tier=args.tier,
     )
 
     if run.done(f"{prefix}gates"):

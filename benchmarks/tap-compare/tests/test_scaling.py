@@ -330,3 +330,83 @@ def test_a_run_without_samples_has_no_resource_section(tmp_path):
     page = publish.render(run_dir, tmp_path / "docs").read_text()
     assert "resources" not in page.split("## Claims")[0].split("Tier 8")[1]
     assert not (tmp_path / "docs" / "resources.csv").exists()
+
+
+# -- a run is tiered or flat, never both --------------------------------------
+
+
+def test_resume_in_the_other_tier_mode_is_refused(protocol, tmp_path):
+    base = ["--config-dir", str(protocol), "compare", "--targets", "a", "b", "--scenario", "tiny"]
+    assert cli.main([*base, "--tier", "8", "--only", "a"]) == 0
+    (run_dir,) = (tmp_path / "results").iterdir()
+    env = json.loads((run_dir / "environment.json").read_text())
+    assert env["tier_mode"] == "tiered" and env["tiers"] == ["8"]
+    with pytest.raises(SystemExit, match=r"tiered run \(tiers 8\) and this invocation is flat"):
+        cli.main([*base, "--resume", run_dir.name])
+    assert cli.main([*base, "--tier", "16", "--only", "b", "--resume", run_dir.name]) == 0
+    assert json.loads((run_dir / "environment.json").read_text())["tiers"] == ["8", "16"]
+
+    assert cli.main(base) == 0  # a fresh flat run
+    flat = next(p for p in (tmp_path / "results").iterdir() if p != run_dir)
+    assert json.loads((flat / "environment.json").read_text())["tier_mode"] == "flat"
+    with pytest.raises(SystemExit, match=r"flat run .* and this invocation is tiered"):
+        cli.main([*base, "--tier", "8", "--resume", flat.name])
+
+
+def test_a_run_predating_the_mode_record_is_classified_from_its_rungs(protocol, tmp_path):
+    base = ["--config-dir", str(protocol), "compare", "--targets", "a", "b", "--scenario", "tiny"]
+    assert cli.main([*base, "--tier", "8", "--only", "a"]) == 0
+    (run_dir,) = (tmp_path / "results").iterdir()
+    env_path = run_dir / "environment.json"
+    env = json.loads(env_path.read_text())
+    del env["tier_mode"], env["tiers"]
+    env_path.write_text(json.dumps(env))
+    assert cli._tier_mode_on_disk(run_dir) == "tiered"
+    with pytest.raises(SystemExit, match="tiered run"):
+        cli.main([*base, "--resume", run_dir.name])
+    assert cli.main([*base, "--tier", "16", "--only", "b", "--resume", run_dir.name]) == 0
+    env = json.loads(env_path.read_text())
+    assert env["tier_mode"] == "tiered" and env["tiers"] == ["16"]  # recorded from here on
+
+
+def test_server_memory_peak_is_the_peak_of_the_summed_series(tmp_path):
+    """db peaks at 3 GiB while api is at 1, then api peaks at 3 while db is
+    at 1: the server never held more than 4 GiB, whatever the per-container
+    peaks add up to."""
+    run_dir, row = _resource_run(tmp_path)
+    lines = []
+    for k in range(14):
+        t = 998 + 5 * k
+        db, api = (3, 1) if k % 2 else (1, 3)
+        for container, mem in (("egernia-db-1", db), ("egernia-tap-api-1", api)):
+            lines.append(
+                json.dumps(
+                    {
+                        "t": t,
+                        "container": container,
+                        "cpu_usec": int(1e6 * t),
+                        "mem_bytes": mem * 2**30,
+                        "python_procs": 1,
+                    }
+                )
+            )
+        lines.append(
+            json.dumps(
+                {
+                    "t": t,
+                    "container": "egernia-tap-executor-1",
+                    "cpu_usec": 0,
+                    "mem_bytes": 0,
+                    "python_procs": 1,
+                }
+            )
+        )
+    (run_dir / "resources.jsonl").write_text("\n".join(lines) + "\n")
+    (res,) = publish.resources(run_dir, [row]).values()
+    assert res["mem_peak_bytes"] == 4 * 2**30
+    assert res["mem_mean_bytes"] == 4 * 2**30
+
+
+def test_a_server_the_sampler_does_not_know_is_not_covered(tmp_path):
+    run_dir, row = _resource_run(tmp_path)
+    assert publish.resources(run_dir, [{**row, "server": "cadc-tap"}]) == {}
