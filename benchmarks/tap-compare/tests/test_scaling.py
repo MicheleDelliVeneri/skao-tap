@@ -445,3 +445,28 @@ def test_duplicate_sample_timestamps_are_not_covered(tmp_path):
     ]
     (run_dir / "resources.jsonl").write_text("\n".join(lines) + "\n")
     assert publish.resources(run_dir, [row]) == {}
+
+
+def test_a_directory_holding_both_layouts_cannot_be_resumed_in_either_mode(protocol, tmp_path):
+    base = ["--config-dir", str(protocol), "compare", "--targets", "a", "b", "--scenario", "tiny"]
+    assert cli.main([*base, "--tier", "8", "--only", "a"]) == 0
+    (run_dir,) = (tmp_path / "results").iterdir()
+    (run_dir / "state" / "a-csv-mix-c2-r1.done").write_text("{}")  # a stray flat marker
+    assert cli._tier_mode_on_disk(run_dir) == "mixed"
+    for extra in ([], ["--tier", "16"]):
+        with pytest.raises(SystemExit, match="both tier-prefixed and unprefixed"):
+            cli.main([*base, *extra, "--resume", run_dir.name])
+
+
+def test_pure_layouts_and_an_empty_run_classify_as_before(tmp_path):
+    state = tmp_path / "state"
+    state.mkdir()
+    assert cli._tier_mode_on_disk(tmp_path) is None
+    (state / "t8-gates.done").write_text("{}")
+    (state / "t16-a-csv-mix-c2-r1.done").write_text("{}")
+    assert cli._tier_mode_on_disk(tmp_path) == "tiered"
+    for p in state.iterdir():
+        p.unlink()
+    (state / "gates.done").write_text("{}")
+    (state / "a-csv-mix-c2-r1.done").write_text("{}")
+    assert cli._tier_mode_on_disk(tmp_path) == "flat"

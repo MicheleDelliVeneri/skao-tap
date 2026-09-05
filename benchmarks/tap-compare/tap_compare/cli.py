@@ -126,6 +126,11 @@ def _record_provenance(
         recorded = json.loads(env_path.read_text())
         mismatches = []
         recorded_mode = recorded.get("tier_mode") or _tier_mode_on_disk(run.path) or mode
+        if _tier_mode_on_disk(run.path) == "mixed":
+            raise SystemExit(
+                f"cannot resume {run.path.name}: it holds both tier-prefixed and unprefixed"
+                " rung markers and cannot be continued in either mode"
+            )
         if recorded_mode != mode:
             mismatches.append(
                 f"it is a {recorded_mode} run"
@@ -197,7 +202,10 @@ def _tier_mode_on_disk(run_path: pathlib.Path) -> str | None:
     keys = [p.stem for p in (run_path / "state").glob("*.done")]
     if not keys:
         return None
-    return "tiered" if all(re.match(r"t[^-]+-", k) for k in keys) else "flat"
+    prefixed = {bool(re.match(r"t[^-]+-", k)) for k in keys}
+    if len(prefixed) > 1:
+        return "mixed"  # both layouts on disk: nothing can be continued safely
+    return "tiered" if prefixed == {True} else "flat"
 
 
 def cmd_run(args: argparse.Namespace) -> int:
